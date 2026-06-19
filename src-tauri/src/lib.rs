@@ -22,6 +22,7 @@ mod file_bridge;
 mod file_ops;
 mod settings;
 mod tray;
+mod welcome;
 mod ws;
 mod ws_types;
 
@@ -87,10 +88,30 @@ pub fn run() {
             file_ops::file_read,
             file_ops::file_write,
             file_ops::file_delete,
+            welcome::check_first_launch,
+            welcome::save_welcome_config,
+            welcome::discover_well_known,
+            welcome::open_welcome_window,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
             let app_handle_for_error = app.handle().clone();
+            // First-launch check: if `~/.feclaw/config.toml` is missing or has
+            // no `mode`, open the welcome window immediately so the user
+            // can pick an onboarding path (official / selfhosted / local).
+            let is_first = match crate::config::Config::load() {
+                cfg if cfg.cloud_url.is_none() && cfg.mode == crate::config::Mode::Local
+                    && !crate::config::Config::config_path().exists() =>
+                {
+                    true
+                }
+                _ => false,
+            };
+            if is_first {
+                if let Err(e) = welcome::open_welcome_window(handle.clone()) {
+                    tracing::warn!("failed to open welcome window on first launch: {e}");
+                }
+            }
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = startup(handle).await {
                     tracing::error!("startup failed: {e:#}");
