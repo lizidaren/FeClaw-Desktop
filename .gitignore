@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# Rust / Tauri
+target/
+**/*.rs.bk
+Cargo.lock  # 桌面应用锁定版本
+
+# Node.js / npm
+node_modules/
+*.js.map
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# FeClaw Desktop 本地数据
+.feclaw/
+
+# 环境配置
+.env
+.env.local
+
+# 测试
+coverage/
+.pytest_cache/
+.htmlcov/
