@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="settings.css" />
+  <title>FeClaw Desktop 设置</title>
+</head>
+<body data-theme="system">
+  <div class="app">
+    <aside class="sidebar" aria-label="设置分类">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">F</div>
+        <div class="brand-text">
+          <div class="brand-title">FeClaw Desktop</div>
+          <div class="brand-subtitle">设置</div>
+        </div>
+      </div>
+
+      <nav class="nav" role="tablist" aria-orientation="vertical">
+        <button class="nav-item active" role="tab" data-tab="general" aria-selected="true">
+          <span class="nav-icon" aria-hidden="true">⚙</span>
+          <span>常规</span>
+        </button>
+        <button class="nav-item" role="tab" data-tab="cloud" aria-selected="false">
+          <span class="nav-icon" aria-hidden="true">☁</span>
+          <span>云端</span>
+        </button>
+        <button class="nav-item" role="tab" data-tab="appearance" aria-selected="false">
+          <span class="nav-icon" aria-hidden="true">🎨</span>
+          <span>外观</span>
+        </button>
+        <button class="nav-item" role="tab" data-tab="about" aria-selected="false">
+          <span class="nav-icon" aria-hidden="true">ⓘ</span>
+          <span>关于</span>
+        </button>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <!-- 常规 Tab -->
+      <section class="tab-panel" id="tab-general" role="tabpanel">
+        <header class="panel-header">
+          <h2>常规</h2>
+          <p class="panel-desc">本地行为与启动选项</p>
+        </header>
+
+        <div class="card">
+          <h3>启动</h3>
+          <div class="field field-row">
+            <label class="switch-label" for="auto-launch">
+              <span class="switch-text">
+                <span class="switch-title">开机自动启动</span>
+                <span class="switch-hint">系统登录后自动运行 FeClaw Desktop</span>
+              </span>
+              <input id="auto-launch" type="checkbox" class="switch" />
+              <span class="switch-track" aria-hidden="true"></span>
+            </label>
+          </div>
+
+          <div class="field field-row">
+            <label class="switch-label" for="start-minimized">
+              <span class="switch-text">
+                <span class="switch-title">启动后最小化到托盘</span>
+                <span class="switch-hint">不弹出主窗口，常驻系统托盘</span>
+              </span>
+              <input id="start-minimized" type="checkbox" class="switch" />
+              <span class="switch-track" aria-hidden="true"></span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- 云端 Tab -->
+      <section class="tab-panel" id="tab-cloud" role="tabpanel" hidden>
+        <header class="panel-header">
+          <h2>云端</h2>
+          <p class="panel-desc">连接云端 FeClaw 引擎</p>
+        </header>
+
+        <div class="card">
+          <h3>云端连接</h3>
+
+          <div class="field">
+            <label for="cloud-url">服务器地址</label>
+            <input
+              id="cloud-url"
+              type="url"
+              class="input"
+              placeholder="https://feclaw.example.com"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <small class="hint">支持 http:// 与 https://</small>
+          </div>
+
+          <div class="field">
+            <label for="cloud-token">访问令牌 (Token)</label>
+            <div class="input-group">
+              <input
+                id="cloud-token"
+                type="password"
+                class="input"
+                placeholder="eyJhbGciOi..."
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button
+                type="button"
+                class="btn btn-ghost"
+                id="toggle-token"
+                aria-label="显示/隐藏 Token"
+                title="显示/隐藏"
+              >👁</button>
+            </div>
+            <small class="hint">本地存于 <code>~/.feclaw/ui-settings.json</code>，请勿在公共电脑保存</small>
+          </div>
+
+          <div class="field-actions">
+            <button type="button" class="btn btn-secondary" id="test-connection">
+              <span class="btn-label">测试连接</span>
+              <span class="btn-spinner" hidden></span>
+            </button>
+            <span id="connection-status" class="status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 外观 Tab -->
+      <section class="tab-panel" id="tab-appearance" role="tabpanel" hidden>
+        <header class="panel-header">
+          <h2>外观</h2>
+          <p class="panel-desc">主题与显示偏好</p>
+        </header>
+
+        <div class="card">
+          <h3>主题</h3>
+          <div class="field">
+            <label for="theme">主题模式</label>
+            <select id="theme" class="input">
+              <option value="system">跟随系统</option>
+              <option value="light">浅色</option>
+              <option value="dark">深色</option>
+            </select>
+            <small class="hint">跟随系统会读取操作系统的明暗设置</small>
+          </div>
+        </div>
+      </section>
+
+      <!-- 关于 Tab -->
+      <section class="tab-panel" id="tab-about" role="tabpanel" hidden>
+        <header class="panel-header">
+          <h2>关于</h2>
+          <p class="panel-desc">版本与项目信息</p>
+        </header>
+
+        <div class="card">
+          <dl class="meta">
+            <div class="meta-row">
+              <dt>应用名称</dt>
+              <dd>FeClaw Desktop</dd>
+            </div>
+            <div class="meta-row">
+              <dt>版本</dt>
+              <dd id="app-version">0.1.0</dd>
+            </div>
+            <div class="meta-row">
+              <dt>配置目录</dt>
+              <dd><code>~/.feclaw/</code></dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <footer class="actions">
+        <span id="toast" class="toast" role="status" aria-live="polite"></span>
+        <div class="actions-right">
+          <button type="button" class="btn btn-ghost" id="cancel">取消</button>
+          <button type="button" class="btn btn-primary" id="save">保存设置</button>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <script type="module" src="settings.ts"></script>
+</body>
+</html>

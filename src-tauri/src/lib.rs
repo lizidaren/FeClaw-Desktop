@@ -70,6 +70,12 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
+        .invoke_handler(tauri::generate_handler![
+            settings::load_settings,
+            settings::save_settings,
+            settings::open_settings_window,
+            settings::test_cloud_connection,
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
