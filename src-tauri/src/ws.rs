@@ -12,7 +12,7 @@
 //! Outgoing traffic flows through an unbounded mpsc so any spawned
 //! task can ship a response without holding the WebSocket stream.
 
-use std::cell::Cell;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -54,12 +54,12 @@ pub struct WsClient {
     executor: Arc<CommandExecutor>,
     /// Instant of the last received Pong. Updated on Pong message and
     /// initialised to Instant::now() when the connection is established.
-    last_pong_at: Cell<Option<Instant>>,
+    last_pong_at: Mutex<Option<Instant>>,
     /// Close code received from the server (if the connection ended via a
     /// Close frame). Set by `run_loop`; read by callers via
     /// [`WsClient::last_close_code`] to differentiate a normal shutdown
     /// from an app-level 4xxx error (e.g. 4001 invalid token → reauth).
-    last_close_code: Cell<Option<u16>>,
+    last_close_code: Mutex<Option<u16>>,
     /// Cancel token: when set to true by the control pump, the run loop
     /// exits gracefully to trigger a reconnect.
     cancel_token: Arc<AtomicBool>,
@@ -83,8 +83,8 @@ impl WsClient {
             status_tx,
             consent,
             executor,
-            last_pong_at: Cell::new(None),
-            last_close_code: Cell::new(None),
+            last_pong_at: Mutex::new(None),
+            last_close_code: Mutex::new(None),
             cancel_token,
         }
     }
@@ -101,7 +101,7 @@ impl WsClient {
     /// (forbidden) — both signal that the JWT is no longer good and
     /// needs to be re-acquired via the login flow.
     pub fn last_close_code(&self) -> Option<u16> {
-        self.last_close_code.get()
+        self.last_close_code.lock().unwrap()
     }
 
     async fn set_status(&self, s: ConnectionStatus) {
@@ -191,18 +191,18 @@ impl WsClient {
     /// Returns `Ok(())` for any clean termination (close frame received,
     /// cancel token flipped, or the peer hung up) and `Err(_)` for
     /// transport-level errors (TLS failure, DNS, timeout, …).
-    pub async fn run_once(mut self) -> Result<()> {
+    /// Connect, run, disconnect, then return the server-side close code
+    /// (if any) together with the I/O result.  Callers that need to
+    /// inspect `last_close_code` **after** the connection ends (e.g. to
+    /// distinguish an auth failure from a clean shutdown) should use this
+    /// method instead of `run` + `last_close_code` because `run_once`
+    /// consumes `self`.
+    pub async fn run_once(mut self) -> (Option<u16>, Result<()>) {
         self.set_status(ConnectionStatus::Connecting).await;
-        match self.run_inner().await {
-            Ok(()) => {
-                self.set_status(ConnectionStatus::Disconnected).await;
-                Ok(())
-            }
-            Err(e) => {
-                self.set_status(ConnectionStatus::Disconnected).await;
-                Err(e)
-            }
-        }
+        let r = self.run_inner().await;
+        self.set_status(ConnectionStatus::Disconnected).await;
+        let close_code = self.last_close_code();
+        (close_code, r)
     }
 
     async fn run_inner(&mut self) -> Result<()> {
@@ -216,7 +216,7 @@ impl WsClient {
         let mut ws = Self::connect_tls(&self.url, &self.token).await?;
         self.set_status(ConnectionStatus::Connected).await;
         tracing::info!("ws connected to {}", self.url);
-        self.last_pong_at.set(Some(Instant::now()));
+        *self.last_pong_at.lock().unwrap() = Some(Instant::now());
 
         let result = self.run_loop(&mut ws, &mut outgoing_rx).await;
 
@@ -240,7 +240,7 @@ impl WsClient {
                         return Err(anyhow!("ws ping send: {e}"));
                     }
                     // Check pong timeout: if no pong received for > 35s, close connection.
-                    if let Some(last) = self.last_pong_at.get() {
+                    if let Some(last) = *self.last_pong_at.lock().unwrap() {
                         if last.elapsed() > PONG_TIMEOUT {
                             tracing::warn!(
                                 "pong timeout ({:?} since last pong), closing connection",
@@ -273,7 +273,7 @@ impl WsClient {
                             // Stash for callers (`last_close_code` reader) so
                             // the cloud reconnect loop can detect 4001/4002
                             // and trigger a fresh login.
-                            self.last_close_code.set(Some(code));
+                            *self.last_close_code.lock().unwrap() = Some(code);
                             if (4000..5000).contains(&code) {
                                 tracing::error!(
                                     "ws closed by server with app-level code {code}: {:?}",
@@ -311,7 +311,7 @@ impl WsClient {
             Message::Binary(b) => String::from_utf8(b)?,
             Message::Ping(_) => return Ok(()),
             Message::Pong(_) => {
-                self.last_pong_at.set(Some(Instant::now()));
+                *self.last_pong_at.lock().unwrap() = Some(Instant::now());
                 return Ok(());
             }
             Message::Frame(_) => return Ok(()),

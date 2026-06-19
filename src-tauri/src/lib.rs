@@ -233,6 +233,15 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
                         tracing::warn!("failed to persist config: {e:#}");
                     }
                 }
+                ControlMsg::ShowCloudLogin => {
+                    tracing::info!("control: show cloud login requested");
+                    if let Err(e) = settings::open_settings_window(app_for_control.clone()).await {
+                        tracing::error!("open settings window: {e}");
+                    }
+                    if let Err(e) = app_for_control.emit("navigate-settings", "cloud") {
+                        tracing::warn!("emit navigate-settings: {e}");
+                    }
+                }
                 ControlMsg::Quit => {
                     tracing::info!("control: quit requested");
                     app_for_control.exit(0);

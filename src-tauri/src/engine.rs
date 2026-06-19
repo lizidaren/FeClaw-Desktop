@@ -340,8 +340,7 @@ impl EngineManager {
                 cancel_token.clone(),
             );
 
-            let result = ws.run_once().await;
-            let close_code = ws.last_close_code();
+            let (close_code, result) = ws.run_once().await;
 
             // 6. Auth-failure close codes invalidate the JWT.
             if matches!(close_code, Some(4001) | Some(4002)) {
