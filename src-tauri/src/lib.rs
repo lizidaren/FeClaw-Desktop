@@ -91,6 +91,9 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
     let mut engine = EngineManager::new(config.clone());
     let port = engine.start().await?;
     config.port = port;
+    if let Err(e) = config.save() {
+        tracing::warn!("failed to persist selected port to config.toml: {e:#}");
+    }
     engine.wait_healthy().await?;
     tracing::info!("engine ready on port {port}");
 

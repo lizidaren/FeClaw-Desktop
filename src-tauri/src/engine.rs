@@ -83,16 +83,19 @@ impl EngineManager {
             .arg(&self.config.host)
             .arg("--port")
             .arg(port.to_string())
+            .arg("--config")
+            .arg(Config::config_path().to_string_lossy().as_ref())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .kill_on_drop(true);
 
         tracing::info!(
-            "starting engine: {} --host {} --port {}",
+            "starting engine: {} --host {} --port {} --config {}",
             engine_path,
             self.config.host,
-            port
+            port,
+            Config::config_path().display()
         );
         let mut child = cmd.spawn().context("spawn feclaw engine")?;
 
@@ -199,5 +202,66 @@ impl EngineManager {
             return Ok(status.code());
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_manager_initial_status_is_stopped() {
+        let cfg = Config::default();
+        let engine = EngineManager::new(cfg);
+        assert_eq!(engine.status(), EngineStatus::Stopped);
+    }
+
+    #[test]
+    fn engine_status_equality() {
+        use crate::engine::EngineStatus::*;
+        assert_eq!(Stopped, Stopped);
+        assert_eq!(Starting, Starting);
+        assert_eq!(Running, Running);
+        assert_eq!(Failed, Failed);
+        assert_ne!(Stopped, Starting);
+    }
+
+    #[test]
+    fn engine_status_debug() {
+        let status = EngineStatus::Stopped;
+        let debug_str = format!("{:?}", status);
+        assert_eq!(debug_str, "Stopped");
+    }
+
+    #[test]
+    fn engine_config_preserved() {
+        let cfg = Config {
+            host: "192.168.1.1".to_string(),
+            port: 9999,
+            engine_path: Some("/custom/feclaw".to_string()),
+            ws_path: "/custom/ws".to_string(),
+            mode: crate::config::Mode::Cloud,
+        };
+        let engine = EngineManager::new(cfg.clone());
+        assert_eq!(engine.config().host, "192.168.1.1");
+        assert_eq!(engine.config().port, 9999);
+        assert_eq!(engine.config().mode, crate::config::Mode::Cloud);
+    }
+
+    #[test]
+    fn stdout_buffer_handle_cloneable() {
+        let cfg = Config::default();
+        let engine = EngineManager::new(cfg);
+        let handle = engine.stdout_buffer_handle();
+        // Should be cloneable (Arc)
+        let _ = handle.clone();
+    }
+
+    #[test]
+    fn is_running_when_no_child() {
+        let cfg = Config::default();
+        let mut engine = EngineManager::new(cfg);
+        // No child spawned yet → not running
+        assert!(!engine.is_running());
     }
 }

@@ -151,7 +151,11 @@ impl Default for CommandExecutor {
 
 fn truncate_output(s: &mut String, max: usize) {
     if s.len() > max {
-        s.truncate(max);
+        let mut boundary = max;
+        while !s.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        s.truncate(boundary);
         s.push_str("\n... [output truncated]");
     }
 }
@@ -181,5 +185,148 @@ mod tests {
             .await;
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn execute_failure_exit_code() {
+        let exec = CommandExecutor::new();
+        let result = exec
+            .execute(
+                if cfg!(windows) { "cmd" } else { "false" },
+                if cfg!(windows) {
+                    &["/C", "exit", "1"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                } else {
+                    &[String::from("1")]
+                },
+                &PathBuf::from("."),
+                Some(5),
+            )
+            .await;
+        assert_ne!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn execute_captures_stderr() {
+        let exec = CommandExecutor::new();
+        // bash -c prints to stderr; cmd /C also has stderr
+        let result = exec
+            .execute(
+                if cfg!(windows) { "cmd" } else { "sh" },
+                if cfg!(windows) {
+                    &["/C", "echo", "err", ">&2"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                } else {
+                    &["-c".to_string(), "echo err >&2".to_string()]
+                },
+                &PathBuf::from("."),
+                Some(5),
+            )
+            .await;
+        // Both should succeed (exit 0), but stderr should contain "err"
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stderr.contains("err") || result.stdout.contains("err"));
+    }
+
+    #[tokio::test]
+    async fn execute_cwd_auto_created() {
+        let exec = CommandExecutor::new();
+        let temp_dir = std::env::temp_dir();
+        let nonexistent_cwd = temp_dir.join("feclaw_nonexistent_").join("subdir");
+
+        // Ensure the path definitely doesn't exist
+        assert!(
+            !nonexistent_cwd.exists(),
+            "test path should not exist before test"
+        );
+
+        let result = exec
+            .execute(
+                if cfg!(windows) { "cmd" } else { "echo" },
+                if cfg!(windows) {
+                    &["/C", "echo", "ok"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                } else {
+                    &[String::from("ok")]
+                },
+                &nonexistent_cwd,
+                Some(5),
+            )
+            .await;
+
+        // Should succeed because cwd was auto-created
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stderr.is_empty() || !result.stderr.contains("failed to create"));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(nonexistent_cwd.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn execute_timeout() {
+        let exec = CommandExecutor::new();
+        // sleep longer than the timeout
+        let result = exec
+            .execute(
+                if cfg!(windows) { "ping" } else { "sleep" },
+                if cfg!(windows) {
+                    &["/C", "ping", "-n", "10", "localhost"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                } else {
+                    &[String::from("10")]
+                },
+                &PathBuf::from("."),
+                Some(1), // 1 second timeout
+            )
+            .await;
+        // Should be killed due to timeout
+        #[cfg(not(windows))]
+        assert_eq!(result.exit_code, 124); // standard timeout exit code
+        #[cfg(windows)]
+        assert_ne!(result.exit_code, 0); // on windows, non-zero when killed
+        assert!(result.stderr.is_empty() || !result.stderr.contains("failed"));
+    }
+
+    #[tokio::test]
+    async fn execute_stdout_truncation() {
+        let exec = CommandExecutor::new();
+        // Generate more than 1MB of output
+        let large_arg = std::iter::repeat('x').take(1_200_000).collect::<String>();
+
+        let result = exec
+            .execute(
+                if cfg!(windows) { "cmd" } else { "echo" },
+                if cfg!(windows) {
+                    &["/C", "echo", &large_arg]
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                } else {
+                    &[large_arg]
+                },
+                &PathBuf::from("."),
+                Some(10),
+            )
+            .await;
+
+        assert_eq!(result.exit_code, 0);
+        // Output should be truncated
+        assert!(
+            result.stdout.len() <= 1024 * 1024 + 30, // 1MB + "... [output truncated]"
+            "stdout should be truncated to ~1MB, got {} bytes",
+            result.stdout.len()
+        );
+        assert!(
+            result.stdout.contains("... [output truncated]"),
+            "stdout should contain truncation marker"
+        );
     }
 }

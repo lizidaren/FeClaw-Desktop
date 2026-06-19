@@ -129,7 +129,10 @@ impl ConsentManager {
     ///     [`Decision::AlwaysAllow`] without showing a dialog.
     ///   * Otherwise show a native dialog. We use Yes/No/Cancel where
     ///     **Yes** = allow once, **No** = deny, **Cancel** = always allow.
-    pub async fn request(&mut self, command: &str) -> Decision {
+    ///
+    /// `cwd` is included in the dialog description so the user knows where
+    /// the command will run (and that it will be created if missing).
+    pub async fn request(&mut self, command: &str, cwd: Option<&str>) -> Decision {
         let risk = Self::assess_risk(command);
 
         if risk == RiskLevel::L1 {
@@ -146,8 +149,15 @@ impl ConsentManager {
             RiskLevel::L2 => "FeClaw Desktop — Write / redirect (L2)",
             RiskLevel::L1 => "FeClaw Desktop",
         };
+
+        let cwd_info = match cwd {
+            Some(path) => format!(
+                "\n\nWorking directory: {path}\n(will be created automatically if it doesn't exist)"
+            ),
+            None => String::new(),
+        };
         let body = format!(
-            "Agent wants to run:\n\n  {command}\n\n\
+            "Agent wants to run:\n\n  {command}{cwd_info}\n\n\
              Risk level: L{}\n\n\
              [Yes] Allow once\n\
              [No]  Deny\n\
@@ -169,9 +179,15 @@ impl ConsentManager {
             Ok(rfd::MessageDialogResult::Yes) => Decision::Allow,
             Ok(rfd::MessageDialogResult::No) => Decision::Deny,
             Ok(rfd::MessageDialogResult::Cancel) | Ok(rfd::MessageDialogResult::Other) => {
+                // Add to session trust immediately (in-memory).
                 self.session_trust.insert(command.to_string());
                 if let Err(e) = self.save_trusted() {
-                    tracing::warn!("failed to persist trusted-commands.json: {e:#}");
+                    // Persistence failed: command stays in session_trust (re-prompt next
+                    // session) but warn the user so they know it won't survive restart.
+                    tracing::warn!(
+                        "failed to persist trusted-commands.json: {e:#}; \
+                         will re-prompt after restart"
+                    );
                 }
                 Decision::AlwaysAllow
             }
@@ -204,5 +220,116 @@ mod tests {
         assert_eq!(ConsentManager::assess_risk("curl https://x"), RiskLevel::L4);
         assert_eq!(ConsentManager::assess_risk("python3 analyze.py"), RiskLevel::L5);
         assert_eq!(ConsentManager::assess_risk("bash script.sh"), RiskLevel::L5);
+    }
+
+    #[test]
+    fn assess_risk_python3_analyze() {
+        // python3 analyze.py → L5
+        assert_eq!(ConsentManager::assess_risk("python3 analyze.py"), RiskLevel::L5);
+    }
+
+    #[test]
+    fn assess_risk_rm_rf_temp() {
+        // rm -rf /temp → L3
+        assert_eq!(ConsentManager::assess_risk("rm -rf /temp"), RiskLevel::L3);
+    }
+
+    #[test]
+    fn assess_risk_curl() {
+        // curl http://x.com → L4
+        assert_eq!(ConsentManager::assess_risk("curl http://x.com"), RiskLevel::L4);
+    }
+
+    #[test]
+    fn assess_risk_wget() {
+        // wget http://x.com → L4
+        assert_eq!(ConsentManager::assess_risk("wget http://x.com"), RiskLevel::L4);
+    }
+
+    #[test]
+    fn assess_risk_ls() {
+        // ls . → L1
+        assert_eq!(ConsentManager::assess_risk("ls ."), RiskLevel::L1);
+    }
+
+    #[test]
+    fn assess_risk_cat() {
+        // cat file.txt → L1
+        assert_eq!(ConsentManager::assess_risk("cat file.txt"), RiskLevel::L1);
+    }
+
+    #[test]
+    fn assess_risk_echo_redirect() {
+        // echo hello > file.txt → L2
+        assert_eq!(ConsentManager::assess_risk("echo hello > file.txt"), RiskLevel::L2);
+    }
+
+    #[test]
+    fn assess_risk_cp() {
+        // cp a b → L2
+        assert_eq!(ConsentManager::assess_risk("cp a b"), RiskLevel::L2);
+    }
+
+    #[test]
+    fn assess_risk_mv() {
+        // mv a b → L2
+        assert_eq!(ConsentManager::assess_risk("mv a b"), RiskLevel::L2);
+    }
+
+    #[test]
+    fn assess_risk_empty_string() {
+        // empty string → L1
+        assert_eq!(ConsentManager::assess_risk(""), RiskLevel::L1);
+    }
+
+    #[test]
+    fn assess_risk_python3_with_path_args() {
+        // python3 test.py --input /mnt/desktop/data.csv → L5 (path不影响风险判定)
+        assert_eq!(
+            ConsentManager::assess_risk("python3 test.py --input /mnt/desktop/data.csv"),
+            RiskLevel::L5
+        );
+    }
+
+    #[test]
+    fn assess_risk_node_interpreter() {
+        // node run.js → L5
+        assert_eq!(ConsentManager::assess_risk("node run.js"), RiskLevel::L5);
+    }
+
+    #[test]
+    fn assess_risk_powershell() {
+        // powershell -Command → L5
+        assert_eq!(ConsentManager::assess_risk("powershell -Command"), RiskLevel::L5);
+    }
+
+    #[test]
+    fn assess_risk_redirect_stderr() {
+        // cmd 2> file → L2
+        assert_eq!(ConsentManager::assess_risk("cmd 2> err.log"), RiskLevel::L2);
+    }
+
+    #[test]
+    fn assess_risk_append_redirect() {
+        // echo >> file → L2
+        assert_eq!(ConsentManager::assess_risk("echo world >> file.txt"), RiskLevel::L2);
+    }
+
+    #[test]
+    fn assess_risk_mkdir() {
+        // mkdir → L2
+        assert_eq!(ConsentManager::assess_risk("mkdir /tmp/dir"), RiskLevel::L2);
+    }
+
+    #[test]
+    fn assess_risk_touch() {
+        // touch → L2
+        assert_eq!(ConsentManager::assess_risk("touch file.txt"), RiskLevel::L2);
+    }
+
+    #[test]
+    fn assess_risk_whitespace_only() {
+        // whitespace-only → L1
+        assert_eq!(ConsentManager::assess_risk("   "), RiskLevel::L1);
     }
 }

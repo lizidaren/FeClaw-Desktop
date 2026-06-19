@@ -12,10 +12,13 @@
 //! Outgoing traffic flows through an unbounded mpsc so any spawned
 //! task can ship a response without holding the WebSocket stream.
 
+use std::cell::Cell;
+use std::time::Instant;
+
 use crate::consent::{ConsentManager, Decision};
 use crate::executor::CommandExecutor;
 use crate::ws_types::{
-    CommandExecPayload, ConnectionStatus, FileReadPayload, FileWritePayload,
+    CommandExecPayload, ConnectionStatus, FileDeletePayload, FileReadPayload, FileWritePayload,
     NotificationPayload, WsRequest,
 };
 
@@ -37,6 +40,7 @@ use tokio_tungstenite::tungstenite::{
 use tokio_tungstenite::{client_async, MaybeTlsStream, WebSocketStream};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const PONG_TIMEOUT: Duration = Duration::from_secs(35);
 const MAX_RECONNECT_ATTEMPTS: u32 = 30;
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
@@ -51,6 +55,9 @@ pub struct WsClient {
     status_tx: mpsc::Sender<ConnectionStatus>,
     consent: Arc<Mutex<ConsentManager>>,
     executor: Arc<CommandExecutor>,
+    /// Instant of the last received Pong. Updated on Pong message and
+    /// initialised to Instant::now() when the connection is established.
+    last_pong_at: Cell<Option<Instant>>,
 }
 
 impl WsClient {
@@ -70,6 +77,7 @@ impl WsClient {
             status_tx,
             consent,
             executor,
+            last_pong_at: Cell::new(None),
         }
     }
 
@@ -138,6 +146,7 @@ impl WsClient {
             .map_err(|e| anyhow!("ws connect: {e}"))?;
         self.set_status(ConnectionStatus::Connected).await;
         tracing::info!("ws connected to {}", self.url);
+        self.last_pong_at.set(Some(Instant::now()));
 
         let result = self.run_loop(&mut ws, &mut outgoing_rx).await;
 
@@ -159,6 +168,17 @@ impl WsClient {
                 _ = heartbeat.tick() => {
                     if let Err(e) = ws.send(Message::Ping(Vec::new())).await {
                         return Err(anyhow!("ws ping send: {e}"));
+                    }
+                    // Check pong timeout: if no pong received for > 35s, close connection.
+                    if let Some(last) = self.last_pong_at.get() {
+                        if last.elapsed() > PONG_TIMEOUT {
+                            tracing::warn!(
+                                "pong timeout ({:?} since last pong), closing connection",
+                                last.elapsed()
+                            );
+                            let _ = ws.close().await;
+                            return Ok(());
+                        }
                     }
                 }
                 out = outgoing_rx.recv() => {
@@ -189,7 +209,12 @@ impl WsClient {
         let text = match msg {
             Message::Text(t) => t,
             Message::Binary(b) => String::from_utf8(b)?,
-            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => return Ok(()),
+            Message::Ping(_) => return Ok(()),
+            Message::Pong(_) => {
+                self.last_pong_at.set(Some(Instant::now()));
+                return Ok(());
+            }
+            Message::Frame(_) => return Ok(()),
             Message::Close(_) => return Ok(()),
         };
         let req: WsRequest = serde_json::from_str(&text)
@@ -204,12 +229,11 @@ impl WsClient {
             WsRequest::FileWrite { id, payload } => {
                 self.handle_file_write_not_implemented(id, payload);
             }
+            WsRequest::FileDelete { id, payload } => {
+                self.handle_file_delete_not_implemented(id, payload);
+            }
             WsRequest::Notification { payload, .. } => {
-                tracing::info!(
-                    "notification from engine: title={:?}, body={}",
-                    payload.title,
-                    payload.body
-                );
+                self.show_native_notification(&payload);
             }
             WsRequest::Pong => {}
         }
@@ -242,6 +266,40 @@ impl WsClient {
         }));
     }
 
+    fn handle_file_delete_not_implemented(&self, id: String, payload: FileDeletePayload) {
+        tracing::info!(
+            "file_delete_request received but file bridge is V2 (id={id}, path={})",
+            payload.path
+        );
+        self.send_json(&serde_json::json!({
+            "type": "file_delete_response",
+            "id": id,
+            "status": "error",
+            "payload": { "error": "file bridge not implemented in MVP" },
+        }));
+    }
+
+    fn show_native_notification(&self, payload: &NotificationPayload) {
+        tracing::info!(
+            "notification from engine: title={:?}, body={}",
+            payload.title,
+            payload.body
+        );
+        // Show a native message dialog (non-blocking, no buttons—just an info toast).
+        let title = payload.title.as_deref().unwrap_or("FeClaw Desktop");
+        let body = &payload.body;
+        let title_owned = title.to_string();
+        let body_owned = body.to_string();
+        std::thread::spawn(move || {
+            let _ = rfd::MessageDialog::new()
+                .set_title(&title_owned)
+                .set_description(&body_owned)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .set_level(rfd::MessageLevel::Info)
+                .show();
+        });
+    }
+
     fn send_json(&self, value: &serde_json::Value) {
         match serde_json::to_string(value) {
             Ok(s) => {
@@ -255,6 +313,7 @@ impl WsClient {
         let consent = self.consent.clone();
         let executor = self.executor.clone();
         let outgoing_tx = self.outgoing_tx.clone();
+        let cwd_from_payload = payload.cwd.clone();
         async_runtime::spawn(async move {
             let cmd_str = if payload.args.is_empty() {
                 payload.command.clone()
@@ -265,7 +324,7 @@ impl WsClient {
 
             let decision = {
                 let mut guard = consent.lock().await;
-                guard.request(&cmd_str).await
+                guard.request(&cmd_str, cwd_from_payload.as_deref()).await
             };
 
             let cwd = PathBuf::from(payload.cwd.as_deref().unwrap_or("."));
@@ -274,14 +333,20 @@ impl WsClient {
                     let result = executor
                         .execute(&payload.command, &payload.args, &cwd, payload.timeout)
                         .await;
+                    let exit_code = result.exit_code;
+                    let status = if exit_code == 124 {
+                        "timeout"
+                    } else {
+                        "accepted"
+                    };
                     let response = serde_json::json!({
                         "type": "command_exec_response",
                         "id": id,
-                        "status": "accepted",
+                        "status": status,
                         "payload": {
                             "stdout": result.stdout,
                             "stderr": result.stderr,
-                            "exit_code": result.exit_code,
+                            "exit_code": exit_code,
                         }
                     });
                     if let Ok(s) = serde_json::to_string(&response) {
