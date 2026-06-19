@@ -194,7 +194,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         status_tx,
         consent,
         executor,
-        cancel_token,
+        cancel_token.clone(),
     );
 
     // 7. Status pump — updates AppState + tray icon.
