@@ -298,7 +298,7 @@ pub async fn cloud_login(
         return Err("密码不能为空".to_string());
     }
 
-    let login_url = format!("{}/api/user/login", url_trimmed.trim_end_matches('/'));
+    let login_url = format!("{}/api/auth/login", url_trimmed.trim_end_matches('/'));
     let username_owned = username.trim().to_string();
 
     // ---- HTTP POST ---------------------------------------------------
