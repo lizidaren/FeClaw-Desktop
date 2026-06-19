@@ -105,6 +105,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
 
     // 2. Start engine.
     let mut engine = EngineManager::new(config.clone());
+    // (cancel_token and ui_tx are wired in step 4 once AppState exists)
     let port = engine.start().await?;
     config.port = port;
     if let Err(e) = config.save() {
@@ -128,6 +129,8 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         control_tx,
         cancel_token: cancel_token.clone(),
     };
+    engine.set_ui_tx(control_tx.clone());
+    engine.set_cancel_token(cancel_token.clone());
     app.manage(state);
 
     // 5. Build system tray.

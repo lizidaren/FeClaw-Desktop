@@ -6,11 +6,14 @@
 //! and gracefully stops it on shutdown.
 
 use crate::config::Config;
+use crate::ControlMsg;
+use crate::ws::WsClient;
 use anyhow::{Context, Result};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::async_runtime;
+use tauri::async_runtime::mpsc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
@@ -38,18 +41,47 @@ pub struct EngineManager {
     stdout_buffer: Arc<Mutex<Vec<String>>>,
     /// Reusable HTTP client for health checks. Created once in `start()`.
     client: Option<reqwest::Client>,
+    /// Optional sender for `ControlMsg`. When set, engine state changes are
+    /// pushed to the UI so the tray / status bar can reflect them in
+    /// real time (e.g. emit `Reconnect` if the engine becomes unhealthy).
+    ui_tx: Option<mpsc::UnboundedSender<ControlMsg>>,
+    /// Cancel flag set by the control pump to signal `wait_exit` to give up.
+    cancel_token: Arc<std::sync::atomic::AtomicBool>,
+    /// Optional handle to the WS client so the engine manager can ask the
+    /// WS layer to drop its connection (e.g. on engine restart).
+    ws: Option<Arc<WsClient>>,
 }
 
 impl EngineManager {
     /// Create a new manager bound to the given configuration.
     pub fn new(config: Config) -> Self {
+        let cancel_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
         Self {
             config,
             child: None,
             status: EngineStatus::Stopped,
             stdout_buffer: Arc::new(Mutex::new(Vec::new())),
             client: None,
+            ui_tx: None,
+            cancel_token,
+            ws: None,
         }
+    }
+
+    /// Inject the UI control channel after `AppState` has been built.
+    /// Must be called once before the engine starts pushing state events.
+    pub fn set_ui_tx(&mut self, tx: mpsc::UnboundedSender<ControlMsg>) {
+        self.ui_tx = Some(tx);
+    }
+
+    /// Inject a shared cancel token used by the control pump to abort waits.
+    pub fn set_cancel_token(&mut self, token: Arc<std::sync::atomic::AtomicBool>) {
+        self.cancel_token = token;
+    }
+
+    /// Wire the WS client so the engine can signal it on lifecycle changes.
+    pub fn set_ws(&mut self, ws: Arc<WsClient>) {
+        self.ws = Some(ws);
     }
 
     /// Current lifecycle status.
