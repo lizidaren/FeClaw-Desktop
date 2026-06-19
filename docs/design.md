@@ -462,33 +462,92 @@ Agent 请求执行 → WS 超时（Desktop 不在线）
 
 ## 7. 引擎配置
 
-### 7.1 Desktop 写入的引擎配置
+### 7.1 配置方式
 
-```toml
-# ~/.feclaw/config.toml
-[server]
-host = "127.0.0.1"
-port = 8080
+FeClaw 平台使用 Pydantic Settings，自动从 `.env` 文件读取配置。
+Desktop 写入 `~/.feclaw/.env`，FeClaw 自动加载。
 
-[storage]
-mode = "local"
-root = "~/.feclaw/data"
-
-[desktop]
-ws_enabled = true
-
-[auth]
-auto_login = true
+**配置优先级**：
+```
+环境变量 > CLI 参数（未来） > ~/.feclaw/.env > .env（项目根目录） > config.py 默认值
 ```
 
-### 7.2 引擎启动命令
+### 7.2 Desktop 写入的配置
+
+```env
+# ~/.feclaw/.env
+STORAGE_MODE=local
+DESKTOP_ENABLED=true
+HOST=127.0.0.1
+PORT=8080
+```
+
+Desktop 写入规则：
+1. **先读取** `~/.feclaw/.env` 中的现有内容
+2. **替换** Desktop 管理的键（STORAGE_MODE、HOST、PORT、DESKTOP_ENABLED）
+3. **保留** 用户已配置的键（JWT_SECRET、LLM API Key、COS 密钥等）
+4. **如果 `.env` 完全不存在**，Desktop 弹配置引导页
+
+```rust
+// Desktop 配置合并逻辑（伪代码）
+fn write_env(config: &Config) -> Result<()> {
+    let path = feclaw_dir().join(".env");
+    
+    // 1. 读取现有 .env（如有）
+    let mut existing = std::collections::HashMap::new();
+    if path.exists() {
+        for line in std::fs::read_to_string(&path)?.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                existing.insert(k.trim().to_string(), v.trim().to_string());
+            }
+        }
+    }
+    
+    // 2. 覆盖 Desktop 管理的项
+    existing.insert("STORAGE_MODE".into(), "local".into());
+    existing.insert("HOST".into(), "127.0.0.1".into());
+    existing.insert("PORT".into(), config.port.to_string());
+    existing.insert("DESKTOP_ENABLED".into(), "true".into());
+    
+    // 3. 写回
+    let content: String = existing.iter()
+        .map(|(k, v)| format!("{k}={v}\n"))
+        .collect();
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+```
+
+### 7.3 首次配置引导
+
+`.env` 不存在时（首次使用），Desktop 弹出配置页面：
+
+```
+┌──────────────────────────────────────┐
+│  欢迎使用 FeClaw Desktop             │
+│                                      │
+│  LLM API Key 是必填项，否则无法对话:  │
+│                                      │
+│  [_____________________________]     │
+│                                      │
+│  存储后端: [本地磁盘 ▼]               │
+│                                      │
+│  COS 密钥（可选，使用云存储时填写）:   │
+│  [_____________________________]     │
+│                                      │
+│  [✅ 启动 FeClaw]                    │
+└──────────────────────────────────────┘
+```
+
+### 7.4 引擎启动命令
 
 ```bash
 # Desktop 内部启动引擎
-feclaw --config ~/.feclaw/config.toml
+feclaw
+# 引擎自动从 ~/.feclaw/.env 读取配置
 ```
 
-### 7.3 本地凭据存储
+### 7.5 本地凭据存储
 
 ```json
 # ~/.feclaw/local-credentials

@@ -214,4 +214,87 @@ mod tests {
     fn extract_password_missing() {
         assert!(AuthManager::extract_password_from_stdout("no secrets here").is_none());
     }
+
+    #[test]
+    fn extract_password_admin_password_pattern() {
+        // "admin password: aB3#kM9$xR7$" → "aB3#kM9$xR7$"
+        let s = "server started\n  admin password: aB3#kM9$xR7$\nlistening on 8080";
+        assert_eq!(
+            AuthManager::extract_password_from_stdout(s),
+            Some("aB3#kM9$xR7$".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_password_empty_string() {
+        assert!(AuthManager::extract_password_from_stdout("").is_none());
+    }
+
+    #[test]
+    fn extract_password_no_password_after_colon() {
+        // "Initial admin password:   " (empty after colon) → None
+        let s = "Initial admin password:   ";
+        assert!(AuthManager::extract_password_from_stdout(s).is_none());
+    }
+
+    #[test]
+    fn extract_password_special_chars_preserved() {
+        // Special characters in password should be preserved
+        let s = "Initial admin password: P@ssw0rd!#$%^&*()";
+        assert_eq!(
+            AuthManager::extract_password_from_stdout(s),
+            Some("P@ssw0rd!#$%^&*()".to_string())
+        );
+    }
+
+    #[test]
+    fn load_credentials_file_not_found() {
+        let cfg = Config {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            engine_path: None,
+            ws_path: "/ws/desktop".to_string(),
+            mode: crate::config::Mode::Local,
+        };
+        let auth = AuthManager::new(cfg);
+        // Use a path that definitely doesn't exist
+        let creds = auth.load_credentials();
+        assert!(creds.is_none());
+    }
+
+    #[test]
+    fn credentials_default_username() {
+        let creds = Credentials::default();
+        assert_eq!(creds.username, "admin");
+        assert!(creds.password.is_none());
+        assert!(creds.token.is_none());
+    }
+
+    #[test]
+    fn credentials_serialize_deserialize() {
+        let creds = Credentials {
+            username: "admin".to_string(),
+            password: Some("secret123".to_string()),
+            token: Some("jwt.token.here".to_string()),
+        };
+        let json = serde_json::to_string(&creds).unwrap();
+        let parsed: Credentials = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.username, creds.username);
+        assert_eq!(parsed.password, creds.password);
+        assert_eq!(parsed.token, creds.token);
+    }
+
+    #[test]
+    fn credentials_skips_none_password_in_json() {
+        let creds = Credentials {
+            username: "admin".to_string(),
+            password: None,
+            token: Some("jwt.token".to_string()),
+        };
+        let json = serde_json::to_string(&creds).unwrap();
+        // password should not appear in JSON when None
+        assert!(!json.contains("password"));
+        assert!(json.contains("token"));
+        assert!(json.contains("admin"));
+    }
 }
