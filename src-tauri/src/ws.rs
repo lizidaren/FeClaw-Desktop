@@ -201,7 +201,26 @@ impl WsClient {
                 msg = ws.next() => {
                     let Some(msg) = msg else { return Ok(()); };
                     let msg = msg.map_err(|e| anyhow!("ws recv: {e}"))?;
-                    if matches!(msg, Message::Close(_)) {
+                    // [V3-5/N-4] Extract close code so we can distinguish a normal
+                    // shutdown from an app-level 4xxx error sent by the engine
+                    // (4001 invalid token, 4003 forbidden, 4004 agent not found).
+                    if let Message::Close(frame) = &msg {
+                        if let Some(frame) = frame {
+                            let code: u16 = frame.code.into();
+                            if (4000..5000).contains(&code) {
+                                tracing::error!(
+                                    "ws closed by server with app-level code {code}: {:?}",
+                                    frame.reason
+                                );
+                            } else {
+                                tracing::info!(
+                                    "ws closed by server (code={code}): {:?}",
+                                    frame.reason
+                                );
+                            }
+                        } else {
+                            tracing::info!("ws closed by server (no close frame)");
+                        }
                         return Ok(());
                     }
                     if let Err(e) = self.handle_message(msg).await {
