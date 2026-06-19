@@ -8,10 +8,32 @@
 
 use crate::config::Config;
 use anyhow::Result;
-use rfd::{MessageButtons, MessageDialog};
+use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// Outcome of a file-operation consent request.
+/// Distinguishes explicit denial from dialog timeout so callers can return
+/// a more useful error to the user / frontend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationOutcome {
+    Allow,
+    Denied,
+    /// Dialog was open for longer than [`CONSENT_TIMEOUT`] without input.
+    Timeout,
+}
+
+impl OperationOutcome {
+    pub fn is_allowed(self) -> bool {
+        matches!(self, OperationOutcome::Allow)
+    }
+}
+
+/// How long a write/delete dialog may stay open before we treat it as
+/// a timeout (the user walked away).
+const CONSENT_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
 /// What the user chose in the consent dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +236,101 @@ impl ConsentManager {
 impl Default for ConsentManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ConsentManager {
+    /// Ask for consent to perform a VFS file operation.
+    ///
+    /// - `"read"` → silently allow (L1).
+    /// - `"write"` → L2 dialog (info, Yes/No).
+    /// - `"delete"` → L3 dialog (warning, Yes/No).
+    ///
+    /// The dialog description explicitly names the operation and the target
+    /// file path so the user knows exactly what they're approving. Does NOT
+    /// touch `session_trust` / `trusted-commands.json` — those track whole
+    /// shell commands and would be polluted by file paths.
+    pub async fn request_operation(&mut self, operation: &str, path: &str) -> OperationOutcome {
+        let risk = match operation {
+            "read" => RiskLevel::L1,
+            "write" => RiskLevel::L2,
+            "delete" => RiskLevel::L3,
+            _ => RiskLevel::L3,
+        };
+
+        if risk == RiskLevel::L1 {
+            return OperationOutcome::Allow;
+        }
+
+        let description = match operation {
+            "write" => format!(
+                "Agent wants to WRITE a file under your Desktop:\n\n  {path}\n\n\
+                 This will create the file or overwrite the existing one."
+            ),
+            "delete" => format!(
+                "Agent wants to DELETE a file under your Desktop:\n\n  {path}\n\n\
+                 This action is permanent and cannot be undone."
+            ),
+            _ => format!("Agent wants to {operation} file:\n\n  {path}"),
+        };
+
+        self.show_consent_dialog(&description, risk).await
+    }
+
+    /// Internal helper: pop a native dialog and map the result to an
+    /// [`OperationOutcome`]. Wrapped in `tokio::time::timeout` so the dialog
+    /// can't hang forever.
+    async fn show_consent_dialog(&self, description: &str, risk: RiskLevel) -> OperationOutcome {
+        let (title, level, buttons) = match risk {
+            RiskLevel::L2 => (
+                "FeClaw Desktop — Write file (L2)",
+                MessageLevel::Info,
+                MessageButtons::YesNo,
+            ),
+            RiskLevel::L3 => (
+                "FeClaw Desktop — Delete file (L3)",
+                MessageLevel::Warning,
+                MessageButtons::YesNo,
+            ),
+            _ => (
+                "FeClaw Desktop",
+                MessageLevel::Info,
+                MessageButtons::Ok,
+            ),
+        };
+
+        let body = format!(
+            "{description}\n\nCaller: {caller}\nRisk level: L{level}",
+            caller = self.app_info,
+            level = risk as u8
+        );
+
+        let title = title.to_string();
+        let body = body.to_string();
+        let dialog = MessageDialog::new()
+            .set_title(&title)
+            .set_description(&body)
+            .set_buttons(buttons)
+            .set_level(level);
+
+        // rfd dialogs are blocking; offload to a blocking task AND wrap in
+        // a timeout so the dialog can't outlive [`CONSENT_TIMEOUT`].
+        let join = tokio::task::spawn_blocking(move || dialog.show());
+        match tokio::time::timeout(CONSENT_TIMEOUT, join).await {
+            Ok(Ok(MessageDialogResult::Yes)) => OperationOutcome::Allow,
+            Ok(Ok(_)) => OperationOutcome::Denied, // No / Ok / Other / Close
+            Ok(Err(e)) => {
+                tracing::error!("consent dialog task failed: {e}");
+                OperationOutcome::Denied
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "consent dialog timed out after {}s — treating as denied",
+                    CONSENT_TIMEOUT.as_secs()
+                );
+                OperationOutcome::Timeout
+            }
+        }
     }
 }
 

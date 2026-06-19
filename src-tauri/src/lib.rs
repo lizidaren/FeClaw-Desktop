@@ -19,6 +19,7 @@ mod consent;
 mod engine;
 mod executor;
 mod file_bridge;
+mod file_ops;
 mod settings;
 mod tray;
 mod ws;
@@ -33,7 +34,7 @@ use crate::ws::{ConnectionStatus, WsClient};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::async_runtime::{self, mpsc};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 /// Commands the UI can send into the async runtime.
 #[derive(Debug, Clone)]
@@ -55,6 +56,9 @@ pub struct AppState {
     pub control_tx: mpsc::UnboundedSender<ControlMsg>,
     /// Signals the WS client to cancel the current connection and reconnect.
     pub cancel_token: Arc<AtomicBool>,
+    /// Shared with `WsClient` so file-relay Tauri commands and the WS handler
+    /// funnel through one consent gate (shared session_trust list).
+    pub consent: Arc<Mutex<ConsentManager>>,
 }
 
 /// Tauri application entry point.
@@ -75,6 +79,9 @@ pub fn run() {
             settings::save_settings,
             settings::open_settings_window,
             settings::test_cloud_connection,
+            file_ops::file_read,
+            file_ops::file_write,
+            file_ops::file_delete,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -129,11 +136,18 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
     // 4. Register AppState (must exist before tray builder reads it).
     let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMsg>();
     let cancel_token = Arc::new(AtomicBool::new(false));
+    let (status_tx, mut status_rx) = mpsc::channel(32);
+    // Consent is created here (before AppState) so we can hand the same Arc
+    // to both AppState and WsClient — both the Tauri commands and the WS
+    // file handlers must share one consent gate.
+    let consent = Arc::new(Mutex::new(ConsentManager::new()));
+    consent.lock().await.load_trusted();
     let state = AppState {
         config: Arc::new(RwLock::new(config.clone())),
         status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
         control_tx,
         cancel_token: cancel_token.clone(),
+        consent: consent.clone(),
     };
     engine.set_ui_tx(control_tx.clone());
     engine.set_cancel_token(cancel_token.clone());
@@ -144,10 +158,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         tracing::warn!("failed to build tray: {e:#}");
     }
 
-    // 6. Wire consent + executor + WS.
-    let (status_tx, mut status_rx) = mpsc::channel(32);
-    let consent = Arc::new(tokio::sync::Mutex::new(ConsentManager::new()));
-    consent.lock().await.load_trusted();
+    // 6. Wire executor + WS (consent Arc is shared with AppState).
     let executor = Arc::new(CommandExecutor::new());
     let ws = WsClient::new(config.ws_url(), token, status_tx, consent, executor, cancel_token);
 
