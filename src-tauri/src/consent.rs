@@ -189,12 +189,14 @@ impl ConsentManager {
         let body = format!(
             "Agent wants to run:\n\n  {command}{cwd_info}\n\n\
              Caller: {caller}\n\n\
-             Risk level: L{}\n\n\
+             Risk level: L{risk}\n\n\
              [Yes] Allow once\n\
              [No]  Deny\n\
              [Cancel] Always allow this command",
+            command = command,
+            cwd_info = cwd_info,
             caller = self.app_info,
-            risk as u8
+            risk = risk as u8,
         );
 
         let title = title.to_string();
@@ -210,7 +212,7 @@ impl ConsentManager {
         let decision = match result {
             Ok(rfd::MessageDialogResult::Yes) => Decision::Allow,
             Ok(rfd::MessageDialogResult::No) => Decision::Deny,
-            Ok(rfd::MessageDialogResult::Cancel) | Ok(rfd::MessageDialogResult::Other) => {
+            Ok(rfd::MessageDialogResult::Cancel) => {
                 // Add to session trust immediately (in-memory).
                 self.session_trust.insert(command.to_string());
                 if let Err(e) = self.save_trusted() {
@@ -301,8 +303,9 @@ impl ConsentManager {
 
         let body = format!(
             "{description}\n\nCaller: {caller}\nRisk level: L{level}",
+            description = description,
             caller = self.app_info,
-            level = risk as u8
+            level = risk as u8,
         );
 
         let title = title.to_string();

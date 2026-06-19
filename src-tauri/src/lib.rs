@@ -30,10 +30,13 @@ use crate::config::{Config, Mode};
 use crate::consent::ConsentManager;
 use crate::engine::EngineManager;
 use crate::executor::CommandExecutor;
-use crate::ws::{ConnectionStatus, WsClient};
+use crate::ws::WsClient;
+use crate::ws_types::ConnectionStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::async_runtime::{self, mpsc};
+use tauri::async_runtime;
+use tauri::Manager;
+use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
 
 /// Commands the UI can send into the async runtime.
@@ -120,18 +123,14 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         config.mode
     );
 
-    // 2. Start engine.
+    // 2. Build the engine manager but DON'T start it yet — `start()` needs
+    //    `consent`, `executor`, `status_tx`, and `shared_config` which all
+    //    live behind AppState. We start in step 5 once those exist.
     let mut engine = EngineManager::new(config.clone());
-    // (cancel_token and ui_tx are wired in step 4 once AppState exists)
-    let port = engine.start().await?;
-    config.port = port;
-    if let Err(e) = config.save() {
-        tracing::warn!("failed to persist selected port to config.toml: {e:#}");
-    }
-    engine.wait_healthy().await?;
-    tracing::info!("engine ready on port {port}");
 
-    // 3. Authenticate.
+    // 3. Authenticate against the local engine's credentials cache.
+    //    In cloud mode this is skipped — the cloud token is read inside
+    //    `engine.start_cloud`.
     let mut auth = AuthManager::new(config.clone());
     let stdout_buffer = engine.stdout_buffer_handle();
     let token = auth.login_or_load(stdout_buffer).await?;
@@ -146,10 +145,12 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
     // file handlers must share one consent gate.
     let consent = Arc::new(Mutex::new(ConsentManager::new()));
     consent.lock().await.load_trusted();
+    let executor = Arc::new(CommandExecutor::new());
+    let shared_config = Arc::new(RwLock::new(config.clone()));
     let state = AppState {
-        config: Arc::new(RwLock::new(config.clone())),
+        config: shared_config.clone(),
         status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
-        control_tx,
+        control_tx: control_tx.clone(),
         cancel_token: cancel_token.clone(),
         consent: consent.clone(),
     };
@@ -157,14 +158,43 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
     engine.set_cancel_token(cancel_token.clone());
     app.manage(state);
 
-    // 5. Build system tray.
+    // 5. Start the engine now that AppState exists. We hand `engine.start()`
+    //    a clone of `status_tx` so the local-mode `WsClient` (constructed
+    //    below) can still publish connection status updates on the same
+    //    channel — in cloud mode the inner cloud_loop consumes the cloned
+    //    sender instead.
+    let port = engine
+        .start(
+            consent.clone(),
+            executor.clone(),
+            status_tx.clone(),
+            shared_config.clone(),
+        )
+        .await?;
+    config.port = port;
+    if let Err(e) = config.save() {
+        tracing::warn!("failed to persist selected port to config.toml: {e:#}");
+    }
+    if port != 0 {
+        engine.wait_healthy().await?;
+        tracing::info!("engine ready on port {port}");
+    }
+
+    // 6. Build system tray.
     if let Err(e) = tray::build_tray(&app) {
         tracing::warn!("failed to build tray: {e:#}");
     }
 
     // 6. Wire executor + WS (consent Arc is shared with AppState).
-    let executor = Arc::new(CommandExecutor::new());
-    let ws = WsClient::new(config.ws_url(), token, status_tx, consent, executor, cancel_token);
+    //    `executor` was created earlier (alongside AppState) and reused here.
+    let ws = WsClient::new(
+        config.ws_url(),
+        token,
+        status_tx,
+        consent,
+        executor,
+        cancel_token,
+    );
 
     // 7. Status pump — updates AppState + tray icon.
     let app_for_status = app.clone();

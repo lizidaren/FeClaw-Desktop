@@ -14,7 +14,8 @@
 use crate::config::{Config, Mode};
 use crate::consent::ConsentManager;
 use crate::executor::CommandExecutor;
-use crate::ws::{ConnectionStatus, WsClient};
+use crate::ws::WsClient;
+use crate::ws_types::ConnectionStatus;
 use crate::ControlMsg;
 use anyhow::{anyhow, Context, Result};
 use std::process::Stdio;
@@ -22,9 +23,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tauri::async_runtime;
-use tauri::async_runtime::mpsc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+use tokio::sync::mpsc;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 /// Maximum time to wait for the engine to become healthy.
@@ -77,7 +78,7 @@ impl EngineManager {
             config,
             child: None,
             status: EngineStatus::Stopped,
-            stdout_buffer: Arc::new(Mutex::new(Vec::new())),
+            stdout_buffer: Arc::new(StdMutex::new(Vec::new())),
             client: None,
             ui_tx: None,
             cancel_token,
@@ -407,7 +408,9 @@ impl EngineManager {
     /// Single health probe (no polling).
     pub async fn health_check(&self) -> bool {
         let url = format!("{}/health", self.config.engine_url());
-        let client = self.client.as_ref()?;
+        let Some(client) = self.client.as_ref() else {
+            return false;
+        };
         client
             .get(&url)
             .send()

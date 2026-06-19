@@ -113,7 +113,7 @@ pub struct CommandExecResponse {
 }
 
 /// Payload inside [`CommandExecResponse`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct CommandExecPayloadOut {
     pub stdout: String,
     pub stderr: String,
@@ -134,7 +134,7 @@ pub struct FileReadResponse {
 }
 
 /// Payload inside [`FileReadResponse`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FileReadResponsePayload {
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,7 +154,7 @@ pub struct FileDeleteResponse {
 }
 
 /// Payload inside [`FileDeleteResponse`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FileDeleteResponsePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

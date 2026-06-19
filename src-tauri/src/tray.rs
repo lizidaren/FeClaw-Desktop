@@ -7,7 +7,7 @@
 //! async runtime.
 
 use crate::config::Mode;
-use crate::ws::ConnectionStatus;
+use crate::ws_types::ConnectionStatus;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime};

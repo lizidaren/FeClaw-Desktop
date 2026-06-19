@@ -24,22 +24,17 @@ use crate::ws_types::{
     FileWritePayload, NotificationPayload, WsRequest,
 };
 
-pub use crate::ws_types::ConnectionStatus;
 use anyhow::{anyhow, Result};
 use futures_util::{SinkExt, StreamExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::async_runtime;
-use tauri::async_runtime::mpsc;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use tokio_tungstenite::tungstenite::{
-    client::generate_key,
-    http::Request,
-    Message,
-};
-use tokio_tungstenite::{client_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const PONG_TIMEOUT: Duration = Duration::from_secs(35);
@@ -126,23 +121,34 @@ impl WsClient {
     /// Used by `EngineManager::start_cloud` for the cloud endpoint; the
     /// local path uses the same constructor via `run_inner`.
     pub async fn connect_tls(url: &str, token: &str) -> Result<WsStream> {
-        let host = url
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        // Strip the scheme so we can resolve the TCP endpoint; keep the
+        // original URL for the HTTP Host header / request URI.
+        let host_port = url
             .strip_prefix("ws://")
             .or_else(|| url.strip_prefix("wss://"))
             .unwrap_or(url);
-        let req = Request::builder()
-            .method("GET")
-            .uri(url)
-            .header("Host", host)
-            .header("Upgrade", "websocket")
-            .header("Connection", "Upgrade")
-            .header("Sec-WebSocket-Key", generate_key())
-            .header("Sec-WebSocket-Version", "13")
-            .header("Authorization", format!("Bearer {}", token))
-            .body(())
-            .map_err(|e| anyhow!("build ws request: {e}"))?;
 
-        let (ws, _resp) = client_async(req, None)
+        // Build the upgrade request with the JWT. `IntoClientRequest` adds
+        // the standard WebSocket headers (Upgrade, Connection, Sec-WebSocket-Key/Version)
+        // for us — those are private in tungstenite 0.24 so we no longer
+        // call `generate_key` directly.
+        let mut req = url
+            .into_client_request()
+            .map_err(|e| anyhow!("build ws request: {e}"))?;
+        req.headers_mut()
+            .insert("Authorization", format!("Bearer {}", token).parse().unwrap());
+
+        // Establish the TCP connection first so the stream type is concrete
+        // when handed to `client_async_tls` (passing `None` triggers a type
+        // inference failure in tungstenite 0.24). `client_async_tls` returns
+        // `MaybeTlsStream<TcpStream>` — exactly the type the `WsStream` alias
+        // expects — and upgrades to TLS automatically when the URL is `wss://`.
+        let tcp = TcpStream::connect(host_port)
+            .await
+            .map_err(|e| anyhow!("ws tcp connect: {e}"))?;
+        let (ws, _resp) = tokio_tungstenite::client_async_tls(req, tcp)
             .await
             .map_err(|e| anyhow!("ws connect: {e}"))?;
         Ok(ws)
@@ -240,7 +246,7 @@ impl WsClient {
                                 "pong timeout ({:?} since last pong), closing connection",
                                 last.elapsed()
                             );
-                            let _ = ws.close().await;
+                            let _ = ws.close(None).await;
                             return Ok(());
                         }
                     }
@@ -292,7 +298,7 @@ impl WsClient {
             // Check if a reconnect was requested by the control pump.
             if self.cancel_token.load(Ordering::SeqCst) {
                 tracing::info!("cancel_token set; closing connection to trigger reconnect");
-                let _ = ws.close().await;
+                let _ = ws.close(None).await;
                 self.cancel_token.store(false, Ordering::SeqCst);
                 return Ok(());
             }
