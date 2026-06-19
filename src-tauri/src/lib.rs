@@ -37,7 +37,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::async_runtime;
 use tauri::Emitter;
 use tauri::Manager;
-use tauri::Emitter;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
 

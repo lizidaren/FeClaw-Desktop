@@ -240,15 +240,16 @@ impl WsClient {
                         return Err(anyhow!("ws ping send: {e}"));
                     }
                     // Check pong timeout: if no pong received for > 35s, close connection.
-                    if let Some(last) = *self.last_pong_at.lock().unwrap() {
-                        if last.elapsed() > PONG_TIMEOUT {
-                            tracing::warn!(
-                                "pong timeout ({:?} since last pong), closing connection",
-                                last.elapsed()
-                            );
-                            let _ = ws.close(None).await;
-                            return Ok(());
-                        }
+                    let stale = self.last_pong_at.lock().unwrap()
+                        .map(|last| last.elapsed() > PONG_TIMEOUT)
+                        .unwrap_or(false);
+                    if stale {
+                        tracing::warn!(
+                            "pong timeout ({:?} since last pong), closing connection",
+                            self.last_pong_at.lock().unwrap().unwrap().elapsed()
+                        );
+                        let _ = ws.close(None).await;
+                        return Ok(());
                     }
                 }
                 out = outgoing_rx.recv() => {
