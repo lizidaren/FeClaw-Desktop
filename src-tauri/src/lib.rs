@@ -72,13 +72,7 @@ pub struct AppState {
 /// Tauri application entry point.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .try_init();
+    // Logging is handled by `tauri-plugin-log` below.
 
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
