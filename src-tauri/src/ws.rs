@@ -18,6 +18,8 @@ use crate::ws_types::{
     CommandExecPayload, ConnectionStatus, FileReadPayload, FileWritePayload,
     NotificationPayload, WsRequest,
 };
+
+pub use crate::ws_types::ConnectionStatus;
 use anyhow::{anyhow, Result};
 use futures_util::{SinkExt, StreamExt};
 use std::path::PathBuf;
