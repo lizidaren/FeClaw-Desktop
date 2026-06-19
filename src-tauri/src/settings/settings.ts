@@ -137,7 +137,10 @@ function writeGeneral(snap: Partial<GeneralSnapshot>): void {
 type CloudSessionInfo = {
   connected: boolean;
   username: string | null;
+  /** WebSocket / engine base URL (`cloud_url`). */
   url: string | null;
+  /** Platform login base URL (`cloud_login_url`); falls back to `url`. */
+  login_url: string | null;
 };
 
 function showLoginForm(): void {
@@ -145,9 +148,11 @@ function showLoginForm(): void {
   if (card) card.hidden = true;
 
   const url = $<HTMLInputElement>("cloud-url");
+  const platform = $<HTMLInputElement>("cloud-platform-url");
   const user = $<HTMLInputElement>("cloud-username");
   const pass = $<HTMLInputElement>("cloud-password");
   if (url) url.disabled = false;
+  if (platform) platform.disabled = false;
   if (user) user.disabled = false;
   if (pass) pass.disabled = false;
 
@@ -173,10 +178,20 @@ function renderCloudSession(session: CloudSessionInfo): void {
     setConnectionStatus("", "info");
   } else {
     showLoginForm();
-    // Pre-fill the URL from the last successful attempt (kept in config).
+    // Pre-fill both URLs from the last successful attempt (kept in config).
     if (session.url) {
       const urlInput = $<HTMLInputElement>("cloud-url");
       if (urlInput && !urlInput.value) urlInput.value = session.url;
+    }
+    if (session.login_url) {
+      const platformInput = $<HTMLInputElement>("cloud-platform-url");
+      if (platformInput && !platformInput.value) {
+        // Avoid suggesting the WS host as a separate login host when the
+        // deployment only exposes a single URL.
+        if (session.login_url !== session.url) {
+          platformInput.value = session.login_url;
+        }
+      }
     }
   }
 }
@@ -229,16 +244,20 @@ async function save(): Promise<void> {
 
 // ---- Cloud login -------------------------------------------------
 async function cloudLogin(): Promise<void> {
-  const urlEl   = requireEl<HTMLInputElement>("cloud-url");
-  const userEl  = requireEl<HTMLInputElement>("cloud-username");
-  const passEl  = requireEl<HTMLInputElement>("cloud-password");
-  const loginBtn = requireEl<HTMLButtonElement>("btn-login");
-  const labelEl = loginBtn.querySelector<HTMLSpanElement>(".btn-label");
-  const spinner = loginBtn.querySelector<HTMLSpanElement>(".btn-spinner");
+  const urlEl      = requireEl<HTMLInputElement>("cloud-url");
+  const platformEl = $<HTMLInputElement>("cloud-platform-url");
+  const userEl     = requireEl<HTMLInputElement>("cloud-username");
+  const passEl     = requireEl<HTMLInputElement>("cloud-password");
+  const loginBtn   = requireEl<HTMLButtonElement>("btn-login");
+  const labelEl    = loginBtn.querySelector<HTMLSpanElement>(".btn-label");
+  const spinner    = loginBtn.querySelector<HTMLSpanElement>(".btn-spinner");
 
-  const url  = urlEl.value.trim();
-  const user = userEl.value.trim();
-  const pass = passEl.value;
+  const url         = urlEl.value.trim();
+  // Login URL falls back to the server URL when the platform input is empty
+  // — self-hosted setups only expose a single host.
+  const platformUrl = (platformEl?.value.trim() ?? "") || url;
+  const user        = userEl.value.trim();
+  const pass        = passEl.value;
 
   if (!url)  { setConnectionStatus("请填写服务器地址", "error"); urlEl.focus();   return; }
   if (!user) { setConnectionStatus("请填写用户名",     "error"); userEl.focus();  return; }
@@ -252,6 +271,7 @@ async function cloudLogin(): Promise<void> {
   try {
     await invoke<string>("cloud_login", {
       url,
+      login_url: platformUrl,
       username: user,
       password: pass,
     });
@@ -275,11 +295,17 @@ async function cloudDisconnect(): Promise<void> {
   try {
     await invoke("cloud_disconnect");
     showLoginForm();
-    // Re-read the URL from the (still-persisted) cloud_url so the user
-    // doesn't have to retype it. Username is forgotten.
+    // Re-read both URLs from the (still-persisted) config so the user
+    // doesn't have to retype either. Username is forgotten.
     const session = await invoke<CloudSessionInfo>("get_cloud_session");
     const urlEl = $<HTMLInputElement>("cloud-url");
     if (urlEl && session.url) urlEl.value = session.url;
+    const platformEl = $<HTMLInputElement>("cloud-platform-url");
+    if (platformEl && session.login_url && session.login_url !== session.url) {
+      platformEl.value = session.login_url;
+    } else if (platformEl) {
+      platformEl.value = "";
+    }
     setConnectionStatus("已断开连接", "info");
     showToast("已断开云端连接", "info");
   } catch (e) {
@@ -331,7 +357,7 @@ function wireForm(): void {
   });
 
   // Pressing Enter inside any login field triggers login.
-  ["cloud-url", "cloud-username", "cloud-password"].forEach((id) => {
+  ["cloud-url", "cloud-platform-url", "cloud-username", "cloud-password"].forEach((id) => {
     const el = $<HTMLInputElement>(id);
     if (el) el.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") {

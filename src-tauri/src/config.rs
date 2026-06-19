@@ -18,9 +18,15 @@ pub struct Config {
     pub ws_path: String,
     pub mode: Mode,
     /// Cloud server base URL (e.g. `https://feclaw.example.com`).
-    /// Only used when `mode == Mode::Cloud`.
+    /// Only used when `mode == Mode::Cloud`. This is the WebSocket endpoint
+    /// address (`{cloud_url}/ws/desktop`) and the default fallback for login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_url: Option<String>,
+    /// Platform login base URL (e.g. `https://platform.firstentrance.lizidaren.cn`).
+    /// Used for the OAuth-style `POST /api/auth/login` call. When unset, the
+    /// app falls back to [`cloud_url`] so single-host deployments keep working.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_login_url: Option<String>,
     /// Cloud account username — only persisted locally to remember who is
     /// signed in; the password is never stored (it is exchanged for a JWT).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,6 +54,7 @@ impl Default for Config {
             ws_path: "/ws/desktop".to_string(),
             mode: Mode::Local,
             cloud_url: None,
+            cloud_login_url: None,
             cloud_username: None,
             cloud_token: None,
         }
@@ -129,6 +136,17 @@ impl Config {
     /// `/api/health`.
     pub fn cloud_base_url(&self) -> Option<&str> {
         self.cloud_url.as_deref()
+    }
+
+    /// Base URL to use for the `POST /api/auth/login` call. Prefers the
+    /// dedicated `cloud_login_url` (the Platform OAuth host) and falls back to
+    /// `cloud_url` so single-host/self-hosted setups keep working without an
+    /// extra configuration step.
+    pub fn cloud_login_base_url(&self) -> Option<&str> {
+        self.cloud_login_url
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or(self.cloud_url.as_deref())
     }
 
     /// Find a free port starting at `start`, scanning `start..start+10`.
@@ -301,6 +319,7 @@ mod tests {
     fn cloud_fields_default_to_none() {
         let cfg = Config::default();
         assert!(cfg.cloud_url.is_none());
+        assert!(cfg.cloud_login_url.is_none());
         assert!(cfg.cloud_username.is_none());
         assert!(cfg.cloud_token.is_none());
     }
@@ -342,5 +361,70 @@ mod tests {
         );
         assert_eq!(decoded.cloud_username.as_deref(), Some("alice"));
         assert_eq!(decoded.cloud_token.as_deref(), Some("jwt.payload.sig"));
+    }
+
+    #[test]
+    fn cloud_login_base_url_prefers_login_url() {
+        // When both are set, cloud_login_url wins (it's the OAuth host).
+        let cfg = Config {
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            cloud_login_url: Some("https://platform.example.com".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.cloud_login_base_url(),
+            Some("https://platform.example.com")
+        );
+    }
+
+    #[test]
+    fn cloud_login_base_url_falls_back_to_cloud_url() {
+        // Self-hosted setups only set cloud_url; login reuses it.
+        let cfg = Config {
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            cloud_login_url: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.cloud_login_base_url(),
+            Some("https://feclaw.example.com")
+        );
+    }
+
+    #[test]
+    fn cloud_login_base_url_treats_blank_as_unset() {
+        // Treat a whitespace-only login URL as missing so we don't accidentally
+        // POST to an empty path.
+        let cfg = Config {
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            cloud_login_url: Some("   ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.cloud_login_base_url(),
+            Some("https://feclaw.example.com")
+        );
+    }
+
+    #[test]
+    fn toml_roundtrip_cloud_with_login_url() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.lizidaren.cn".to_string()),
+            cloud_login_url: Some("https://platform.firstentrance.lizidaren.cn".to_string()),
+            cloud_username: Some("alice".to_string()),
+            cloud_token: Some("jwt".to_string()),
+            ..Default::default()
+        };
+        let encoded = toml::to_string(&cfg).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(
+            decoded.cloud_login_url.as_deref(),
+            Some("https://platform.firstentrance.lizidaren.cn")
+        );
+        assert_eq!(
+            decoded.cloud_url.as_deref(),
+            Some("https://feclaw.lizidaren.cn")
+        );
     }
 }

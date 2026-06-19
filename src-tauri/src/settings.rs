@@ -227,12 +227,18 @@ pub async fn test_cloud_connection(url: String, token: String) -> Result<bool, S
 // ---------------------------------------------------------------------------
 //
 // Flow:
-//   1. Settings UI submits {url, username, password}.
-//   2. We POST to {url}/api/login with JSON `{username, password}`.
+//   1. Settings UI submits {url, login_url?, username, password}.
+//      • `url`         — server/WS URL (`cloud_url`); required, used for the
+//        `/ws/desktop` connection.
+//      • `login_url`   — platform login URL (`cloud_login_url`); optional.
+//        When omitted the app reuses `url` so single-host deployments keep
+//        working without an extra field.
+//   2. We POST to `{login_url}/api/auth/login` with JSON `{username, password}`.
 //   3. Server returns `{token, ...}` (or `{access_token, ...}` as a fallback).
-//   4. We persist `cloud_url`, `cloud_username`, `cloud_token` to config.toml
-//      and switch `mode` to Cloud. The password is NEVER written to disk —
-//      only the JWT, which is the bearer credential for subsequent requests.
+//   4. We persist `cloud_url`, `cloud_login_url`, `cloud_username`,
+//      `cloud_token` to config.toml and switch `mode` to Cloud. The password
+//      is NEVER written to disk — only the JWT, which is the bearer
+//      credential for subsequent requests.
 //
 // Error reporting surfaces the server's response body when available so the
 // user can see *why* the login failed (e.g. "Invalid credentials" vs a
@@ -259,7 +265,11 @@ struct LoginResponse {
 pub struct CloudSession {
     pub connected: bool,
     pub username: Option<String>,
+    /// WebSocket / engine base URL (`cloud_url`).
     pub url: Option<String>,
+    /// Platform login base URL (`cloud_login_url`); falls back to `url` when
+    /// the deployment only exposes one host.
+    pub login_url: Option<String>,
 }
 
 /// Inspect the current config.toml to determine if a cloud session is
@@ -268,21 +278,29 @@ pub struct CloudSession {
 pub async fn get_cloud_session() -> Result<CloudSession, String> {
     let cfg = Config::load();
     let connected = cfg.mode == crate::config::Mode::Cloud && cfg.cloud_token.is_some();
+    let login_url = cfg.cloud_login_url.or_else(|| cfg.cloud_url.clone());
     Ok(CloudSession {
         connected,
         username: cfg.cloud_username,
         url: cfg.cloud_url,
+        login_url,
     })
 }
 
-/// POST `{url}/api/login` with the supplied credentials. On success, persist
-/// the JWT and username to `~/.feclaw/config.toml` and flip `mode` to Cloud.
-/// The password is consumed in-memory only and never written to disk.
+/// POST `{login_url}/api/auth/login` with the supplied credentials. On
+/// success, persist the JWT, username, server URL, and login URL to
+/// `~/.feclaw/config.toml` and flip `mode` to Cloud. The password is
+/// consumed in-memory only and never written to disk.
+///
+/// * `url`        — server / WebSocket URL → saved as `cloud_url`. Required.
+/// * `login_url`  — platform login URL → saved as `cloud_login_url`. When
+///                  empty, `url` is reused (single-host / self-hosted case).
 ///
 /// Returns the JWT on success, or a user-friendly error string on failure.
 #[tauri::command]
 pub async fn cloud_login(
     url: String,
+    login_url: Option<String>,
     username: String,
     password: String,
 ) -> Result<String, String> {
@@ -298,7 +316,15 @@ pub async fn cloud_login(
         return Err("密码不能为空".to_string());
     }
 
-    let login_url = format!("{}/api/auth/login", url_trimmed.trim_end_matches('/'));
+    // The login URL defaults to the server URL when the deployment exposes
+    // both endpoints on the same host (self-hosted).
+    let login_trimmed = login_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(url_trimmed);
+
+    let login_endpoint = format!("{}/api/auth/login", login_trimmed.trim_end_matches('/'));
     let username_owned = username.trim().to_string();
 
     // ---- HTTP POST ---------------------------------------------------
@@ -309,7 +335,7 @@ pub async fn cloud_login(
         .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
 
     let resp = client
-        .post(&login_url)
+        .post(&login_endpoint)
         .json(&LoginRequest {
             username: &username_owned,
             password: &password,
@@ -339,6 +365,7 @@ pub async fn cloud_login(
     // (port, host, ws_path, etc.). The password is never written.
     let mut cfg = Config::load();
     cfg.cloud_url = Some(url_trimmed.trim_end_matches('/').to_string());
+    cfg.cloud_login_url = Some(login_trimmed.trim_end_matches('/').to_string());
     cfg.cloud_username = Some(username_owned);
     cfg.cloud_token = Some(token.clone());
     cfg.mode = crate::config::Mode::Cloud;
@@ -356,7 +383,8 @@ pub async fn cloud_disconnect() -> Result<(), String> {
     let mut cfg = Config::load();
     cfg.cloud_token = None;
     cfg.cloud_username = None;
-    // Keep cloud_url so the user doesn't have to retype it next time.
+    // Keep cloud_url AND cloud_login_url so the user doesn't have to retype
+    // either on next sign-in.
     cfg.mode = crate::config::Mode::Local;
     cfg.save().map_err(|e| format!("保存配置失败：{e:#}"))?;
     tracing::info!("cloud session disconnected");

@@ -69,9 +69,11 @@ function showLoginForm() {
   const card = $("cloud-connected-card");
   if (card) card.hidden = true;
   const url = $("cloud-url");
+  const platform = $("cloud-platform-url");
   const user = $("cloud-username");
   const pass = $("cloud-password");
   if (url) url.disabled = false;
+  if (platform) platform.disabled = false;
   if (user) user.disabled = false;
   if (pass) pass.disabled = false;
   const loginBtn = $("btn-login");
@@ -96,6 +98,14 @@ function renderCloudSession(session) {
     if (session.url) {
       const urlInput = $("cloud-url");
       if (urlInput && !urlInput.value) urlInput.value = session.url;
+    }
+    if (session.login_url) {
+      const platformInput = $("cloud-platform-url");
+      if (platformInput && !platformInput.value) {
+        if (session.login_url !== session.url) {
+          platformInput.value = session.login_url;
+        }
+      }
     }
   }
 }
@@ -139,12 +149,14 @@ async function save() {
 }
 async function cloudLogin() {
   const urlEl = requireEl("cloud-url");
+  const platformEl = $("cloud-platform-url");
   const userEl = requireEl("cloud-username");
   const passEl = requireEl("cloud-password");
   const loginBtn = requireEl("btn-login");
   const labelEl = loginBtn.querySelector(".btn-label");
   const spinner = loginBtn.querySelector(".btn-spinner");
   const url = urlEl.value.trim();
+  const platformUrl = (platformEl?.value.trim() ?? "") || url;
   const user = userEl.value.trim();
   const pass = passEl.value;
   if (!url) {
@@ -169,6 +181,7 @@ async function cloudLogin() {
   try {
     await invoke("cloud_login", {
       url,
+      login_url: platformUrl,
       username: user,
       password: pass
     });
@@ -192,6 +205,12 @@ async function cloudDisconnect() {
     const session = await invoke("get_cloud_session");
     const urlEl = $("cloud-url");
     if (urlEl && session.url) urlEl.value = session.url;
+    const platformEl = $("cloud-platform-url");
+    if (platformEl && session.login_url && session.login_url !== session.url) {
+      platformEl.value = session.login_url;
+    } else if (platformEl) {
+      platformEl.value = "";
+    }
     setConnectionStatus("\u5DF2\u65AD\u5F00\u8FDE\u63A5", "info");
     showToast("\u5DF2\u65AD\u5F00\u4E91\u7AEF\u8FDE\u63A5", "info");
   } catch (e) {
@@ -239,7 +258,7 @@ function wireForm() {
   themeSel.addEventListener("change", () => {
     applyTheme(themeSel.value);
   });
-  ["cloud-url", "cloud-username", "cloud-password"].forEach((id) => {
+  ["cloud-url", "cloud-platform-url", "cloud-username", "cloud-password"].forEach((id) => {
     const el = $(id);
     if (el) el.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") {
