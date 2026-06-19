@@ -13,13 +13,15 @@
 //! task can ship a response without holding the WebSocket stream.
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::consent::{ConsentManager, Decision};
 use crate::executor::CommandExecutor;
 use crate::ws_types::{
-    CommandExecPayload, ConnectionStatus, FileDeletePayload, FileReadPayload, FileWritePayload,
-    NotificationPayload, WsRequest,
+    CommandExecPayload, CommandExecPayloadOut, CommandExecResponse, ConnectionStatus,
+    FileDeletePayload, FileReadPayload, FileReadResponse, FileReadResponsePayload,
+    FileWritePayload, NotificationPayload, WsRequest,
 };
 
 pub use crate::ws_types::ConnectionStatus;
@@ -58,6 +60,9 @@ pub struct WsClient {
     /// Instant of the last received Pong. Updated on Pong message and
     /// initialised to Instant::now() when the connection is established.
     last_pong_at: Cell<Option<Instant>>,
+    /// Cancel token: when set to true by the control pump, the run loop
+    /// exits gracefully to trigger a reconnect.
+    cancel_token: Arc<AtomicBool>,
 }
 
 impl WsClient {
@@ -67,6 +72,7 @@ impl WsClient {
         status_tx: mpsc::Sender<ConnectionStatus>,
         consent: Arc<Mutex<ConsentManager>>,
         executor: Arc<CommandExecutor>,
+        cancel_token: Arc<AtomicBool>,
     ) -> Self {
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
         Self {
@@ -78,6 +84,7 @@ impl WsClient {
             consent,
             executor,
             last_pong_at: Cell::new(None),
+            cancel_token,
         }
     }
 
@@ -202,6 +209,13 @@ impl WsClient {
                     }
                 }
             }
+            // Check if a reconnect was requested by the control pump.
+            if self.cancel_token.load(Ordering::SeqCst) {
+                tracing::info!("cancel_token set; closing connection to trigger reconnect");
+                let _ = ws.close().await;
+                self.cancel_token.store(false, Ordering::SeqCst);
+                return Ok(());
+            }
         }
     }
 
@@ -220,16 +234,16 @@ impl WsClient {
         let req: WsRequest = serde_json::from_str(&text)
             .map_err(|e| anyhow!("parse ws message: {e}; payload={text}"))?;
         match req {
-            WsRequest::CommandExec { id, payload } => {
+            WsRequest::CommandExec { id, timestamp: _, payload } => {
                 self.spawn_command_exec(id, payload).await;
             }
-            WsRequest::FileRead { id, payload } => {
+            WsRequest::FileRead { id, timestamp: _, payload } => {
                 self.handle_file_read_not_implemented(id, payload);
             }
-            WsRequest::FileWrite { id, payload } => {
+            WsRequest::FileWrite { id, timestamp: _, payload } => {
                 self.handle_file_write_not_implemented(id, payload);
             }
-            WsRequest::FileDelete { id, payload } => {
+            WsRequest::FileDelete { id, timestamp: _, payload } => {
                 self.handle_file_delete_not_implemented(id, payload);
             }
             WsRequest::Notification { payload, .. } => {
@@ -245,12 +259,23 @@ impl WsClient {
             "file_read_request received but file bridge is V2 (id={id}, path={})",
             payload.path
         );
-        self.send_json(&serde_json::json!({
-            "type": "file_read_response",
-            "id": id,
-            "status": "error",
-            "payload": { "error": "file bridge not implemented in MVP" },
-        }));
+        let ts = crate::ws_types::current_timestamp();
+        let resp = FileReadResponse {
+            id,
+            status: "error".to_string(),
+            timestamp: Some(ts),
+            payload: FileReadResponsePayload {
+                content: None,
+                error: Some("file bridge not implemented in MVP".to_string()),
+            },
+        };
+        let mut value = serde_json::to_value(&resp).unwrap_or_else(|_| {
+            serde_json::json!({ "id": "", "status": "error", "payload": {} })
+        });
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("type".to_string(), serde_json::Value::String("file_read_response".to_string()));
+        }
+        self.send_json(&value);
     }
 
     fn handle_file_write_not_implemented(&self, id: String, payload: FileWritePayload) {
@@ -258,10 +283,12 @@ impl WsClient {
             "file_write_request received but file bridge is V2 (id={id}, path={})",
             payload.path
         );
+        let ts = crate::ws_types::current_timestamp();
         self.send_json(&serde_json::json!({
             "type": "file_write_response",
             "id": id,
             "status": "error",
+            "timestamp": ts,
             "payload": { "error": "file bridge not implemented in MVP" },
         }));
     }
@@ -271,10 +298,12 @@ impl WsClient {
             "file_delete_request received but file bridge is V2 (id={id}, path={})",
             payload.path
         );
+        let ts = crate::ws_types::current_timestamp();
         self.send_json(&serde_json::json!({
             "type": "file_delete_response",
             "id": id,
             "status": "error",
+            "timestamp": ts,
             "payload": { "error": "file bridge not implemented in MVP" },
         }));
     }
@@ -339,29 +368,49 @@ impl WsClient {
                     } else {
                         "accepted"
                     };
-                    let response = serde_json::json!({
-                        "type": "command_exec_response",
-                        "id": id,
-                        "status": status,
-                        "payload": {
-                            "stdout": result.stdout,
-                            "stderr": result.stderr,
-                            "exit_code": exit_code,
-                        }
+                    let ts = crate::ws_types::current_timestamp();
+                    let resp = CommandExecResponse {
+                        id,
+                        status: status.to_string(),
+                        timestamp: Some(ts),
+                        payload: CommandExecPayloadOut {
+                            stdout: result.stdout,
+                            stderr: result.stderr,
+                            exit_code,
+                            reason: None,
+                        },
+                    };
+                    let mut value = serde_json::to_value(&resp).unwrap_or_else(|_| {
+                        serde_json::json!({ "id": "", "status": "error", "payload": {} })
                     });
-                    if let Ok(s) = serde_json::to_string(&response) {
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert("type".to_string(), serde_json::Value::String("command_exec_response".to_string()));
+                    }
+                    if let Ok(s) = serde_json::to_string(&value) {
                         let _ = outgoing_tx.send(s);
                     }
                 }
                 Decision::Deny => {
                     tracing::info!("user denied command: {cmd_str}");
-                    let response = serde_json::json!({
-                        "type": "command_exec_response",
-                        "id": id,
-                        "status": "rejected",
-                        "payload": { "reason": "denied by user" }
+                    let ts = crate::ws_types::current_timestamp();
+                    let resp = CommandExecResponse {
+                        id,
+                        status: "rejected".to_string(),
+                        timestamp: Some(ts),
+                        payload: CommandExecPayloadOut {
+                            stdout: String::new(),
+                            stderr: String::new(),
+                            exit_code: -1,
+                            reason: Some("denied by user".to_string()),
+                        },
+                    };
+                    let mut value = serde_json::to_value(&resp).unwrap_or_else(|_| {
+                        serde_json::json!({ "id": "", "status": "rejected", "payload": {} })
                     });
-                    if let Ok(s) = serde_json::to_string(&response) {
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert("type".to_string(), serde_json::Value::String("command_exec_response".to_string()));
+                    }
+                    if let Ok(s) = serde_json::to_string(&value) {
                         let _ = outgoing_tx.send(s);
                     }
                 }

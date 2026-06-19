@@ -15,6 +15,15 @@ pub enum ConnectionStatus {
     Failed,
 }
 
+/// Returns current timestamp as Unix epoch seconds string.
+pub fn current_timestamp() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_default()
+}
+
 /// Inbound message envelope from the engine/agent. PR 4 will add a real
 /// dispatcher that handles `CommandExec`.
 #[derive(Debug, Deserialize)]
@@ -24,27 +33,37 @@ pub enum WsRequest {
     CommandExec {
         id: String,
         #[serde(default)]
+        timestamp: Option<String>,
+        #[serde(default)]
         payload: CommandExecPayload,
     },
     #[serde(rename = "file_read_request")]
     FileRead {
         id: String,
+        #[serde(default)]
+        timestamp: Option<String>,
         payload: FileReadPayload,
     },
     #[serde(rename = "file_write_request")]
     FileWrite {
         id: String,
+        #[serde(default)]
+        timestamp: Option<String>,
         payload: FileWritePayload,
     },
     #[serde(rename = "file_delete_request")]
     FileDelete {
         id: String,
+        #[serde(default)]
+        timestamp: Option<String>,
         payload: FileDeletePayload,
     },
     #[serde(rename = "notification")]
     Notification {
         #[serde(default)]
         id: Option<String>,
+        #[serde(default)]
+        timestamp: Option<String>,
         payload: NotificationPayload,
     },
     #[serde(rename = "pong")]
@@ -87,6 +106,8 @@ pub struct NotificationPayload {
 pub struct CommandExecResponse {
     pub id: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
     #[serde(default)]
     pub payload: CommandExecPayloadOut,
 }
@@ -106,6 +127,8 @@ pub struct CommandExecPayloadOut {
 pub struct FileReadResponse {
     pub id: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
     #[serde(default)]
     pub payload: FileReadResponsePayload,
 }
@@ -124,6 +147,8 @@ pub struct FileReadResponsePayload {
 pub struct FileDeleteResponse {
     pub id: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
     #[serde(default)]
     pub payload: FileDeleteResponsePayload,
 }

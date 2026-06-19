@@ -36,6 +36,8 @@ pub struct EngineManager {
     /// Shared buffer of captured engine stdout lines. Used by `auth.rs`
     /// to scan for the random initial admin password on first launch.
     stdout_buffer: Arc<Mutex<Vec<String>>>,
+    /// Reusable HTTP client for health checks. Created once in `start()`.
+    client: Option<reqwest::Client>,
 }
 
 impl EngineManager {
@@ -46,6 +48,7 @@ impl EngineManager {
             child: None,
             status: EngineStatus::Stopped,
             stdout_buffer: Arc::new(Mutex::new(Vec::new())),
+            client: None,
         }
     }
 
@@ -124,16 +127,20 @@ impl EngineManager {
 
         self.child = Some(child);
         self.status = EngineStatus::Starting;
+
+        // Create a reusable HTTP client for health checks.
+        self.client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .ok();
+
         Ok(port)
     }
 
     /// Poll `/health` until the engine responds 200 or the timeout elapses.
     pub async fn wait_healthy(&self) -> Result<()> {
         let url = format!("{}/health", self.config.engine_url());
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .context("build health-check client")?;
+        let client = self.client.as_ref().context("health-check client not initialized")?;
         let deadline = Instant::now() + HEALTH_TIMEOUT;
         while Instant::now() < deadline {
             if let Ok(resp) = client.get(&url).send().await {
@@ -150,13 +157,7 @@ impl EngineManager {
     /// Single health probe (no polling).
     pub async fn health_check(&self) -> bool {
         let url = format!("{}/health", self.config.engine_url());
-        let client = match reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-        {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
+        let client = self.client.as_ref()?;
         client
             .get(&url)
             .send()

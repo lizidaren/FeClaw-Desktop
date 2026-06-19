@@ -28,6 +28,7 @@ use crate::engine::EngineManager;
 use crate::executor::CommandExecutor;
 use crate::ws::{ConnectionStatus, WsClient};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::async_runtime::{self, mpsc};
 use tokio::sync::RwLock;
 
@@ -49,6 +50,8 @@ pub struct AppState {
     pub config: Arc<RwLock<Config>>,
     pub status: Arc<RwLock<ConnectionStatus>>,
     pub control_tx: mpsc::UnboundedSender<ControlMsg>,
+    /// Signals the WS client to cancel the current connection and reconnect.
+    pub cancel_token: Arc<AtomicBool>,
 }
 
 /// Tauri application entry point.
@@ -69,6 +72,16 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = startup(handle).await {
                     tracing::error!("startup failed: {e:#}");
+                    // Show a native error dialog so the user knows why startup failed.
+                    let err_msg = format!("{e:#}");
+                    std::thread::spawn(move || {
+                        let _ = rfd::MessageDialog::new()
+                            .set_title("FeClaw Desktop — 启动失败")
+                            .set_description(&err_msg)
+                            .set_buttons(rfd::MessageButtons::Ok)
+                            .set_level(rfd::MessageLevel::Error)
+                            .show();
+                    });
                 }
             });
             Ok(())
@@ -105,10 +118,12 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
 
     // 4. Register AppState (must exist before tray builder reads it).
     let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMsg>();
+    let cancel_token = Arc::new(AtomicBool::new(false));
     let state = AppState {
         config: Arc::new(RwLock::new(config.clone())),
         status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
         control_tx,
+        cancel_token: cancel_token.clone(),
     };
     app.manage(state);
 
@@ -122,7 +137,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
     let consent = Arc::new(tokio::sync::Mutex::new(ConsentManager::new()));
     consent.lock().await.load_trusted();
     let executor = Arc::new(CommandExecutor::new());
-    let ws = WsClient::new(config.ws_url(), token, status_tx, consent, executor);
+    let ws = WsClient::new(config.ws_url(), token, status_tx, consent, executor, cancel_token);
 
     // 7. Status pump — updates AppState + tray icon.
     let app_for_status = app.clone();
@@ -144,13 +159,13 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
     // 8. Control message pump — drains tray menu events.
     let mut control_rx = control_rx;
     let app_for_control = app.clone();
+    let cancel_token_for_pump = cancel_token.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(msg) = control_rx.recv().await {
             match msg {
                 ControlMsg::Reconnect => {
                     tracing::info!("control: reconnect requested");
-                    // The WS client already auto-reconnects up to 30 times.
-                    // A full restart of the WS task is deferred to a later PR.
+                    cancel_token_for_pump.store(true, Ordering::SeqCst);
                 }
                 ControlMsg::SetMode(mode) => {
                     tracing::info!("control: set mode {mode:?}");
