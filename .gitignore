@@ -39,3 +39,4 @@ Thumbs.db
 coverage/
 .pytest_cache/
 .htmlcov/
+docs/progress.md
