@@ -325,6 +325,7 @@ pub async fn cloud_login(
         .unwrap_or(url_trimmed);
 
     let login_endpoint = format!("{}/api/auth/login", login_trimmed.trim_end_matches('/'));
+    tracing::info!("cloud_login: endpoint={login_endpoint}, url={url_trimmed}, login_url={login_url:?}");
     let username_owned = username.trim().to_string();
 
     // ---- HTTP POST ---------------------------------------------------
