@@ -140,7 +140,8 @@ type CloudSessionInfo = {
   /** WebSocket / engine base URL (`cloud_url`). */
   url: string | null;
   /** Platform login base URL (`cloud_login_url`); falls back to `url`. */
-  login_url: string | null;
+  loginUrl: string | null;
+  // ... potentially more fields from config
 };
 
 function showLoginForm(): void {
@@ -183,13 +184,13 @@ function renderCloudSession(session: CloudSessionInfo): void {
       const urlInput = $<HTMLInputElement>("cloud-url");
       if (urlInput && !urlInput.value) urlInput.value = session.url;
     }
-    if (session.login_url) {
+    if (session.loginUrl) {
       const platformInput = $<HTMLInputElement>("cloud-platform-url");
       if (platformInput && !platformInput.value) {
         // Avoid suggesting the WS host as a separate login host when the
         // deployment only exposes a single URL.
-        if (session.login_url !== session.url) {
-          platformInput.value = session.login_url;
+        if (session.loginUrl !== session.url) {
+          platformInput.value = session.loginUrl;
         }
       }
     }
@@ -271,7 +272,7 @@ async function cloudLogin(): Promise<void> {
   try {
     await invoke<string>("cloud_login", {
       url,
-      login_url: platformUrl,
+      loginUrl: platformUrl,
       username: user,
       password: pass,
     });
@@ -301,8 +302,8 @@ async function cloudDisconnect(): Promise<void> {
     const urlEl = $<HTMLInputElement>("cloud-url");
     if (urlEl && session.url) urlEl.value = session.url;
     const platformEl = $<HTMLInputElement>("cloud-platform-url");
-    if (platformEl && session.login_url && session.login_url !== session.url) {
-      platformEl.value = session.login_url;
+    if (platformEl && session.loginUrl && session.loginUrl !== session.url) {
+      platformEl.value = session.loginUrl;
     } else if (platformEl) {
       platformEl.value = "";
     }

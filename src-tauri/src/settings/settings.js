@@ -99,11 +99,11 @@ function renderCloudSession(session) {
       const urlInput = $("cloud-url");
       if (urlInput && !urlInput.value) urlInput.value = session.url;
     }
-    if (session.login_url) {
+    if (session.loginUrl) {
       const platformInput = $("cloud-platform-url");
       if (platformInput && !platformInput.value) {
-        if (session.login_url !== session.url) {
-          platformInput.value = session.login_url;
+        if (session.loginUrl !== session.url) {
+          platformInput.value = session.loginUrl;
         }
       }
     }
@@ -181,7 +181,7 @@ async function cloudLogin() {
   try {
     await invoke("cloud_login", {
       url,
-      login_url: platformUrl,
+      loginUrl: platformUrl,
       username: user,
       password: pass
     });
@@ -206,8 +206,8 @@ async function cloudDisconnect() {
     const urlEl = $("cloud-url");
     if (urlEl && session.url) urlEl.value = session.url;
     const platformEl = $("cloud-platform-url");
-    if (platformEl && session.login_url && session.login_url !== session.url) {
-      platformEl.value = session.login_url;
+    if (platformEl && session.loginUrl && session.loginUrl !== session.url) {
+      platformEl.value = session.loginUrl;
     } else if (platformEl) {
       platformEl.value = "";
     }
