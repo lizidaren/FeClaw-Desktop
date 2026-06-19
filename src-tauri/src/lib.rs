@@ -90,8 +90,8 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = startup(handle).await {
                     tracing::error!("startup failed: {e:#}");
-                    // Show a native error dialog so the user knows why startup failed.
                     let err_msg = format!("{e:#}");
+                    let app_handle = app.handle().clone();
                     std::thread::spawn(move || {
                         let _ = rfd::MessageDialog::new()
                             .set_title("FeClaw Desktop — 启动失败")
@@ -99,6 +99,10 @@ pub fn run() {
                             .set_buttons(rfd::MessageButtons::Ok)
                             .set_level(rfd::MessageLevel::Error)
                             .show();
+                    });
+                    // Open settings so user can configure cloud mode.
+                    tauri::async_runtime::spawn(async move {
+                        let _ = settings::open_settings_window(app_handle).await;
                     });
                 }
             });
