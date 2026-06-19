@@ -300,7 +300,7 @@ pub async fn get_cloud_session() -> Result<CloudSession, String> {
 #[tauri::command]
 pub async fn cloud_login(
     url: String,
-    login_url: Option<String>,
+    login_url: String,
     username: String,
     password: String,
 ) -> Result<String, String> {
@@ -316,16 +316,16 @@ pub async fn cloud_login(
         return Err("密码不能为空".to_string());
     }
 
-    // The login URL defaults to the server URL when the deployment exposes
-    // both endpoints on the same host (self-hosted).
-    let login_trimmed = login_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(url_trimmed);
+    // Use login_url if non-empty (distinct platform login endpoint),
+    // otherwise fall back to the WS server URL (self-hosted / single-host).
+    let login_base = if login_url.trim().is_empty() {
+        url_trimmed
+    } else {
+        login_url.trim()
+    };
 
-    let login_endpoint = format!("{}/api/auth/login", login_trimmed.trim_end_matches('/'));
-    tracing::info!("cloud_login: endpoint={login_endpoint}, url={url_trimmed}, login_url={login_url:?}");
+    let login_endpoint = format!("{}/api/auth/login", login_base.trim_end_matches('/'));
+    tracing::info!("cloud_login: endpoint={login_endpoint}, url={url_trimmed}, login_input={login_url}");
     let username_owned = username.trim().to_string();
 
     // ---- HTTP POST ---------------------------------------------------
@@ -366,7 +366,7 @@ pub async fn cloud_login(
     // (port, host, ws_path, etc.). The password is never written.
     let mut cfg = Config::load();
     cfg.cloud_url = Some(url_trimmed.trim_end_matches('/').to_string());
-    cfg.cloud_login_url = Some(login_trimmed.trim_end_matches('/').to_string());
+    cfg.cloud_login_url = Some(login_base.trim_end_matches('/').to_string());
     cfg.cloud_username = Some(username_owned);
     cfg.cloud_token = Some(token.clone());
     cfg.mode = crate::config::Mode::Cloud;
