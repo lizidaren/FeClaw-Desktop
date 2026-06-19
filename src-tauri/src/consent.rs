@@ -34,13 +34,21 @@ pub enum RiskLevel {
 pub struct ConsentManager {
     session_trust: HashSet<String>,
     trust_file: PathBuf,
+    /// Caller identifier shown in the consent dialog body so the user knows
+    /// *which* Agent triggered the request (e.g. "agent: a1b2 / user: alice").
+    app_info: String,
 }
 
 impl ConsentManager {
     pub fn new() -> Self {
+        Self::with_app_info("FeClaw Desktop")
+    }
+
+    pub fn with_app_info(app_info: &str) -> Self {
         Self {
             session_trust: HashSet::new(),
             trust_file: Config::config_dir().join("trusted-commands.json"),
+            app_info: app_info.to_string(),
         }
     }
 
@@ -158,10 +166,12 @@ impl ConsentManager {
         };
         let body = format!(
             "Agent wants to run:\n\n  {command}{cwd_info}\n\n\
+             Caller: {caller}\n\n\
              Risk level: L{}\n\n\
              [Yes] Allow once\n\
              [No]  Deny\n\
              [Cancel] Always allow this command",
+            caller = self.app_info,
             risk as u8
         );
 
