@@ -1,19 +1,32 @@
-//! WebSocket client — PR 3: connection, heartbeat, reconnect.
+//! WebSocket client — PR 4: full message dispatch.
 //!
-//! This iteration establishes and maintains a single WebSocket
-//! connection to the engine's `/ws/desktop` endpoint. Outgoing
-//! messages flow through an unbounded mpsc channel so future PRs
-//! (consent + executor) can ship responses back without holding a
-//! reference to the WebSocket stream. PR 4 adds the
-//! `command_exec_request` dispatch and bridges it through the consent
-//! manager and command executor.
+//! Connects to `/ws/desktop`, heartbeats every 30 s, reconnects up to
+//! 30 times spaced 1 s apart, and dispatches inbound messages:
+//!   * `command_exec_request` → asks `ConsentManager`, runs the
+//!     command via `CommandExecutor`, sends the
+//!     `command_exec_response` back.
+//!   * `file_read_request` / `file_write_request` → V2 file bridge
+//!     (currently answered with `status: "error"`).
+//!   * `notification` → logged; V2 will pop a native toast.
+//!
+//! Outgoing traffic flows through an unbounded mpsc so any spawned
+//! task can ship a response without holding the WebSocket stream.
 
-use crate::ws_types::{WsRequest, ConnectionStatus};
+use crate::consent::{ConsentManager, Decision};
+use crate::executor::CommandExecutor;
+use crate::ws_types::{
+    CommandExecPayload, ConnectionStatus, FileReadPayload, FileWritePayload,
+    NotificationPayload, WsRequest,
+};
 use anyhow::{anyhow, Result};
 use futures_util::{SinkExt, StreamExt};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
+use tauri::async_runtime;
 use tauri::async_runtime::mpsc;
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{
     client::generate_key,
     http::Request,
@@ -27,14 +40,15 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-/// Cheap-to-clone WS client. The inner `run` consumes self and runs
-/// forever (or until `MAX_RECONNECT_ATTEMPTS` is exhausted).
+/// Cheap-to-clone WS client. `run()` consumes self and runs forever.
 pub struct WsClient {
     url: String,
     token: String,
     outgoing_tx: mpsc::UnboundedSender<String>,
     outgoing_rx: Option<mpsc::UnboundedReceiver<String>>,
     status_tx: mpsc::Sender<ConnectionStatus>,
+    consent: Arc<Mutex<ConsentManager>>,
+    executor: Arc<CommandExecutor>,
 }
 
 impl WsClient {
@@ -42,6 +56,8 @@ impl WsClient {
         url: String,
         token: String,
         status_tx: mpsc::Sender<ConnectionStatus>,
+        consent: Arc<Mutex<ConsentManager>>,
+        executor: Arc<CommandExecutor>,
     ) -> Self {
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
         Self {
@@ -50,11 +66,11 @@ impl WsClient {
             outgoing_tx,
             outgoing_rx: Some(outgoing_rx),
             status_tx,
+            consent,
+            executor,
         }
     }
 
-    /// Public sender handle so other tasks (added in later PRs) can
-    /// queue outgoing messages without owning the whole client.
     pub fn sender(&self) -> mpsc::UnboundedSender<String> {
         self.outgoing_tx.clone()
     }
@@ -93,7 +109,6 @@ impl WsClient {
     }
 
     async fn run_inner(&mut self) -> Result<()> {
-        // Take the receiver so we own it for the duration of the connection.
         let mut outgoing_rx = self
             .outgoing_rx
             .take()
@@ -124,8 +139,6 @@ impl WsClient {
 
         let result = self.run_loop(&mut ws, &mut outgoing_rx).await;
 
-        // Always put the receiver back so the next reconnect attempt can
-        // drain any messages that were queued while we were disconnected.
         self.outgoing_rx = Some(outgoing_rx);
         result
     }
@@ -137,7 +150,7 @@ impl WsClient {
     ) -> Result<()> {
         let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        heartbeat.tick().await; // skip immediate
+        heartbeat.tick().await;
 
         loop {
             tokio::select! {
@@ -153,7 +166,7 @@ impl WsClient {
                                 return Err(anyhow!("ws send: {e}"));
                             }
                         }
-                        None => return Ok(()),  // all senders dropped
+                        None => return Ok(()),
                     }
                 }
                 msg = ws.next() => {
@@ -179,9 +192,113 @@ impl WsClient {
         };
         let req: WsRequest = serde_json::from_str(&text)
             .map_err(|e| anyhow!("parse ws message: {e}; payload={text}"))?;
-        // PR 3: just log. PR 4 dispatches command_exec_request via
-        // ConsentManager + CommandExecutor.
-        tracing::debug!("ws message: {req:?}");
+        match req {
+            WsRequest::CommandExec { id, payload } => {
+                self.spawn_command_exec(id, payload).await;
+            }
+            WsRequest::FileRead { id, payload } => {
+                self.handle_file_read_not_implemented(id, payload);
+            }
+            WsRequest::FileWrite { id, payload } => {
+                self.handle_file_write_not_implemented(id, payload);
+            }
+            WsRequest::Notification { payload, .. } => {
+                tracing::info!(
+                    "notification from engine: title={:?}, body={}",
+                    payload.title,
+                    payload.body
+                );
+            }
+            WsRequest::Pong => {}
+        }
         Ok(())
+    }
+
+    fn handle_file_read_not_implemented(&self, id: String, payload: FileReadPayload) {
+        tracing::info!(
+            "file_read_request received but file bridge is V2 (id={id}, path={})",
+            payload.path
+        );
+        self.send_json(&serde_json::json!({
+            "type": "file_read_response",
+            "id": id,
+            "status": "error",
+            "payload": { "error": "file bridge not implemented in MVP" },
+        }));
+    }
+
+    fn handle_file_write_not_implemented(&self, id: String, payload: FileWritePayload) {
+        tracing::info!(
+            "file_write_request received but file bridge is V2 (id={id}, path={})",
+            payload.path
+        );
+        self.send_json(&serde_json::json!({
+            "type": "file_write_response",
+            "id": id,
+            "status": "error",
+            "payload": { "error": "file bridge not implemented in MVP" },
+        }));
+    }
+
+    fn send_json(&self, value: &serde_json::Value) {
+        match serde_json::to_string(value) {
+            Ok(s) => {
+                let _ = self.outgoing_tx.send(s);
+            }
+            Err(e) => tracing::error!("ws serialize response: {e}"),
+        }
+    }
+
+    async fn spawn_command_exec(&self, id: String, payload: CommandExecPayload) {
+        let consent = self.consent.clone();
+        let executor = self.executor.clone();
+        let outgoing_tx = self.outgoing_tx.clone();
+        async_runtime::spawn(async move {
+            let cmd_str = if payload.args.is_empty() {
+                payload.command.clone()
+            } else {
+                format!("{} {}", payload.command, payload.args.join(" "))
+            };
+            tracing::info!("command_exec_request id={id} cmd={cmd_str}");
+
+            let decision = {
+                let mut guard = consent.lock().await;
+                guard.request(&cmd_str).await
+            };
+
+            let cwd = PathBuf::from(payload.cwd.as_deref().unwrap_or("."));
+            match decision {
+                Decision::Allow | Decision::AlwaysAllow => {
+                    let result = executor
+                        .execute(&payload.command, &payload.args, &cwd, payload.timeout)
+                        .await;
+                    let response = serde_json::json!({
+                        "type": "command_exec_response",
+                        "id": id,
+                        "status": "accepted",
+                        "payload": {
+                            "stdout": result.stdout,
+                            "stderr": result.stderr,
+                            "exit_code": result.exit_code,
+                        }
+                    });
+                    if let Ok(s) = serde_json::to_string(&response) {
+                        let _ = outgoing_tx.send(s);
+                    }
+                }
+                Decision::Deny => {
+                    tracing::info!("user denied command: {cmd_str}");
+                    let response = serde_json::json!({
+                        "type": "command_exec_response",
+                        "id": id,
+                        "status": "rejected",
+                        "payload": { "reason": "denied by user" }
+                    });
+                    if let Ok(s) = serde_json::to_string(&response) {
+                        let _ = outgoing_tx.send(s);
+                    }
+                }
+            }
+        });
     }
 }

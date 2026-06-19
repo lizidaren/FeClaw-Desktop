@@ -1,22 +1,29 @@
-//! FeClaw Desktop — PR 3: WebSocket transport layer.
+//! FeClaw Desktop — PR 4: native consent + command execution.
 //!
-//! After PR 2 authenticates against the engine, this iteration wires
-//! the JWT into a `WsClient` that connects to `/ws/desktop`,
-//! heartbeats every 30 s, and reconnects up to 30 times spaced 1 s
-//! apart. Connection status flows back over an mpsc channel. The
-//! actual message dispatch (consent dialog + executor) lands in PR 4.
+//! PR 3 established the WS transport. This iteration wires in:
+//!   * `ConsentManager` — risk-classifies each `command_exec_request`,
+//!     pops a native `rfd::MessageDialog`, persists user choices to
+//!     `~/.feclaw/trusted-commands.json` for "Always Allow".
+//!   * `CommandExecutor` — `tokio::process::Command` with timeout
+//!     (default 300 s), 1 MiB stdout/stderr truncation, and auto-mkdir
+//!     for missing `cwd`.
 
 mod auth;
 mod config;
+mod consent;
 mod engine;
+mod executor;
 mod ws;
 mod ws_types;
 
 use crate::auth::AuthManager;
 use crate::config::Config;
+use crate::consent::ConsentManager;
 use crate::engine::EngineManager;
+use crate::executor::CommandExecutor;
 use crate::ws::WsClient;
 use crate::ws_types::ConnectionStatus;
+use std::sync::Arc;
 
 /// Tauri application entry point.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -44,7 +51,6 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// PR 1+2+3 startup: config → engine → auth → ws.
 async fn startup(_app: tauri::AppHandle) -> anyhow::Result<()> {
     // 1. Load config.
     let mut config = Config::load();
@@ -68,23 +74,32 @@ async fn startup(_app: tauri::AppHandle) -> anyhow::Result<()> {
     let token = auth.login_or_load(stdout_buffer).await?;
     tracing::info!("authenticated (token length={})", token.len());
 
-    // 4. Wire up the WebSocket.
+    // 4. Wire up consent + executor + WS.
     let (status_tx, mut status_rx) = tauri::async_runtime::mpsc::channel(32);
-    let ws = WsClient::new(config.ws_url(), token, status_tx);
+    let consent = Arc::new(tokio::sync::Mutex::new(ConsentManager::new()));
+    consent.lock().await.load_trusted();
+    let executor = Arc::new(CommandExecutor::new());
+    let ws = WsClient::new(
+        config.ws_url(),
+        token,
+        status_tx,
+        consent,
+        executor,
+    );
 
-    // Status pump: log every status change.
+    // 5. Status pump.
     tauri::async_runtime::spawn(async move {
         while let Some(status) = status_rx.recv().await {
             tracing::info!("ws status → {status:?}");
         }
     });
 
-    // WS task — reconnect + heartbeat + (eventual) dispatch.
+    // 6. WS task — reconnect + heartbeat + dispatch.
     tauri::async_runtime::spawn(async move {
         ws.run().await;
     });
 
-    // 5. Idle watcher — surfaces a crashed engine.
+    // 7. Idle watcher.
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         if !engine.is_running() {
