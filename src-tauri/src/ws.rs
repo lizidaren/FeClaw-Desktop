@@ -16,6 +16,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use crate::chat::{self, ChatMessage};
 use crate::consent::{ConsentManager, Decision};
 use crate::executor::CommandExecutor;
 use crate::ws_types::{
@@ -30,6 +31,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::async_runtime;
+use tauri::Emitter;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;

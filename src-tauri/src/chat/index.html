@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FeClaw Desktop</title>
+  <link rel="stylesheet" href="chat.css" />
+</head>
+<body data-theme="system">
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">F</div>
+        <div class="brand-text">
+          <div class="brand-title">FeClaw Desktop</div>
+          <div class="brand-subtitle">与 AI 助理对话</div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span id="connection-indicator" class="conn-pill" data-state="disconnected">
+          <span class="dot" aria-hidden="true"></span>
+          <span id="connection-label">未连接</span>
+        </span>
+        <button type="button" class="icon-btn" id="btn-clear" title="清空对话历史">⌫</button>
+        <button type="button" class="icon-btn" id="btn-settings" title="打开设置">⚙</button>
+      </div>
+    </header>
+
+    <main class="messages" id="messages" aria-live="polite">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon" aria-hidden="true">F</div>
+        <h2>开始一次对话</h2>
+        <p>向 AI 助理发送消息，它会在这里回复你。</p>
+      </div>
+    </main>
+
+    <footer class="composer">
+      <textarea
+        id="input"
+        class="input"
+        rows="1"
+        placeholder="输入消息，按 Enter 发送（Shift+Enter 换行）"
+        autocomplete="off"
+        spellcheck="false"
+      ></textarea>
+      <button type="button" class="btn btn-primary" id="btn-send">发送</button>
+    </footer>
+  </div>
+
+  <script type="module" src="chat.js"></script>
+</body>
+</html>

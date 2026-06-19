@@ -68,6 +68,44 @@ pub enum WsRequest {
     },
     #[serde(rename = "pong")]
     Pong,
+    // ---- P0.6: chat protocol -------------------------------------
+    /// Agent / engine reply to a `chat_message` sent earlier.
+    #[serde(rename = "chat_reply")]
+    ChatReply {
+        id: String,
+        text: String,
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        timestamp: Option<String>,
+    },
+    /// Streaming event (thinking, tool call, tool result, done, …).
+    /// The frontend renders these inline with the reply text.
+    #[serde(rename = "chat_event")]
+    ChatEvent {
+        id: String,
+        kind: String,
+        #[serde(default)]
+        data: Option<serde_json::Value>,
+        #[serde(default)]
+        timestamp: Option<String>,
+    },
+    /// Inline file-operation consent request (P1.2). Sent by the
+    /// server when the agent wants to read/write/delete a file on the
+    /// user's desktop. The desktop surfaces it inside the chat window
+    /// and replies with a `consent_response` envelope.
+    #[serde(rename = "file_operation_request")]
+    FileOperationRequest {
+        op_id: String,
+        operation: String,
+        path: String,
+        #[serde(default)]
+        level: Option<u8>,
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
+        timestamp: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize, Default)]

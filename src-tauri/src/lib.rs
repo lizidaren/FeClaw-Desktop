@@ -14,6 +14,7 @@
 
 mod auth;
 mod autostart;
+mod chat;
 mod config;
 mod consent;
 mod engine;
@@ -68,6 +69,15 @@ pub struct AppState {
     /// Shared with `WsClient` so file-relay Tauri commands and the WS handler
     /// funnel through one consent gate (shared session_trust list).
     pub consent: Arc<tokio::sync::Mutex<ConsentManager>>,
+    /// Outgoing channel for chat messages / consent responses. Populated
+    /// after [`WsClient`] is constructed (the WS client owns the
+    /// receiver); `chat::send_chat_message` reads this clone to push
+    /// envelopes without holding the WS stream.
+    pub ws_outgoing: Arc<RwLock<Option<mpsc::UnboundedSender<String>>>>,
+    /// Handle to the running engine process (when in local mode). Stored
+    /// so chat-side consent/file ops can pause/resume engine work.
+    #[allow(dead_code)]
+    pub engine_running: Arc<RwLock<bool>>,
 }
 
 /// Tauri application entry point.
@@ -92,6 +102,14 @@ pub fn run() {
             welcome::save_welcome_config,
             welcome::discover_well_known,
             welcome::open_welcome_window,
+            chat::get_chat_history,
+            chat::append_chat_message,
+            chat::clear_chat_history,
+            chat::send_chat_message,
+            chat::open_chat_window,
+            chat::get_connection_status,
+            chat::get_chat_history_path,
+            chat::send_consent_response,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -177,6 +195,8 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         control_tx: control_tx.clone(),
         cancel_token: cancel_token.clone(),
         consent: consent.clone(),
+        ws_outgoing: Arc::new(RwLock::new(None)),
+        engine_running: Arc::new(RwLock::new(false)),
     };
     engine.set_ui_tx(control_tx.clone());
     engine.set_cancel_token(cancel_token.clone());
