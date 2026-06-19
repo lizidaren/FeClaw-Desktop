@@ -35,6 +35,10 @@ pub struct Config {
     /// so subsequent launches don't have to re-prompt for credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_token: Option<String>,
+    /// UI theme preference (`light` | `dark` | `system`). Set via the
+    /// Settings → Appearance tab and applied immediately on every change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,6 +61,7 @@ impl Default for Config {
             cloud_login_url: None,
             cloud_username: None,
             cloud_token: None,
+            theme: None,
         }
     }
 }
