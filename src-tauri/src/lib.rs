@@ -13,6 +13,7 @@
 //! (engine → runtime).
 
 mod auth;
+mod autostart;
 mod config;
 mod consent;
 mod engine;
