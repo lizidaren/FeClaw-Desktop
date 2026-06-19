@@ -45,6 +45,10 @@ pub enum ControlMsg {
     Reconnect,
     /// Persist a mode change (`~/.feclaw/config.toml`).
     SetMode(Mode),
+    /// Open the Settings window on the cloud tab and tell the UI to focus
+    /// the login form. Emitted by `EngineManager::cloud_loop` whenever
+    /// the cloud token is missing or rejected (4001/4002 close codes).
+    ShowCloudLogin,
     /// Exit the application cleanly.
     Quit,
 }

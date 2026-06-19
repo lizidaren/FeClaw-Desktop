@@ -4,23 +4,39 @@
 //! stdout/stderr into a shared buffer (so other modules can scan the
 //! initial-password line), polls `/health` until the engine is ready,
 //! and gracefully stops it on shutdown.
+//!
+//! In **cloud** mode the local engine is not started; instead, a
+//! background task dials the configured `cloud_url`/JWT, runs the WS
+//! loop, and reconnects with a 5-second delay after each disconnect.
+//! Auth-failure close codes (4001/4002) clear the cached token and
+//! trigger an interactive re-login via the Settings window.
 
-use crate::config::Config;
+use crate::config::{Config, Mode};
+use crate::consent::ConsentManager;
+use crate::executor::CommandExecutor;
+use crate::ws::{ConnectionStatus, WsClient};
 use crate::ControlMsg;
-use crate::ws::WsClient;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tauri::async_runtime;
 use tauri::async_runtime::mpsc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 /// Maximum time to wait for the engine to become healthy.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 /// Interval between health-check probes.
 const HEALTH_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Reconnect delay for cloud mode after a clean disconnect / error.
+const CLOUD_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+/// Brief backoff after a `ShowCloudLogin` request so we don't spam the
+/// UI if the user is away.
+const CLOUD_LOGIN_BACKOFF: Duration = Duration::from_secs(2);
 
 /// Lifecycle states reported by [`EngineManager`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,14 +47,15 @@ pub enum EngineStatus {
     Failed,
 }
 
-/// Manages the lifecycle of the local FeClaw engine process.
+/// Manages the lifecycle of the local FeClaw engine process OR, in cloud
+/// mode, the WebSocket connection to the remote engine.
 pub struct EngineManager {
     config: Config,
     child: Option<Child>,
     status: EngineStatus,
     /// Shared buffer of captured engine stdout lines. Used by `auth.rs`
     /// to scan for the random initial admin password on first launch.
-    stdout_buffer: Arc<Mutex<Vec<String>>>,
+    stdout_buffer: Arc<StdMutex<Vec<String>>>,
     /// Reusable HTTP client for health checks. Created once in `start()`.
     client: Option<reqwest::Client>,
     /// Optional sender for `ControlMsg`. When set, engine state changes are
@@ -46,7 +63,7 @@ pub struct EngineManager {
     /// real time (e.g. emit `Reconnect` if the engine becomes unhealthy).
     ui_tx: Option<mpsc::UnboundedSender<ControlMsg>>,
     /// Cancel flag set by the control pump to signal `wait_exit` to give up.
-    cancel_token: Arc<std::sync::atomic::AtomicBool>,
+    cancel_token: Arc<AtomicBool>,
     /// Optional handle to the WS client so the engine manager can ask the
     /// WS layer to drop its connection (e.g. on engine restart).
     ws: Option<Arc<WsClient>>,
@@ -96,13 +113,33 @@ impl EngineManager {
 
     /// Handle to the shared stdout buffer; pass to other modules that need
     /// to scan engine output (e.g. for the initial admin password).
-    pub fn stdout_buffer_handle(&self) -> Arc<Mutex<Vec<String>>> {
+    pub fn stdout_buffer_handle(&self) -> Arc<StdMutex<Vec<String>>> {
         self.stdout_buffer.clone()
     }
 
-    /// Spawn the engine process. Returns the port it was bound to (which
-    /// may differ from `config.port` if the default was busy).
-    pub async fn start(&mut self) -> Result<u16> {
+    /// Spawn the engine process (local) OR start the cloud connection
+    /// loop. Returns the port the local engine bound to; in cloud mode
+    /// there is no local engine so the returned port is `0` and the
+    /// caller should skip `wait_healthy()`.
+    pub async fn start(
+        &mut self,
+        consent: Arc<TokioMutex<ConsentManager>>,
+        executor: Arc<CommandExecutor>,
+        status_tx: mpsc::Sender<ConnectionStatus>,
+        shared_config: Arc<RwLock<Config>>,
+    ) -> Result<u16> {
+        match self.config.mode {
+            Mode::Local => self.start_local().await,
+            Mode::Cloud => {
+                self.start_cloud(consent, executor, status_tx, shared_config)
+                    .await
+            }
+        }
+    }
+
+    /// Local engine startup — unchanged from the original implementation,
+    /// just renamed to make the dispatch explicit.
+    async fn start_local(&mut self) -> Result<u16> {
         let port = Config::find_free_port(self.config.port)
             .context("no free port in 8080-8089 range")?;
         self.config.port = port;
@@ -167,6 +204,187 @@ impl EngineManager {
             .ok();
 
         Ok(port)
+    }
+
+    /// Cloud-mode startup. Spawns a background task that owns the WS
+    /// connection lifecycle (connect → run → wait 5 s → repeat). The
+    /// task reads `cloud_url`/`cloud_token` from `shared_config` so the
+    /// Settings UI can update them live; the cancel token is shared with
+    /// the control pump so `SetMode`/`Reconnect` can force a re-handshake.
+    ///
+    /// If the connection fails with a 4xxx close code (4001 invalid
+    /// token, 4002 forbidden) the cached JWT is cleared and the user is
+    /// prompted to re-authenticate via the Settings window.
+    ///
+    /// Returns `Ok(0)` — there is no local port to report.
+    async fn start_cloud(
+        &mut self,
+        consent: Arc<TokioMutex<ConsentManager>>,
+        executor: Arc<CommandExecutor>,
+        status_tx: mpsc::Sender<ConnectionStatus>,
+        shared_config: Arc<RwLock<Config>>,
+    ) -> Result<u16> {
+        // Sanity-check the config up front. We don't *require* a token —
+        // the loop will trigger the login UI if one is missing — but the
+        // URL is mandatory.
+        if self
+            .config
+            .cloud_url
+            .as_deref()
+            .map(str::is_empty)
+            .unwrap_or(true)
+        {
+            return Err(anyhow!(
+                "cloud mode requires `cloud_url` to be set in config.toml"
+            ));
+        }
+
+        let cancel_token = self.cancel_token.clone();
+        let ui_tx = self.ui_tx.clone();
+
+        self.status = EngineStatus::Starting;
+
+        async_runtime::spawn(async move {
+            Self::cloud_loop(
+                shared_config,
+                cancel_token,
+                ui_tx,
+                consent,
+                executor,
+                status_tx,
+            )
+            .await;
+        });
+
+        tracing::info!("cloud mode: connection loop started");
+        Ok(0)
+    }
+
+    /// Inner cloud connection loop. Lives for the entire process
+    /// lifetime (until the cancel token is flipped twice in a row, which
+    /// the control pump doesn't do — this only ends when the process
+    /// exits).
+    async fn cloud_loop(
+        shared_config: Arc<RwLock<Config>>,
+        cancel_token: Arc<AtomicBool>,
+        ui_tx: Option<mpsc::UnboundedSender<ControlMsg>>,
+        consent: Arc<TokioMutex<ConsentManager>>,
+        executor: Arc<CommandExecutor>,
+        status_tx: mpsc::Sender<ConnectionStatus>,
+    ) {
+        loop {
+            // 1. Honour a pending reconnect request (SetMode, Reconnect, …)
+            //    by clearing the flag and re-reading the config from disk.
+            if cancel_token.load(Ordering::SeqCst) {
+                cancel_token.store(false, Ordering::SeqCst);
+                tracing::info!("cloud loop: reconnect requested via cancel token");
+            }
+
+            // 2. Snapshot the current cloud config.
+            let (cloud_url, cloud_token, cloud_username) = {
+                let cfg = shared_config.read().await;
+                (
+                    cfg.cloud_url.clone(),
+                    cfg.cloud_token.clone(),
+                    cfg.cloud_username.clone(),
+                )
+            };
+
+            // 3. URL is mandatory. If it's missing, prompt the user via
+            //    the Settings window and back off.
+            let url = match cloud_url {
+                Some(u) if !u.trim().is_empty() => u,
+                _ => {
+                    tracing::warn!("cloud_url not configured; prompting user");
+                    Self::request_cloud_login(&ui_tx);
+                    tokio::time::sleep(CLOUD_LOGIN_BACKOFF).await;
+                    continue;
+                }
+            };
+
+            // 4. Token is required to actually connect. If it's missing
+            //    or malformed, prompt the user.
+            let token = match cloud_token {
+                Some(t) if crate::auth::verify_desktop_jwt(&t) => t,
+                Some(t) => {
+                    tracing::warn!(
+                        "cached cloud token is malformed (len={}); requesting re-login",
+                        t.len()
+                    );
+                    Self::clear_token(&shared_config).await;
+                    Self::request_cloud_login(&ui_tx);
+                    tokio::time::sleep(CLOUD_LOGIN_BACKOFF).await;
+                    continue;
+                }
+                None => {
+                    tracing::info!("no cloud token; requesting login");
+                    Self::request_cloud_login(&ui_tx);
+                    tokio::time::sleep(CLOUD_LOGIN_BACKOFF).await;
+                    continue;
+                }
+            };
+
+            // 5. Build the WS URL and spin up a fresh WsClient. The
+            //    outgoing channel is owned by the WsClient; the rest of
+            //    the app only consumes status updates via `status_tx`,
+            //    so we don't need to plumb the sender back out.
+            let ws_url = format!("{}/ws/desktop", url.trim_end_matches('/'));
+            tracing::info!("cloud: connecting to {ws_url} as user={:?}", cloud_username);
+            let ws = WsClient::new(
+                ws_url,
+                token,
+                status_tx.clone(),
+                consent.clone(),
+                executor.clone(),
+                cancel_token.clone(),
+            );
+
+            let result = ws.run_once().await;
+            let close_code = ws.last_close_code();
+
+            // 6. Auth-failure close codes invalidate the JWT.
+            if matches!(close_code, Some(4001) | Some(4002)) {
+                tracing::warn!(
+                    "cloud auth failure (close code {:?}); clearing token",
+                    close_code
+                );
+                Self::clear_token(&shared_config).await;
+                Self::request_cloud_login(&ui_tx);
+                tokio::time::sleep(CLOUD_LOGIN_BACKOFF).await;
+                continue;
+            }
+
+            // 7. Transport-level error or clean disconnect → wait and retry.
+            match &result {
+                Ok(()) => tracing::info!("cloud WS disconnected cleanly; will retry"),
+                Err(e) => tracing::warn!("cloud WS error: {e:#}; will retry"),
+            }
+            tokio::time::sleep(CLOUD_RECONNECT_DELAY).await;
+        }
+    }
+
+    /// Ask the user to log in by emitting a `ControlMsg::ShowCloudLogin`.
+    /// The control pump in `lib.rs` opens the Settings window and
+    /// switches to the cloud tab.
+    fn request_cloud_login(ui_tx: &Option<mpsc::UnboundedSender<ControlMsg>>) {
+        if let Some(tx) = ui_tx {
+            let _ = tx.send(ControlMsg::ShowCloudLogin);
+        } else {
+            tracing::error!(
+                "no ui_tx; cannot request cloud login. \
+                 The user must manually sign in via Settings."
+            );
+        }
+    }
+
+    /// Clear the cached cloud token and persist the change. Used when
+    /// the server reports the token is no longer valid.
+    async fn clear_token(shared_config: &Arc<RwLock<Config>>) {
+        let mut cfg = shared_config.write().await;
+        cfg.cloud_token = None;
+        if let Err(e) = cfg.save() {
+            tracing::warn!("failed to persist cleared cloud token: {e:#}");
+        }
     }
 
     /// Poll `/health` until the engine responds 200 or the timeout elapses.

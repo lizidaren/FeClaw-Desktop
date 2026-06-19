@@ -60,6 +60,11 @@ pub struct WsClient {
     /// Instant of the last received Pong. Updated on Pong message and
     /// initialised to Instant::now() when the connection is established.
     last_pong_at: Cell<Option<Instant>>,
+    /// Close code received from the server (if the connection ended via a
+    /// Close frame). Set by `run_loop`; read by callers via
+    /// [`WsClient::last_close_code`] to differentiate a normal shutdown
+    /// from an app-level 4xxx error (e.g. 4001 invalid token → reauth).
+    last_close_code: Cell<Option<u16>>,
     /// Cancel token: when set to true by the control pump, the run loop
     /// exits gracefully to trigger a reconnect.
     cancel_token: Arc<AtomicBool>,
@@ -84,6 +89,7 @@ impl WsClient {
             consent,
             executor,
             last_pong_at: Cell::new(None),
+            last_close_code: Cell::new(None),
             cancel_token,
         }
     }
@@ -92,8 +98,54 @@ impl WsClient {
         self.outgoing_tx.clone()
     }
 
+    /// Most recent server-side close code (if the connection ended via a
+    /// `Close` frame). `None` means the connection is still active or
+    /// ended without a close frame (e.g. TCP reset).
+    ///
+    /// Cloud mode uses this to detect 4001 (invalid token) and 4002
+    /// (forbidden) — both signal that the JWT is no longer good and
+    /// needs to be re-acquired via the login flow.
+    pub fn last_close_code(&self) -> Option<u16> {
+        self.last_close_code.get()
+    }
+
     async fn set_status(&self, s: ConnectionStatus) {
         let _ = self.status_tx.send(s).await;
+    }
+
+    /// Public helper: establish a (possibly TLS) WebSocket connection and
+    /// return the live stream. The JWT is sent via the standard
+    /// `Authorization: Bearer …` header during the upgrade so the server
+    /// can authenticate the handshake (matches `desktop_ws.py` on the
+    /// FeClaw side, which reads JWT from headers / cookies / first frame).
+    ///
+    /// The scheme is auto-detected: `ws://` → plain TCP, `wss://` → rustls
+    /// with WebPKI roots (the `rustls-tls-webpki-roots` feature on
+    /// `tokio-tungstenite` is enabled in `Cargo.toml`).
+    ///
+    /// Used by `EngineManager::start_cloud` for the cloud endpoint; the
+    /// local path uses the same constructor via `run_inner`.
+    pub async fn connect_tls(url: &str, token: &str) -> Result<WsStream> {
+        let host = url
+            .strip_prefix("ws://")
+            .or_else(|| url.strip_prefix("wss://"))
+            .unwrap_or(url);
+        let req = Request::builder()
+            .method("GET")
+            .uri(url)
+            .header("Host", host)
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Key", generate_key())
+            .header("Sec-WebSocket-Version", "13")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(())
+            .map_err(|e| anyhow!("build ws request: {e}"))?;
+
+        let (ws, _resp) = client_async(req, None)
+            .await
+            .map_err(|e| anyhow!("ws connect: {e}"))?;
+        Ok(ws)
     }
 
     /// Outer reconnect loop. Runs forever (or until max attempts fail).
@@ -125,32 +177,37 @@ impl WsClient {
         );
     }
 
+    /// Single connect + run cycle. Unlike [`run`], this returns after the
+    /// first disconnection so the caller can implement its own retry
+    /// policy (e.g. cloud mode wants a 5-second delay between attempts and
+    /// needs to inspect [`last_close_code`] to detect auth failures).
+    ///
+    /// Returns `Ok(())` for any clean termination (close frame received,
+    /// cancel token flipped, or the peer hung up) and `Err(_)` for
+    /// transport-level errors (TLS failure, DNS, timeout, …).
+    pub async fn run_once(mut self) -> Result<()> {
+        self.set_status(ConnectionStatus::Connecting).await;
+        match self.run_inner().await {
+            Ok(()) => {
+                self.set_status(ConnectionStatus::Disconnected).await;
+                Ok(())
+            }
+            Err(e) => {
+                self.set_status(ConnectionStatus::Disconnected).await;
+                Err(e)
+            }
+        }
+    }
+
     async fn run_inner(&mut self) -> Result<()> {
         let mut outgoing_rx = self
             .outgoing_rx
             .take()
             .ok_or_else(|| anyhow!("ws inner loop started without outgoing_rx"))?;
 
-        let host = self
-            .url
-            .strip_prefix("ws://")
-            .or_else(|| self.url.strip_prefix("wss://"))
-            .unwrap_or(&self.url);
-        let req = Request::builder()
-            .method("GET")
-            .uri(&self.url)
-            .header("Host", host)
-            .header("Upgrade", "websocket")
-            .header("Connection", "Upgrade")
-            .header("Sec-WebSocket-Key", generate_key())
-            .header("Sec-WebSocket-Version", "13")
-            .header("Authorization", format!("Bearer {}", self.token))
-            .body(())
-            .map_err(|e| anyhow!("build ws request: {e}"))?;
-
-        let (mut ws, _resp) = client_async(req, None)
-            .await
-            .map_err(|e| anyhow!("ws connect: {e}"))?;
+        // Same logic as the public `connect_tls` helper; kept inline here so
+        // the failure is reported in the context of the reconnect loop.
+        let mut ws = Self::connect_tls(&self.url, &self.token).await?;
         self.set_status(ConnectionStatus::Connected).await;
         tracing::info!("ws connected to {}", self.url);
         self.last_pong_at.set(Some(Instant::now()));
@@ -207,6 +264,10 @@ impl WsClient {
                     if let Message::Close(frame) = &msg {
                         if let Some(frame) = frame {
                             let code: u16 = frame.code.into();
+                            // Stash for callers (`last_close_code` reader) so
+                            // the cloud reconnect loop can detect 4001/4002
+                            // and trigger a fresh login.
+                            self.last_close_code.set(Some(code));
                             if (4000..5000).contains(&code) {
                                 tracing::error!(
                                     "ws closed by server with app-level code {code}: {:?}",

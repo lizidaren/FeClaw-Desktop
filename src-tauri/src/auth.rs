@@ -188,6 +188,59 @@ impl AuthManager {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Local JWT validation (cloud mode)
+// ---------------------------------------------------------------------------
+//
+// Cloud-mode auth flow:
+//   1. User submits username + password via the Settings UI → `/api/login`.
+//   2. Server returns a JWT (FeClaw's `utils/auth.py` does the heavy lifting
+//      on the server side).
+//   3. Desktop stores the JWT in `config.cloud_token` and sends it as a
+//      `Authorization: Bearer …` header on the WebSocket handshake.
+//
+// Before sending it on the wire we do a quick local sanity check so a
+// truncated / hand-edited / never-was-a-JWT string is rejected without a
+// round-trip. The server (`desktop_ws.py`) is the source of truth for
+// signature verification; this routine only catches obvious garbage.
+
+/// A JWT is three base64url segments separated by `.`. We don't decode the
+/// payload (the server is authoritative), but a well-formed envelope is
+/// enough to filter out blank / truncated / non-JWT strings.
+pub fn verify_desktop_jwt(token: &str) -> bool {
+    let token = token.trim();
+    if token.is_empty() {
+        return false;
+    }
+
+    let mut segments = token.split('.');
+    let header = match segments.next() {
+        Some(s) if !s.is_empty() => s,
+        _ => return false,
+    };
+    let payload = match segments.next() {
+        Some(s) if !s.is_empty() => s,
+        _ => return false,
+    };
+    let signature = match segments.next() {
+        Some(s) if !s.is_empty() => s,
+        _ => return false,
+    };
+    if segments.next().is_some() {
+        // A real JWT has exactly three segments; anything else is suspect.
+        return false;
+    }
+
+    // base64url alphabet: A-Z a-z 0-9 - _ (no padding required).
+    let is_b64url = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    };
+
+    is_b64url(header) && is_b64url(payload) && is_b64url(signature)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,5 +349,49 @@ mod tests {
         assert!(!json.contains("password"));
         assert!(json.contains("token"));
         assert!(json.contains("admin"));
+    }
+
+    #[test]
+    fn verify_desktop_jwt_accepts_well_formed_token() {
+        // Real-shaped JWT (header.payload.signature), all base64url.
+        let token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc-_123XYZ";
+        assert!(verify_desktop_jwt(token));
+    }
+
+    #[test]
+    fn verify_desktop_jwt_rejects_empty() {
+        assert!(!verify_desktop_jwt(""));
+        assert!(!verify_desktop_jwt("   "));
+    }
+
+    #[test]
+    fn verify_desktop_jwt_rejects_two_segments() {
+        assert!(!verify_desktop_jwt("header.payload"));
+    }
+
+    #[test]
+    fn verify_desktop_jwt_rejects_four_segments() {
+        assert!(!verify_desktop_jwt("a.b.c.d"));
+    }
+
+    #[test]
+    fn verify_desktop_jwt_rejects_empty_segment() {
+        assert!(!verify_desktop_jwt("header..signature"));
+        assert!(!verify_desktop_jwt(".payload.signature"));
+        assert!(!verify_desktop_jwt("header.payload."));
+    }
+
+    #[test]
+    fn verify_desktop_jwt_rejects_non_base64url() {
+        // `+` and `/` are standard base64, not base64url — reject.
+        assert!(!verify_desktop_jwt("header+invalid.payload/sig.signature"));
+        // `=` padding is not used in JWT — reject.
+        assert!(!verify_desktop_jwt("header=payload=sig"));
+    }
+
+    #[test]
+    fn verify_desktop_jwt_trims_whitespace() {
+        let token = "  eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc-_123XYZ  ";
+        assert!(verify_desktop_jwt(token));
     }
 }

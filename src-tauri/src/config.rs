@@ -17,6 +17,18 @@ pub struct Config {
     pub engine_path: Option<String>,
     pub ws_path: String,
     pub mode: Mode,
+    /// Cloud server base URL (e.g. `https://feclaw.example.com`).
+    /// Only used when `mode == Mode::Cloud`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_url: Option<String>,
+    /// Cloud account username — only persisted locally to remember who is
+    /// signed in; the password is never stored (it is exchanged for a JWT).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_username: Option<String>,
+    /// JWT returned by `POST /api/login` against the cloud server. Persisted
+    /// so subsequent launches don't have to re-prompt for credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,6 +47,9 @@ impl Default for Config {
             engine_path: None,
             ws_path: "/ws/desktop".to_string(),
             mode: Mode::Local,
+            cloud_url: None,
+            cloud_username: None,
+            cloud_token: None,
         }
     }
 }
@@ -90,9 +105,30 @@ impl Config {
         format!("http://{}:{}", self.host, self.port)
     }
 
-    /// `ws://host:port/ws/desktop` URL for the engine WebSocket endpoint.
+    /// WebSocket URL the engine manager should dial.
+    ///
+    /// * `Local`  → `ws://{host}:{port}{ws_path}` against the embedded engine.
+    /// * `Cloud`  → `{cloud_url}/ws/desktop` against the remote FeClaw server.
+    ///              `cloud_url` is required and is normalised so the trailing
+    ///              slash is stripped before `/ws/desktop` is appended.
     pub fn ws_url(&self) -> String {
-        format!("ws://{}:{}{}", self.host, self.port, self.ws_path)
+        match self.mode {
+            Mode::Local => format!("ws://{}:{}{}", self.host, self.port, self.ws_path),
+            Mode::Cloud => {
+                let base = self
+                    .cloud_url
+                    .as_deref()
+                    .unwrap_or("https://feclaw.example.com");
+                format!("{}/ws/desktop", base.trim_end_matches('/'))
+            }
+        }
+    }
+
+    /// HTTP base URL for the engine (used by `auth.rs` and settings probes).
+    /// In cloud mode the same `cloud_url` is reused for `/api/login` and
+    /// `/api/health`.
+    pub fn cloud_base_url(&self) -> Option<&str> {
+        self.cloud_url.as_deref()
     }
 
     /// Find a free port starting at `start`, scanning `start..start+10`.
@@ -205,5 +241,106 @@ mod tests {
         let path = Config::config_path();
         let expected = Config::config_dir().join("config.toml");
         assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn cloud_ws_url_appends_path() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.ws_url(), "https://feclaw.example.com/ws/desktop");
+    }
+
+    #[test]
+    fn cloud_ws_url_strips_trailing_slash() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com/".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.ws_url(), "https://feclaw.example.com/ws/desktop");
+    }
+
+    #[test]
+    fn cloud_ws_url_strips_multiple_trailing_slashes() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com///".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.ws_url(), "https://feclaw.example.com/ws/desktop");
+    }
+
+    #[test]
+    fn cloud_ws_url_uses_http_when_configured() {
+        // Local-network dev servers may be served over plain HTTP.
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("http://10.0.0.5:8080".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.ws_url(), "http://10.0.0.5:8080/ws/desktop");
+    }
+
+    #[test]
+    fn local_ws_url_unaffected_by_cloud_fields() {
+        // cloud_* fields should be ignored in local mode.
+        let cfg = Config {
+            mode: Mode::Local,
+            cloud_url: Some("https://remote.example.com".to_string()),
+            cloud_username: Some("alice".to_string()),
+            cloud_token: Some("jwt".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.ws_url(), "ws://127.0.0.1:8080/ws/desktop");
+    }
+
+    #[test]
+    fn cloud_fields_default_to_none() {
+        let cfg = Config::default();
+        assert!(cfg.cloud_url.is_none());
+        assert!(cfg.cloud_username.is_none());
+        assert!(cfg.cloud_token.is_none());
+    }
+
+    #[test]
+    fn cloud_base_url_returns_set_value() {
+        let cfg = Config {
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.cloud_base_url(), Some("https://feclaw.example.com"));
+    }
+
+    #[test]
+    fn cloud_token_omitted_from_toml_when_none() {
+        // Avoid leaking the field name with `cloud_token = ""` when the user
+        // hasn't signed in yet.
+        let cfg = Config::default();
+        let encoded = toml::to_string(&cfg).unwrap();
+        assert!(!encoded.contains("cloud_token"));
+        assert!(!encoded.contains("cloud_username"));
+    }
+
+    #[test]
+    fn toml_roundtrip_cloud_with_credentials() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            cloud_username: Some("alice".to_string()),
+            cloud_token: Some("jwt.payload.sig".to_string()),
+            ..Default::default()
+        };
+        let encoded = toml::to_string(&cfg).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.mode, Mode::Cloud);
+        assert_eq!(
+            decoded.cloud_url.as_deref(),
+            Some("https://feclaw.example.com")
+        );
+        assert_eq!(decoded.cloud_username.as_deref(), Some("alice"));
+        assert_eq!(decoded.cloud_token.as_deref(), Some("jwt.payload.sig"));
     }
 }
