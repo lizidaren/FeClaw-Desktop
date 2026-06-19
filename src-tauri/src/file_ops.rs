@@ -75,12 +75,29 @@ fn resolve_for_write(vfs_path: &str) -> Result<PathBuf, String> {
         .map_err(|e| format!("invalid path {vfs_path}: {e}"))
 }
 
-/// Read a file's UTF-8 contents. No consent prompt — reads are L1.
+/// Read a file's UTF-8 contents. Requires L2 consent — even the agent
+/// must ask before reading files on the user's machine.
 #[tauri::command]
 pub async fn file_read(
     path: String,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let outcome = {
+        let mut guard = state.consent.lock().await;
+        guard.request_operation("read", &path).await
+    };
+    match outcome {
+        OperationOutcome::Allow => {}
+        OperationOutcome::Denied => {
+            return Err(format!("user denied read of {path}"));
+        }
+        OperationOutcome::Timeout => {
+            return Err(format!(
+                "consent dialog timed out (5 min) for read of {path}"
+            ));
+        }
+    }
+
     let (resolved, _size) = resolve_for_read(&path)?;
 
     let path_for_err = path.clone();
