@@ -392,6 +392,41 @@ pub async fn cloud_disconnect() -> Result<(), String> {
     Ok(())
 }
 
+/// Persist the user's theme preference to `~/.feclaw/config.toml`. The
+/// frontend invokes this whenever a theme radio is selected so the change
+/// survives a restart (the value is read back via [`get_theme`] on next
+/// launch). Invalid values are rejected explicitly so a typo can't poison
+/// the config.
+#[tauri::command]
+pub async fn set_theme(theme: String) -> Result<(), String> {
+    let normalized = match theme.trim() {
+        "light" | "dark" | "system" => theme.trim().to_string(),
+        other => return Err(format!("无效的主题值：{other}")),
+    };
+    let mut cfg = Config::load();
+    cfg.theme = Some(normalized.clone());
+    cfg.save().map_err(|e| format!("保存主题失败：{e:#}"))?;
+    tracing::info!("theme persisted to config.toml: {normalized}");
+    Ok(())
+}
+
+/// Read the persisted theme preference from `~/.feclaw/config.toml`. Falls
+/// back to `"system"` when the field is unset (fresh install, or legacy
+/// config written before the theme field existed).
+#[tauri::command]
+pub async fn get_theme() -> Result<String, String> {
+    let cfg = Config::load();
+    Ok(cfg.theme.unwrap_or_else(|| "system".to_string()))
+}
+
+/// Return the application version baked in at compile time. The Settings UI
+/// surfaces this on the "About" tab so users can copy/paste it into bug
+/// reports without spelunking through `Cargo.toml`.
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Convert a non-2xx login response into a user-friendly error message.
 /// Tries to pull `detail` / `message` from the JSON body, falling back to
 /// the raw text if the body isn't valid JSON.

@@ -68,6 +68,10 @@
               <span class="switch-track" aria-hidden="true"></span>
             </label>
           </div>
+
+          <div class="field-actions tab-actions">
+            <button type="button" class="btn btn-primary" id="save-general">保存设置</button>
+          </div>
         </div>
       </section>
 
@@ -105,12 +109,17 @@
               spellcheck="false"
             />
             <small class="hint">登录接口地址，留空则使用服务器地址（自建用户）</small>
-          <div class="field" style="margin-top: 12px;">
-            <label>
-              <input type="checkbox" id="is-official" />
-              使用官方平台 — feclaw.lizidaren.cn
-            </label>
           </div>
+
+          <div class="field field-row">
+            <label class="switch-label" for="is-official">
+              <span class="switch-text">
+                <span class="switch-title">使用官方平台</span>
+                <span class="switch-hint">feclaw.lizidaren.cn / platform.firstentrance.lizidaren.cn</span>
+              </span>
+              <input id="is-official" type="checkbox" class="switch" />
+              <span class="switch-track" aria-hidden="true"></span>
+            </label>
           </div>
 
           <div class="field">
@@ -127,6 +136,7 @@
           </div>
 
           <div class="field-actions">
+            <button type="button" class="btn btn-secondary" id="btn-save-cloud">保存地址</button>
             <button type="button" class="btn btn-primary" id="btn-login">
               登录
             </button>
@@ -141,7 +151,8 @@
         </div>
       </section>
 
-      <!-- 外观 Tab --><section class="tab-panel" id="tab-appearance" role="tabpanel" hidden>
+      <!-- 外观 Tab -->
+      <section class="tab-panel" id="tab-appearance" role="tabpanel" hidden>
         <header class="panel-header">
           <h2>外观</h2>
           <p class="panel-desc">主题与显示偏好</p>
@@ -150,13 +161,29 @@
         <div class="card">
           <h3>主题</h3>
           <div class="field">
-            <label for="theme">主题模式</label>
-            <select id="theme" class="input">
-              <option value="system">跟随系统</option>
-              <option value="light">浅色</option>
-              <option value="dark">深色</option>
-            </select>
-            <small class="hint">跟随系统会读取操作系统的明暗设置</small>
+            <fieldset class="theme-radios" id="theme-radios">
+              <legend class="theme-legend">主题模式</legend>
+              <label class="theme-option">
+                <input type="radio" name="theme" value="light" id="theme-light" />
+                <span class="theme-option-title">浅色</span>
+                <span class="theme-option-hint">始终使用明亮配色</span>
+              </label>
+              <label class="theme-option">
+                <input type="radio" name="theme" value="dark" id="theme-dark" />
+                <span class="theme-option-title">深色</span>
+                <span class="theme-option-hint">始终使用深色配色</span>
+              </label>
+              <label class="theme-option">
+                <input type="radio" name="theme" value="system" id="theme-system" />
+                <span class="theme-option-title">跟随系统</span>
+                <span class="theme-option-hint">读取操作系统的明暗设置</span>
+              </label>
+            </fieldset>
+            <small class="hint">选择后立即生效并保存到配置</small>
+          </div>
+
+          <div class="field-actions tab-actions">
+            <button type="button" class="btn btn-primary" id="save-appearance">保存设置</button>
           </div>
         </div>
       </section>
@@ -176,21 +203,33 @@
             </div>
             <div class="meta-row">
               <dt>版本</dt>
-              <dd id="app-version">0.1.0</dd>
+              <dd id="app-version">…</dd>
             </div>
             <div class="meta-row">
               <dt>配置目录</dt>
               <dd><code>~/.feclaw/</code></dd>
             </div>
+            <div class="meta-row">
+              <dt>项目主页</dt>
+              <dd>
+                <a id="github-link"
+                   href="https://github.com/lizidaren/FeClaw-Desktop"
+                   target="_blank" rel="noopener noreferrer">
+                  github.com/lizidaren/FeClaw-Desktop ↗
+                </a>
+              </dd>
+            </div>
           </dl>
+          <p class="hint">
+            如需反馈问题，请附上上方版本号与配置目录下的日志。
+          </p>
         </div>
       </section>
 
       <footer class="actions">
         <span id="toast" class="toast" role="status" aria-live="polite"></span>
         <div class="actions-right">
-          <button type="button" class="btn btn-ghost" id="cancel">取消</button>
-          <button type="button" class="btn btn-primary" id="save">保存设置</button>
+          <button type="button" class="btn btn-ghost" id="cancel">关闭</button>
         </div>
       </footer>
     </main>

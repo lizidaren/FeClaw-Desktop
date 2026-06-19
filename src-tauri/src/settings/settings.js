@@ -5,15 +5,10 @@ function getTauri() {
   }
   return g.core;
 }
-function getAppVersion() {
-  const g = window.__TAURI__;
-  return g?.metadata?.version;
-}
 const invoke = (cmd, args) => getTauri().invoke(cmd, args);
 const KEY = {
   autoLaunch: "auto_launch",
-  startMinimized: "start_minimized",
-  theme: "theme"
+  startMinimized: "start_minimized"
 };
 const THEME_VALUES = ["light", "dark", "system"];
 function $(id) {
@@ -27,6 +22,18 @@ function requireEl(id) {
 function applyTheme(value) {
   const next = THEME_VALUES.includes(value ?? "") ? value : "system";
   document.body.dataset.theme = next;
+}
+function readTheme() {
+  const checked = document.querySelector(
+    'input[name="theme"]:checked'
+  );
+  return checked?.value ?? "system";
+}
+function writeTheme(value) {
+  const theme = THEME_VALUES.includes(value ?? "") ? value : "system";
+  document.querySelectorAll('input[name="theme"]').forEach((el) => {
+    el.checked = el.value === theme;
+  });
 }
 let toastTimer;
 function showToast(text, kind = "info") {
@@ -51,8 +58,7 @@ function setConnectionStatus(text, kind) {
 function readGeneral() {
   return {
     autoLaunch: requireEl("auto-launch").checked,
-    startMinimized: requireEl("start-minimized").checked,
-    theme: requireEl("theme").value
+    startMinimized: requireEl("start-minimized").checked
   };
 }
 function writeGeneral(snap) {
@@ -62,8 +68,6 @@ function writeGeneral(snap) {
   if (startMinimized && snap.startMinimized !== void 0) {
     startMinimized.checked = snap.startMinimized;
   }
-  const theme = $("theme");
-  if (theme && snap.theme) theme.value = snap.theme;
 }
 function showLoginForm() {
   const card = $("cloud-connected-card");
@@ -119,10 +123,17 @@ async function load() {
   }
   writeGeneral({
     autoLaunch: map[KEY.autoLaunch] === "true",
-    startMinimized: map[KEY.startMinimized] === "true",
-    theme: map[KEY.theme] ?? "system"
+    startMinimized: map[KEY.startMinimized] === "true"
   });
-  applyTheme(map[KEY.theme]);
+  try {
+    const theme = await invoke("get_theme");
+    writeTheme(theme);
+    applyTheme(theme);
+  } catch (e) {
+    console.error("get_theme failed:", e);
+    writeTheme("system");
+    applyTheme("system");
+  }
   try {
     const session = await invoke("get_cloud_session");
     renderCloudSession(session);
@@ -130,22 +141,55 @@ async function load() {
     console.error("get_cloud_session failed:", e);
     showLoginForm();
   }
+  try {
+    const ver = await invoke("get_app_version");
+    const el = $("app-version");
+    if (el) el.textContent = ver;
+  } catch (e) {
+    console.error("get_app_version failed:", e);
+  }
 }
-async function save() {
+async function saveGeneral() {
   const snap = readGeneral();
   const updates = {
     [KEY.autoLaunch]: String(snap.autoLaunch),
-    [KEY.startMinimized]: String(snap.startMinimized),
-    [KEY.theme]: snap.theme
+    [KEY.startMinimized]: String(snap.startMinimized)
   };
   try {
     await invoke("save_settings", { settings: updates });
-    applyTheme(snap.theme);
-    showToast("\u8BBE\u7F6E\u5DF2\u4FDD\u5B58", "success");
+    showToast("\u5E38\u89C4\u8BBE\u7F6E\u5DF2\u4FDD\u5B58", "success");
   } catch (e) {
-    console.error("save_settings failed:", e);
+    console.error("save_settings (general) failed:", e);
     showToast(typeof e === "string" ? e : "\u4FDD\u5B58\u5931\u8D25", "error");
   }
+}
+async function saveAppearance() {
+  const theme = readTheme();
+  try {
+    await invoke("set_theme", { theme });
+    applyTheme(theme);
+    showToast("\u5916\u89C2\u8BBE\u7F6E\u5DF2\u4FDD\u5B58", "success");
+  } catch (e) {
+    console.error("set_theme failed:", e);
+    showToast(typeof e === "string" ? e : "\u4FDD\u5B58\u5931\u8D25", "error");
+  }
+}
+async function saveCloudAddresses() {
+  const urlEl = requireEl("cloud-url");
+  const platformEl = $("cloud-platform-url");
+  const url = urlEl.value.trim();
+  if (!url) {
+    setConnectionStatus("\u8BF7\u586B\u5199\u670D\u52A1\u5668\u5730\u5740", "error");
+    urlEl.focus();
+    return;
+  }
+  const platformUrl = (platformEl?.value.trim() ?? "") || url;
+  setConnectionStatus(
+    "\u670D\u52A1\u5668\u5730\u5740\u5DF2\u6682\u5B58\uFF08\u70B9\u51FB\u300C\u767B\u5F55\u300D\u5199\u5165\u914D\u7F6E\uFF09",
+    "info"
+  );
+  showToast("\u5730\u5740\u5DF2\u6682\u5B58", "info");
+  void platformUrl;
 }
 async function cloudLogin() {
   const urlEl = requireEl("cloud-url");
@@ -237,14 +281,38 @@ function wireTabs() {
     });
   });
 }
+const OFFICIAL = {
+  server: "https://feclaw.lizidaren.cn",
+  login: "https://platform.firstentrance.lizidaren.cn"
+};
+function applyOfficialPreset() {
+  const urlEl = requireEl("cloud-url");
+  const platformEl = requireEl("cloud-platform-url");
+  urlEl.value = OFFICIAL.server;
+  platformEl.value = OFFICIAL.login;
+}
+function clearOfficialPreset() {
+  const official = $("is-official");
+  if (official) official.checked = false;
+}
+function wireOfficialCheckbox() {
+  const official = requireEl("is-official");
+  official.addEventListener("change", () => {
+    if (official.checked) {
+      applyOfficialPreset();
+      setConnectionStatus("\u5DF2\u586B\u5145\u5B98\u65B9\u5E73\u53F0\u5730\u5740", "info");
+    } else {
+      clearOfficialPreset();
+    }
+  });
+}
 function wireForm() {
-  const saveBtn = requireEl("save");
   const cancelBtn = requireEl("cancel");
   const loginBtn = requireEl("btn-login");
   const discBtn = $("btn-disconnect");
-  saveBtn.addEventListener("click", () => {
-    void save();
-  });
+  const saveGeneralBtn = $("save-general");
+  const saveAppearanceBtn = $("save-appearance");
+  const saveCloudBtn = $("btn-save-cloud");
   cancelBtn.addEventListener("click", () => {
     window.close();
   });
@@ -254,10 +322,27 @@ function wireForm() {
   if (discBtn) discBtn.addEventListener("click", () => {
     void cloudDisconnect();
   });
-  const themeSel = requireEl("theme");
-  themeSel.addEventListener("change", () => {
-    applyTheme(themeSel.value);
+  if (saveGeneralBtn) saveGeneralBtn.addEventListener("click", () => {
+    void saveGeneral();
   });
+  if (saveAppearanceBtn) saveAppearanceBtn.addEventListener("click", () => {
+    void saveAppearance();
+  });
+  if (saveCloudBtn) saveCloudBtn.addEventListener("click", () => {
+    void saveCloudAddresses();
+  });
+  document.querySelectorAll('input[name="theme"]').forEach((el) => {
+    el.addEventListener("change", () => {
+      if (!el.checked) return;
+      const value = el.value;
+      applyTheme(value);
+      void invoke("set_theme", { theme: value }).catch((err) => {
+        console.error("set_theme failed:", err);
+        showToast(typeof err === "string" ? err : "\u4E3B\u9898\u4FDD\u5B58\u5931\u8D25", "error");
+      });
+    });
+  });
+  wireOfficialCheckbox();
   ["cloud-url", "cloud-platform-url", "cloud-username", "cloud-password"].forEach((id) => {
     const el = $(id);
     if (el) el.addEventListener("keydown", (ev) => {
@@ -268,15 +353,17 @@ function wireForm() {
     });
   });
 }
-function applyAppVersion() {
-  const v = $("app-version");
-  if (!v) return;
-  const ver = getAppVersion();
-  if (ver) v.textContent = ver;
+function wireExternalNavigation() {
+  const tauriEvents = window.__TAURI__;
+  if (!tauriEvents?.event?.listen) return;
+  void tauriEvents.event.listen("navigate-settings", (e) => {
+    const target = e.payload;
+    if (target) switchTab(target);
+  });
 }
 document.addEventListener("DOMContentLoaded", () => {
   wireTabs();
   wireForm();
-  applyAppVersion();
+  wireExternalNavigation();
   void load();
 });
