@@ -19,9 +19,10 @@ pub struct Config {
     pub mode: Mode,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
+    #[default]
     Local,
     Cloud,
 }
@@ -119,5 +120,90 @@ mod tests {
         // Port 0 is special; just ensure we get *something* back from a valid range.
         let p = Config::find_free_port(49052);
         assert!(p.is_some());
+    }
+
+    #[test]
+    fn default_values() {
+        let cfg = Config::default();
+        assert_eq!(cfg.host, "127.0.0.1");
+        assert_eq!(cfg.port, 8080);
+        assert_eq!(cfg.mode, Mode::Local);
+    }
+
+    #[test]
+    fn ws_url_custom_host_port() {
+        let cfg = Config {
+            host: "192.168.1.100".to_string(),
+            port: 9000,
+            ..Default::default()
+        };
+        assert_eq!(cfg.ws_url(), "ws://192.168.1.100:9000/ws/desktop");
+    }
+
+    #[test]
+    fn engine_url_custom_host_port() {
+        let cfg = Config {
+            host: "192.168.1.100".to_string(),
+            port: 9000,
+            ..Default::default()
+        };
+        assert_eq!(cfg.engine_url(), "http://192.168.1.100:9000");
+    }
+
+    #[test]
+    fn toml_roundtrip_local_mode() {
+        let cfg = Config::default();
+        let encoded = toml::to_string(&cfg).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.host, cfg.host);
+        assert_eq!(decoded.port, cfg.port);
+        assert_eq!(decoded.mode, cfg.mode);
+        assert_eq!(decoded.ws_path, cfg.ws_path);
+    }
+
+    #[test]
+    fn toml_roundtrip_cloud_mode() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            host: "engine.example.com".to_string(),
+            port: 443,
+            engine_path: Some("/usr/bin/feclaw".to_string()),
+            ws_path: "/ws/cloud".to_string(),
+        };
+        let encoded = toml::to_string(&cfg).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.mode, Mode::Cloud);
+        assert_eq!(decoded.host, "engine.example.com");
+        assert_eq!(decoded.port, 443);
+        assert_eq!(decoded.engine_path, Some("/usr/bin/feclaw".to_string()));
+        assert_eq!(decoded.ws_path, "/ws/cloud");
+    }
+
+    #[test]
+    fn mode_serde_lowercase() {
+        // Mode must serialize as "local" / "cloud" (lowercase, per #[serde(rename_all = "lowercase")]).
+        let local: Mode = Mode::Local;
+        let cloud: Mode = Mode::Cloud;
+        let local_str = toml::to_string(&local).unwrap();
+        let cloud_str = toml::to_string(&cloud).unwrap();
+        assert_eq!(local_str, "\"local\"");
+        assert_eq!(cloud_str, "\"cloud\"");
+    }
+
+    #[test]
+    fn config_dir_is_home_feclaw() {
+        let dir = Config::config_dir();
+        let expected = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|h| PathBuf::from(h).join(".feclaw"))
+            .unwrap();
+        assert_eq!(dir, expected);
+    }
+
+    #[test]
+    fn config_path_is_home_feclaw_config_toml() {
+        let path = Config::config_path();
+        let expected = Config::config_dir().join("config.toml");
+        assert_eq!(path, expected);
     }
 }
