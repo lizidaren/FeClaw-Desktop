@@ -35,7 +35,9 @@ use crate::ws_types::ConnectionStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::async_runtime;
+use tauri::Emitter;
 use tauri::Manager;
+use tauri::Emitter;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
 
@@ -65,7 +67,7 @@ pub struct AppState {
     pub cancel_token: Arc<AtomicBool>,
     /// Shared with `WsClient` so file-relay Tauri commands and the WS handler
     /// funnel through one consent gate (shared session_trust list).
-    pub consent: Arc<Mutex<ConsentManager>>,
+    pub consent: Arc<tokio::sync::Mutex<ConsentManager>>,
 }
 
 /// Tauri application entry point.

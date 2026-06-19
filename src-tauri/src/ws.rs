@@ -12,7 +12,7 @@
 //! Outgoing traffic flows through an unbounded mpsc so any spawned
 //! task can ship a response without holding the WebSocket stream.
 
-use std::sync::Mutex;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -50,16 +50,16 @@ pub struct WsClient {
     outgoing_tx: mpsc::UnboundedSender<String>,
     outgoing_rx: Option<mpsc::UnboundedReceiver<String>>,
     status_tx: mpsc::Sender<ConnectionStatus>,
-    consent: Arc<Mutex<ConsentManager>>,
+    consent: Arc<tokio::sync::Mutex<ConsentManager>>,
     executor: Arc<CommandExecutor>,
     /// Instant of the last received Pong. Updated on Pong message and
     /// initialised to Instant::now() when the connection is established.
-    last_pong_at: Mutex<Option<Instant>>,
+    last_pong_at: std::sync::Mutex<Option<Instant>>,
     /// Close code received from the server (if the connection ended via a
     /// Close frame). Set by `run_loop`; read by callers via
     /// [`WsClient::last_close_code`] to differentiate a normal shutdown
     /// from an app-level 4xxx error (e.g. 4001 invalid token → reauth).
-    last_close_code: Mutex<Option<u16>>,
+    last_close_code: std::sync::Mutex<Option<u16>>,
     /// Cancel token: when set to true by the control pump, the run loop
     /// exits gracefully to trigger a reconnect.
     cancel_token: Arc<AtomicBool>,
@@ -70,7 +70,7 @@ impl WsClient {
         url: String,
         token: String,
         status_tx: mpsc::Sender<ConnectionStatus>,
-        consent: Arc<Mutex<ConsentManager>>,
+        consent: Arc<tokio::sync::Mutex<ConsentManager>>,
         executor: Arc<CommandExecutor>,
         cancel_token: Arc<AtomicBool>,
     ) -> Self {
@@ -83,8 +83,8 @@ impl WsClient {
             status_tx,
             consent,
             executor,
-            last_pong_at: Mutex::new(None),
-            last_close_code: Mutex::new(None),
+            last_pong_at: std::sync::Mutex::new(None),
+            last_close_code: std::sync::Mutex::new(None),
             cancel_token,
         }
     }
@@ -101,7 +101,7 @@ impl WsClient {
     /// (forbidden) — both signal that the JWT is no longer good and
     /// needs to be re-acquired via the login flow.
     pub fn last_close_code(&self) -> Option<u16> {
-        self.last_close_code.lock().unwrap()
+        *self.last_close_code.lock().unwrap()
     }
 
     async fn set_status(&self, s: ConnectionStatus) {
