@@ -79,7 +79,7 @@
         </header>
 
         <div class="card">
-          <h3>云端连接</h3>
+          <h3>登录</h3>
 
           <div class="field">
             <label for="cloud-url">服务器地址</label>
@@ -87,47 +87,42 @@
               id="cloud-url"
               type="url"
               class="input"
-              placeholder="https://feclaw.example.com"
+              placeholder="https://feclaw.lizidaren.cn"
               autocomplete="off"
               spellcheck="false"
             />
-            <small class="hint">支持 http:// 与 https://</small>
+            <small class="hint">你的 FeClaw 服务器地址</small>
           </div>
 
           <div class="field">
-            <label for="cloud-token">访问令牌 (Token)</label>
-            <div class="input-group">
-              <input
-                id="cloud-token"
-                type="password"
-                class="input"
-                placeholder="eyJhbGciOi..."
-                autocomplete="off"
-                spellcheck="false"
-              />
-              <button
-                type="button"
-                class="btn btn-ghost"
-                id="toggle-token"
-                aria-label="显示/隐藏 Token"
-                title="显示/隐藏"
-              >👁</button>
-            </div>
-            <small class="hint">本地存于 <code>~/.feclaw/ui-settings.json</code>，请勿在公共电脑保存</small>
+            <label for="cloud-username">用户名</label>
+            <input id="cloud-username" type="text" class="input"
+              placeholder="admin" autocomplete="username" />
+          </div>
+
+          <div class="field">
+            <label for="cloud-password">密码</label>
+            <input id="cloud-password" type="password" class="input"
+              placeholder="••••••••" autocomplete="current-password" />
+            <small class="hint">密码不会保存，仅用于获取 JWT</small>
           </div>
 
           <div class="field-actions">
-            <button type="button" class="btn btn-secondary" id="test-connection">
-              <span class="btn-label">测试连接</span>
-              <span class="btn-spinner" hidden></span>
+            <button type="button" class="btn btn-primary" id="btn-login">
+              登录
             </button>
             <span id="connection-status" class="status" role="status" aria-live="polite"></span>
           </div>
         </div>
+
+        <div class="card" id="cloud-connected-card" hidden>
+          <h3>已连接</h3>
+          <p>已登录为 <span id="logged-in-as"></span></p>
+          <button type="button" class="btn btn-secondary" id="btn-disconnect">断开连接</button>
+        </div>
       </section>
 
-      <!-- 外观 Tab -->
-      <section class="tab-panel" id="tab-appearance" role="tabpanel" hidden>
+      <!-- 外观 Tab --><section class="tab-panel" id="tab-appearance" role="tabpanel" hidden>
         <header class="panel-header">
           <h2>外观</h2>
           <p class="panel-desc">主题与显示偏好</p>

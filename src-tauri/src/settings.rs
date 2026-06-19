@@ -221,3 +221,162 @@ pub async fn test_cloud_connection(url: String, token: String) -> Result<bool, S
         Err(e) => Err(format!("连接失败：{e}")),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Cloud login (Settings UI → /api/login → JWT persistence)
+// ---------------------------------------------------------------------------
+//
+// Flow:
+//   1. Settings UI submits {url, username, password}.
+//   2. We POST to {url}/api/login with JSON `{username, password}`.
+//   3. Server returns `{token, ...}` (or `{access_token, ...}` as a fallback).
+//   4. We persist `cloud_url`, `cloud_username`, `cloud_token` to config.toml
+//      and switch `mode` to Cloud. The password is NEVER written to disk —
+//      only the JWT, which is the bearer credential for subsequent requests.
+//
+// Error reporting surfaces the server's response body when available so the
+// user can see *why* the login failed (e.g. "Invalid credentials" vs a
+// network timeout). All errors come back as localized Chinese strings
+// matching the rest of the Settings UI.
+
+/// Login payload for `{url}/api/login`.
+#[derive(Debug, Serialize)]
+struct LoginRequest<'a> {
+    username: &'a str,
+    password: &'a str,
+}
+
+/// Subset of the server's login response we care about.
+#[derive(Debug, Deserialize)]
+struct LoginResponse {
+    #[serde(default, alias = "access_token")]
+    token: String,
+}
+
+/// Cloud session info surfaced to the UI. Used by the Settings page to
+/// decide whether to show the login form or the "already connected" card.
+#[derive(Debug, Serialize)]
+pub struct CloudSession {
+    pub connected: bool,
+    pub username: Option<String>,
+    pub url: Option<String>,
+}
+
+/// Inspect the current config.toml to determine if a cloud session is
+/// already active. Safe to call on every page load.
+#[tauri::command]
+pub async fn get_cloud_session() -> Result<CloudSession, String> {
+    let cfg = Config::load();
+    let connected = cfg.mode == crate::config::Mode::Cloud && cfg.cloud_token.is_some();
+    Ok(CloudSession {
+        connected,
+        username: cfg.cloud_username,
+        url: cfg.cloud_url,
+    })
+}
+
+/// POST `{url}/api/login` with the supplied credentials. On success, persist
+/// the JWT and username to `~/.feclaw/config.toml` and flip `mode` to Cloud.
+/// The password is consumed in-memory only and never written to disk.
+///
+/// Returns the JWT on success, or a user-friendly error string on failure.
+#[tauri::command]
+pub async fn cloud_login(
+    url: String,
+    username: String,
+    password: String,
+) -> Result<String, String> {
+    // ---- Validate inputs ---------------------------------------------
+    let url_trimmed = url.trim();
+    if url_trimmed.is_empty() {
+        return Err("服务器地址不能为空".to_string());
+    }
+    if username.trim().is_empty() {
+        return Err("用户名不能为空".to_string());
+    }
+    if password.is_empty() {
+        return Err("密码不能为空".to_string());
+    }
+
+    let login_url = format!("{}/api/login", url_trimmed.trim_end_matches('/'));
+    let username_owned = username.trim().to_string();
+
+    // ---- HTTP POST ---------------------------------------------------
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent(concat!("FeClaw-Desktop/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+
+    let resp = client
+        .post(&login_url)
+        .json(&LoginRequest {
+            username: &username_owned,
+            password: &password,
+        })
+        .send()
+        .await
+        .map_err(|e| format!("登录请求失败：{e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format_login_error(status.as_u16(), &body));
+    }
+
+    let body: LoginResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析登录响应失败：{e}"))?;
+
+    if body.token.trim().is_empty() {
+        return Err("服务器响应中未找到 token".to_string());
+    }
+    let token = body.token;
+
+    // ---- Persist to config.toml -------------------------------------
+    // Load the existing config so we don't clobber unrelated fields
+    // (port, host, ws_path, etc.). The password is never written.
+    let mut cfg = Config::load();
+    cfg.cloud_url = Some(url_trimmed.trim_end_matches('/').to_string());
+    cfg.cloud_username = Some(username_owned);
+    cfg.cloud_token = Some(token.clone());
+    cfg.mode = crate::config::Mode::Cloud;
+    cfg.save().map_err(|e| format!("保存配置失败：{e:#}"))?;
+
+    tracing::info!("cloud login succeeded; token length={}", token.len());
+    Ok(token)
+}
+
+/// Disconnect from the cloud: clear the stored credentials and switch the
+/// app back to local mode. The password is never stored, so this is the
+/// only cleanup needed.
+#[tauri::command]
+pub async fn cloud_disconnect() -> Result<(), String> {
+    let mut cfg = Config::load();
+    cfg.cloud_token = None;
+    cfg.cloud_username = None;
+    // Keep cloud_url so the user doesn't have to retype it next time.
+    cfg.mode = crate::config::Mode::Local;
+    cfg.save().map_err(|e| format!("保存配置失败：{e:#}"))?;
+    tracing::info!("cloud session disconnected");
+    Ok(())
+}
+
+/// Convert a non-2xx login response into a user-friendly error message.
+/// Tries to pull `detail` / `message` from the JSON body, falling back to
+/// the raw text if the body isn't valid JSON.
+fn format_login_error(status: u16, body: &str) -> String {
+    let detail = if body.is_empty() {
+        "服务器未返回详细信息".to_string()
+    } else if let Ok(json) = serde_json::from_str::<Value>(body) {
+        json.get("detail")
+            .or_else(|| json.get("message"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| body.to_string())
+    } else {
+        body.to_string()
+    };
+    format!("登录失败 ({}): {}", status, detail)
+}

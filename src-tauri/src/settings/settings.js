@@ -11,8 +11,6 @@ function getAppVersion() {
 }
 const invoke = (cmd, args) => getTauri().invoke(cmd, args);
 const KEY = {
-  cloudUrl: "cloud_url",
-  cloudToken: "cloud_token",
   autoLaunch: "auto_launch",
   startMinimized: "start_minimized",
   theme: "theme"
@@ -50,23 +48,14 @@ function setConnectionStatus(text, kind) {
   el.classList.remove("success", "error");
   if (kind !== "info") el.classList.add(kind);
 }
-function readForm() {
+function readGeneral() {
   return {
-    cloudUrl: requireEl("cloud-url").value.trim(),
-    cloudToken: requireEl("cloud-token").value,
     autoLaunch: requireEl("auto-launch").checked,
     startMinimized: requireEl("start-minimized").checked,
     theme: requireEl("theme").value
   };
 }
-function writeForm(snap) {
-  const cloudUrl = $("cloud-url");
-  if (cloudUrl && snap.cloudUrl !== void 0) cloudUrl.value = snap.cloudUrl;
-  const cloudToken = $("cloud-token");
-  if (cloudToken && snap.cloudToken !== void 0) {
-    cloudToken.value = snap.cloudToken;
-    if (snap.cloudToken) cloudToken.type = "password";
-  }
+function writeGeneral(snap) {
   const autoLaunch = $("auto-launch");
   if (autoLaunch && snap.autoLaunch !== void 0) autoLaunch.checked = snap.autoLaunch;
   const startMinimized = $("start-minimized");
@@ -76,6 +65,40 @@ function writeForm(snap) {
   const theme = $("theme");
   if (theme && snap.theme) theme.value = snap.theme;
 }
+function showLoginForm() {
+  const card = $("cloud-connected-card");
+  if (card) card.hidden = true;
+  const url = $("cloud-url");
+  const user = $("cloud-username");
+  const pass = $("cloud-password");
+  if (url) url.disabled = false;
+  if (user) user.disabled = false;
+  if (pass) pass.disabled = false;
+  const loginBtn = $("btn-login");
+  if (loginBtn) {
+    loginBtn.disabled = false;
+    const label = loginBtn.querySelector(".btn-label");
+    if (label) label.textContent = "\u767B\u5F55";
+  }
+}
+function showConnectedCard(username) {
+  const card = $("cloud-connected-card");
+  if (card) card.hidden = false;
+  const who = $("logged-in-as");
+  if (who) who.textContent = username;
+}
+function renderCloudSession(session) {
+  if (session.connected) {
+    showConnectedCard(session.username ?? "\u672A\u77E5\u7528\u6237");
+    setConnectionStatus("", "info");
+  } else {
+    showLoginForm();
+    if (session.url) {
+      const urlInput = $("cloud-url");
+      if (urlInput && !urlInput.value) urlInput.value = session.url;
+    }
+  }
+}
 async function load() {
   let map = {};
   try {
@@ -83,26 +106,28 @@ async function load() {
   } catch (e) {
     console.error("load_settings failed:", e);
     showToast("\u52A0\u8F7D\u8BBE\u7F6E\u5931\u8D25", "error");
-    return;
   }
-  writeForm({
-    cloudUrl: map[KEY.cloudUrl] ?? "",
-    cloudToken: map[KEY.cloudToken] ?? "",
+  writeGeneral({
     autoLaunch: map[KEY.autoLaunch] === "true",
     startMinimized: map[KEY.startMinimized] === "true",
     theme: map[KEY.theme] ?? "system"
   });
   applyTheme(map[KEY.theme]);
+  try {
+    const session = await invoke("get_cloud_session");
+    renderCloudSession(session);
+  } catch (e) {
+    console.error("get_cloud_session failed:", e);
+    showLoginForm();
+  }
 }
 async function save() {
-  const snap = readForm();
+  const snap = readGeneral();
   const updates = {
-    [KEY.cloudUrl]: snap.cloudUrl,
     [KEY.autoLaunch]: String(snap.autoLaunch),
     [KEY.startMinimized]: String(snap.startMinimized),
     [KEY.theme]: snap.theme
   };
-  if (snap.cloudToken) updates[KEY.cloudToken] = snap.cloudToken;
   try {
     await invoke("save_settings", { settings: updates });
     applyTheme(snap.theme);
@@ -112,38 +137,66 @@ async function save() {
     showToast(typeof e === "string" ? e : "\u4FDD\u5B58\u5931\u8D25", "error");
   }
 }
-async function testConnection() {
-  const btn = requireEl("test-connection");
-  const labelEl = btn.querySelector(".btn-label");
-  const spinner = btn.querySelector(".btn-spinner");
-  const snap = readForm();
-  if (!snap.cloudUrl) {
-    setConnectionStatus("\u8BF7\u5148\u586B\u5199\u670D\u52A1\u5668\u5730\u5740", "error");
+async function cloudLogin() {
+  const urlEl = requireEl("cloud-url");
+  const userEl = requireEl("cloud-username");
+  const passEl = requireEl("cloud-password");
+  const loginBtn = requireEl("btn-login");
+  const labelEl = loginBtn.querySelector(".btn-label");
+  const spinner = loginBtn.querySelector(".btn-spinner");
+  const url = urlEl.value.trim();
+  const user = userEl.value.trim();
+  const pass = passEl.value;
+  if (!url) {
+    setConnectionStatus("\u8BF7\u586B\u5199\u670D\u52A1\u5668\u5730\u5740", "error");
+    urlEl.focus();
     return;
   }
-  btn.disabled = true;
-  if (labelEl) labelEl.textContent = "\u6D4B\u8BD5\u4E2D";
+  if (!user) {
+    setConnectionStatus("\u8BF7\u586B\u5199\u7528\u6237\u540D", "error");
+    userEl.focus();
+    return;
+  }
+  if (!pass) {
+    setConnectionStatus("\u8BF7\u586B\u5199\u5BC6\u7801", "error");
+    passEl.focus();
+    return;
+  }
+  loginBtn.disabled = true;
+  if (labelEl) labelEl.textContent = "\u767B\u5F55\u4E2D";
   if (spinner) spinner.hidden = false;
-  setConnectionStatus("\u6B63\u5728\u8FDE\u63A5\u2026", "info");
+  setConnectionStatus("\u6B63\u5728\u767B\u5F55\u2026", "info");
   try {
-    const ok = await invoke("test_cloud_connection", {
-      url: snap.cloudUrl,
-      token: snap.cloudToken
+    await invoke("cloud_login", {
+      url,
+      username: user,
+      password: pass
     });
-    if (ok) {
-      setConnectionStatus("\u2713 \u8FDE\u63A5\u6210\u529F", "success");
-    } else {
-      setConnectionStatus("\u670D\u52A1\u5668\u8FD4\u56DE\u9519\u8BEF\u72B6\u6001\u7801", "error");
-    }
+    passEl.value = "";
+    setConnectionStatus("\u2713 \u767B\u5F55\u6210\u529F", "success");
+    showConnectedCard(user);
+    showToast("\u4E91\u7AEF\u767B\u5F55\u6210\u529F", "success");
   } catch (e) {
-    setConnectionStatus(
-      typeof e === "string" ? e : "\u8FDE\u63A5\u5931\u8D25",
-      "error"
-    );
+    const msg = typeof e === "string" ? e : "\u767B\u5F55\u5931\u8D25";
+    setConnectionStatus(msg, "error");
   } finally {
-    btn.disabled = false;
-    if (labelEl) labelEl.textContent = "\u6D4B\u8BD5\u8FDE\u63A5";
+    loginBtn.disabled = false;
+    if (labelEl) labelEl.textContent = "\u767B\u5F55";
     if (spinner) spinner.hidden = true;
+  }
+}
+async function cloudDisconnect() {
+  try {
+    await invoke("cloud_disconnect");
+    showLoginForm();
+    const session = await invoke("get_cloud_session");
+    const urlEl = $("cloud-url");
+    if (urlEl && session.url) urlEl.value = session.url;
+    setConnectionStatus("\u5DF2\u65AD\u5F00\u8FDE\u63A5", "info");
+    showToast("\u5DF2\u65AD\u5F00\u4E91\u7AEF\u8FDE\u63A5", "info");
+  } catch (e) {
+    console.error("cloud_disconnect failed:", e);
+    showToast(typeof e === "string" ? e : "\u65AD\u5F00\u5931\u8D25", "error");
   }
 }
 function switchTab(name) {
@@ -168,24 +221,32 @@ function wireTabs() {
 function wireForm() {
   const saveBtn = requireEl("save");
   const cancelBtn = requireEl("cancel");
-  const testBtn = requireEl("test-connection");
-  const toggleTok = requireEl("toggle-token");
-  const tokenIn = requireEl("cloud-token");
+  const loginBtn = requireEl("btn-login");
+  const discBtn = $("btn-disconnect");
   saveBtn.addEventListener("click", () => {
     void save();
   });
   cancelBtn.addEventListener("click", () => {
     window.close();
   });
-  testBtn.addEventListener("click", () => {
-    void testConnection();
+  loginBtn.addEventListener("click", () => {
+    void cloudLogin();
   });
-  toggleTok.addEventListener("click", () => {
-    tokenIn.type = tokenIn.type === "password" ? "text" : "password";
+  if (discBtn) discBtn.addEventListener("click", () => {
+    void cloudDisconnect();
   });
   const themeSel = requireEl("theme");
   themeSel.addEventListener("change", () => {
     applyTheme(themeSel.value);
+  });
+  ["cloud-url", "cloud-username", "cloud-password"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        void cloudLogin();
+      }
+    });
   });
 }
 function applyAppVersion() {
