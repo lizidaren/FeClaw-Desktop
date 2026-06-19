@@ -87,11 +87,12 @@ pub fn run() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+            let app_handle_for_error = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = startup(handle).await {
                     tracing::error!("startup failed: {e:#}");
                     let err_msg = format!("{e:#}");
-                    let app_handle = app.handle().clone();
+                    let app_handle = app_handle_for_error.clone();
                     std::thread::spawn(move || {
                         let _ = rfd::MessageDialog::new()
                             .set_title("FeClaw Desktop — 启动失败")
