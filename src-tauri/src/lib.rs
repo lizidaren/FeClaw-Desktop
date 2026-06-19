@@ -18,6 +18,7 @@ mod config;
 mod consent;
 mod engine;
 mod executor;
+mod settings;
 mod tray;
 mod ws;
 mod ws_types;
