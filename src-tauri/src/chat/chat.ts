@@ -1,11 +1,22 @@
 // =========================================================
-// FeClaw Desktop — Chat window
+// FeClaw Desktop — Three-panel Chat UI logic (Phase 0a V3)
 // =========================================================
-// Renders the message stream, handles WS-driven events
-// emitted by the Rust backend (chat-event), and lets the
-// user send messages via send_chat_message.
+//
+// Handles:
+//   - Agent list loading (from engine API)
+//   - Chat switching with draft save/load
+//   - Message sending and streaming
+//   - Image paste → VFS images/
+//   - Three-panel rendering
 //
 // Compiled to chat.js with esbuild (see project docs).
+
+import { store, type AgentInfo, type ChatMessage, type ChatItem } from "./store";
+import { openCreateDialog } from "./components/create-dialog";
+import { openSidePanel } from "./components/side-panel";
+import { setupInputBox, getFileCards, clearFileCards } from "./components/input-box";
+
+// ---- Tauri bridge ------------------------------------------------
 
 type TauriCore = {
   invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
@@ -19,134 +30,137 @@ type TauriGlobal = {
 
 function getTauri(): TauriCore {
   const g = (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
-  if (!g?.core) {
-    throw new Error("Tauri global not available; did you enable withGlobalTauri?");
-  }
+  if (!g?.core) throw new Error("Tauri global not available");
   return g.core;
 }
 
 const invoke = <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> =>
   getTauri().invoke<T>(cmd, args);
 
+const listen = <T>(event: string, handler: (e: { payload: T }) => void) =>
+  getTauri().listen<T>(event, handler);
+
 // ---- DOM helpers ------------------------------------------------
+
 function $<T extends HTMLElement = HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
 }
 
-// ---- Types matching Rust chat.rs --------------------------------
+// ---- Rendering ---------------------------------------------------
 
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant" | string;
-  content: string;
-  timestamp?: string;
-  agent?: string | null;
-};
-
-// Streaming / non-message events from the server. Mirrors the
-// server-side `chat_event` envelope (ws_types.rs::ChatEvent).
-type ChatEvent = {
-  id: string;
-  kind: string;            // "thinking" | "tool" | "tool_result" | "done" | ...
-  data?: unknown;
-  timestamp?: string;
-};
-
-// File operation consent request — server asks the user to allow/deny
-// a file operation (P1.2). Mirrors FileOperationRequest in ws_types.rs.
-type FileOperationRequest = {
-  op_id: string;
-  operation: string;       // "read" | "write" | "delete"
-  path: string;
-  level?: number;
-  reason?: string;
-  timestamp?: string;
-};
-
-// ---- State ------------------------------------------------------
-
-// Track which assistant messages are streaming (so we can replace
-// the placeholder body once the server says "done").
-const streamingIds = new Set<string>();
-// op_id → DOM card so we can show the resolved state.
-const pendingConsents = new Map<string, HTMLElement>();
-// Message id → DOM element so streaming events can update the right bubble.
-const messageElements = new Map<string, HTMLElement>();
-
-// ---- Render helpers ---------------------------------------------
-
-function ensureNotEmpty(): void {
-  const empty = $("empty-state");
-  if (empty) empty.remove();
-}
-
-function formatTime(ts?: string): string {
-  if (!ts) return "";
-  const n = Number(ts);
-  if (!Number.isFinite(n) || n <= 0) return "";
-  const d = new Date(n * 1000);
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-
-function scrollToBottom(): void {
-  const list = $("messages");
+function renderChatList(items: ChatItem[]): void {
+  const list = $<HTMLDivElement>("chat-list");
+  const hint = $<HTMLDivElement>("empty-list-hint");
   if (!list) return;
-  list.scrollTop = list.scrollHeight;
+
+  if (items.length === 0) {
+    if (hint) hint.style.display = "";
+    list.innerHTML = "";
+    if (hint) list.appendChild(hint);
+    return;
+  }
+
+  if (hint) hint.style.display = "none";
+  list.innerHTML = "";
+
+  for (const item of items) {
+    const el = document.createElement("div");
+    el.className = "chat-item" + (item.active ? " active" : "");
+    el.dataset.agentHash = item.agent_hash;
+    el.setAttribute("role", "option");
+    el.setAttribute("aria-selected", String(!!item.active));
+    el.innerHTML = `
+      <div class="chat-item-avatar">${item.avatar_letter}</div>
+      <div class="chat-item-info">
+        <div class="chat-item-name">${escapeHtml(item.name)}</div>
+        <div class="chat-item-preview">${escapeHtml(item.last_message)}</div>
+      </div>
+      <div class="chat-item-meta">
+        ${item.last_time ? `<span class="chat-item-time">${item.last_time}</span>` : ""}
+        ${item.unread ? '<span class="chat-item-badge"></span>' : ""}
+      </div>
+    `;
+    el.addEventListener("click", () => selectChat(item.agent_hash));
+    list.appendChild(el);
+  }
 }
 
-function renderMessage(msg: ChatMessage, opts?: { streaming?: boolean }): HTMLElement {
-  ensureNotEmpty();
-  const list = $("messages");
-  if (!list) throw new Error("messages container missing");
+function renderMessages(messages: ChatMessage[]): void {
+  const list = $<HTMLDivElement>("messages");
+  if (!list) return;
 
+  list.innerHTML = "";
+
+  if (messages.length === 0) {
+    list.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon" aria-hidden="true">F</div>
+        <h2>开始一次对话</h2>
+        <p>向 AI 助理发送消息，它会在这里回复你。</p>
+      </div>`;
+    return;
+  }
+
+  for (const msg of messages) {
+    if (msg.is_deleted) continue;
+    renderMessageEl(list, msg);
+  }
+  scrollToBottom();
+}
+
+function renderMessageEl(parent: HTMLElement, msg: ChatMessage): void {
   const wrap = document.createElement("div");
   wrap.className = `bubble ${msg.role === "user" ? "user" : "assistant"}`;
-  if (opts?.streaming) wrap.classList.add("streaming");
   wrap.dataset.id = msg.id;
 
-  const body = document.createElement("div");
-  body.className = "bubble-body";
-  body.textContent = msg.content;
+  // Image message
+  if (msg.message_type === "image" || msg.content.startsWith("data:image/")) {
+    const imgWrap = document.createElement("div");
+    imgWrap.className = "bubble-image";
+    const img = document.createElement("img");
+    img.src = msg.content;
+    img.alt = "图片";
+    imgWrap.appendChild(img);
+    wrap.appendChild(imgWrap);
+  } else {
+    const body = document.createElement("div");
+    body.className = "bubble-body";
+    body.textContent = msg.content;
+    wrap.appendChild(body);
+  }
 
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
-  const ts = formatTime(msg.timestamp);
+  const ts = msg.timestamp || formatTime(msg.created_at);
   const agentLabel = msg.agent ? ` · ${msg.agent}` : "";
   meta.textContent = ts ? `${ts}${agentLabel}` : agentLabel;
+  wrap.appendChild(meta);
 
-  wrap.appendChild(body);
-  if (ts || agentLabel) wrap.appendChild(meta);
-  list.appendChild(wrap);
-  messageElements.set(msg.id, wrap);
-  scrollToBottom();
-  return wrap;
+  parent.appendChild(wrap);
 }
 
-function renderEventPill(kind: string, label: string): void {
-  ensureNotEmpty();
-  const list = $("messages");
+function appendStreamingMessage(id: string, chunk: string): void {
+  const list = $<HTMLDivElement>("messages");
   if (!list) return;
-  const pill = document.createElement("div");
-  pill.className = `event-pill ${kind}`;
-  pill.textContent = label;
-  list.appendChild(pill);
-  scrollToBottom();
-}
-
-function appendToStreaming(id: string, chunk: string): void {
-  const el = messageElements.get(id);
-  if (!el) return;
+  let el = list.querySelector(`[data-id="${id}"]`) as HTMLElement | null;
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "bubble assistant streaming";
+    el.dataset.id = id;
+    const body = document.createElement("div");
+    body.className = "bubble-body";
+    el.appendChild(body);
+    list.appendChild(el);
+  }
   const body = el.querySelector(".bubble-body") as HTMLElement | null;
-  if (!body) return;
-  body.textContent = (body.textContent ?? "") + chunk;
+  if (body) body.textContent = (body.textContent ?? "") + chunk;
   scrollToBottom();
 }
 
 function finalizeStreaming(id: string, finalText?: string): void {
-  streamingIds.delete(id);
-  const el = messageElements.get(id);
+  const list = $<HTMLDivElement>("messages");
+  if (!list) return;
+  const el = list.querySelector(`[data-id="${id}"]`) as HTMLElement | null;
   if (!el) return;
   el.classList.remove("streaming");
   if (typeof finalText === "string") {
@@ -155,243 +169,388 @@ function finalizeStreaming(id: string, finalText?: string): void {
   }
 }
 
-function renderConsent(req: FileOperationRequest): void {
-  ensureNotEmpty();
-  const list = $("messages");
-  if (!list) return;
+// ---- Actions ----------------------------------------------------
 
-  const card = document.createElement("div");
-  card.className = "consent";
-  card.dataset.opId = req.op_id;
-
-  const title = document.createElement("div");
-  title.className = "consent-title";
-  const opLabel =
-    req.operation === "read"
-      ? "READ"
-      : req.operation === "write"
-      ? "WRITE"
-      : req.operation === "delete"
-      ? "DELETE"
-      : req.operation.toUpperCase();
-  title.textContent = `Agent 想要 ${opLabel} 一个文件`;
-
-  const pathEl = document.createElement("div");
-  pathEl.className = "consent-path";
-  pathEl.textContent = req.path;
-
-  const reasonEl = document.createElement("div");
-  reasonEl.className = "consent-reason";
-  reasonEl.textContent = req.reason ?? "请确认是否允许该操作";
-
-  const actions = document.createElement("div");
-  actions.className = "consent-actions";
-  const allow = document.createElement("button");
-  allow.className = "btn btn-primary";
-  allow.textContent = "✓ 允许";
-  const deny = document.createElement("button");
-  deny.className = "btn btn-danger";
-  deny.textContent = "✗ 拒绝";
-  actions.appendChild(allow);
-  actions.appendChild(deny);
-
-  card.appendChild(title);
-  card.appendChild(pathEl);
-  card.appendChild(reasonEl);
-  card.appendChild(actions);
-  list.appendChild(card);
-  pendingConsents.set(req.op_id, card);
-  scrollToBottom();
-
-  const resolve = async (decision: "allow" | "deny"): Promise<void> => {
-    allow.disabled = true;
-    deny.disabled = true;
-    try {
-      await invoke("send_consent_response", {
-        opId: req.op_id,
-        operation: req.operation,
-        path: req.path,
-        decision,
-      });
-      title.textContent = decision === "allow" ? "✓ 已允许" : "✗ 已拒绝";
-    } catch (e) {
-      title.textContent = "响应失败：" + (typeof e === "string" ? e : "未知错误");
+async function selectChat(agentHash: string): Promise<void> {
+  // Save current draft before switching
+  if (store.activeAgentHash) {
+    const input = $<HTMLTextAreaElement>("input");
+    if (input && input.value.trim()) {
+      try {
+        await invoke("save_draft", {
+          channel: `im:${store.activeAgentHash}`,
+          content: input.value,
+        });
+      } catch (e) {
+        console.error("save_draft failed:", e);
+      }
     }
-    pendingConsents.delete(req.op_id);
-  };
-  allow.addEventListener("click", () => void resolve("allow"));
-  deny.addEventListener("click", () => void resolve("deny"));
-}
+  }
 
-// ---- History load ------------------------------------------------
+  // Activate new chat
+  store.setActiveChat(agentHash);
+  renderChatList(store.chatItems);
 
-async function loadHistory(): Promise<void> {
+  // Load draft
+  const input = $<HTMLTextAreaElement>("input");
+  if (input) input.value = "";
   try {
-    const result = await invoke<{ messages: ChatMessage[]; path: string }>(
-      "get_chat_history",
-    );
-    if (!result.messages || result.messages.length === 0) return;
-    ensureNotEmpty();
-    for (const m of result.messages) {
-      renderMessage(m);
+    const draft = await invoke<string | null>("load_draft", {
+      channel: `im:${agentHash}`,
+    });
+    if (draft && input) {
+      input.value = draft;
+      autoResize();
     }
   } catch (e) {
-    console.error("load chat history:", e);
+    console.error("load_draft failed:", e);
   }
+
+  // Load history
+  await loadChatHistory(agentHash);
+  showActiveChat();
 }
 
-// ---- Connection status -------------------------------------------
-
-async function refreshConnectionStatus(): Promise<void> {
+async function loadChatHistory(agentHash: string): Promise<void> {
   try {
-    const status = await invoke<string>("get_connection_status");
-    applyStatus(status);
+    const msgs = await invoke<ChatMessage[]>("get_chat_history_by_agent", {
+      agentHash,
+    });
+    store.setMessages(msgs);
+    renderMessages(msgs);
   } catch (e) {
-    applyStatus("Disconnected");
+    console.error("load_chat_history failed:", e);
+    store.setMessages([]);
+    renderMessages([]);
   }
 }
-
-function applyStatus(status: string): void {
-  const pill = $("connection-indicator");
-  const label = $("connection-label");
-  if (!pill || !label) return;
-  const lower = status.toLowerCase();
-  let state = "disconnected";
-  let text = "未连接";
-  if (lower.includes("connected")) {
-    state = "connected";
-    text = "已连接";
-  } else if (lower.includes("connecting")) {
-    state = "connecting";
-    text = "连接中…";
-  } else if (lower.includes("reconnecting")) {
-    state = "reconnecting";
-    text = "重连中…";
-  } else if (lower.includes("failed")) {
-    state = "failed";
-    text = "连接失败";
-  }
-  pill.dataset.state = state;
-  label.textContent = text;
-}
-
-// ---- Send message ------------------------------------------------
 
 async function sendMessage(): Promise<void> {
   const input = $<HTMLTextAreaElement>("input");
   const btn = $<HTMLButtonElement>("btn-send");
   if (!input || !btn) return;
   const text = input.value.trim();
-  if (!text) return;
+  if (!text && getFileCards().length === 0) return;
+  if (!store.activeAgentHash) return;
 
   btn.disabled = true;
+
+  // Build message text including file card info
+  const cards = getFileCards();
+  let fullText = text;
+  if (cards.length > 0) {
+    const cardLines = cards.map((f) => {
+      const mode = f.mode === "reference" ? "引用" : "发送副本";
+      return `[文件: ${f.name} (${f.size_label}) - ${mode} - ${f.path}]`;
+    }).join("\n");
+    fullText = (fullText ? text + "\n" : "") + cardLines;
+  }
+
   input.value = "";
   autoResize();
+  clearFileCards();
+
+  // Optimistic local echo
+  const id = `msg-${Date.now()}`;
+  const ts = Math.floor(Date.now() / 1000);
+  const msg: ChatMessage = {
+    id,
+    channel: `im:${store.activeAgentHash}`,
+    agent_hash: store.activeAgentHash,
+    role: "user",
+    content: text,
+    message_type: "text",
+    created_at: ts,
+    synced: false,
+    is_deleted: false,
+    timestamp: formatTime(ts),
+  };
+
+  // Insert into DB
   try {
-    await invoke<string>("send_chat_message", { text });
-  } catch (e) {
-    const msg = typeof e === "string" ? e : "发送失败";
-    // Render an error bubble so the user sees something.
-    renderMessage({
-      id: `err-${Date.now()}`,
-      role: "assistant",
-      content: `⚠ ${msg}`,
-      timestamp: String(Math.floor(Date.now() / 1000)),
+    await invoke("insert_chat_message", {
+      id: msg.id,
+      channel: msg.channel,
+      agentHash: store.activeAgentHash,
+      role: msg.role,
+      content: msg.content,
+      messageType: msg.message_type ?? "text",
+      createdAt: ts * 1000, // ms
     });
+  } catch (e) {
+    console.error("insert_chat_message failed:", e);
+  }
+
+  store.appendMessage(msg);
+  const list = $<HTMLDivElement>("messages");
+  if (list) renderMessageEl(list, msg);
+  scrollToBottom();
+
+  // Send via WS
+  try {
+    await invoke<string>("send_chat_message", { text: fullText });
+  } catch (e) {
+    const errMsg = typeof e === "string" ? e : "发送失败";
+    store.appendMessage({
+      id: `err-${Date.now()}`,
+      channel: msg.channel,
+      agent_hash: store.activeAgentHash,
+      role: "assistant",
+      content: `⚠ ${errMsg}`,
+      message_type: "text",
+      created_at: Math.floor(Date.now() / 1000),
+    });
+    const list2 = $<HTMLDivElement>("messages");
+    if (list2) {
+      renderMessageEl(list2, {
+        id: `err-${Date.now()}`,
+        channel: msg.channel,
+        agent_hash: store.activeAgentHash,
+        role: "assistant",
+        content: `⚠ ${errMsg}`,
+        message_type: "text",
+        created_at: Math.floor(Date.now() / 1000),
+      });
+    }
   } finally {
     btn.disabled = false;
     input.focus();
   }
 }
 
-// ---- Event subscriptions -----------------------------------------
+// ---- Image paste -------------------------------------------------
+
+async function handlePaste(e: ClipboardEvent): Promise<void> {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+
+  for (const item of items) {
+    if (item.type.startsWith("image/")) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (!file) continue;
+      await saveAndInsertImage(file);
+      return;
+    }
+  }
+}
+
+async function saveAndInsertImage(file: File): Promise<void> {
+  if (!store.activeAgentHash) return;
+  const reader = new FileReader();
+  reader.onload = async (ev) => {
+    const base64 = ev.target?.result as string;
+    if (!base64) return;
+    // In V3 Phase 0a, images go to Agent VFS images/
+    // For now, embed as data URL (Phase 2+ will handle VFS write)
+    const input = $<HTMLTextAreaElement>("input");
+    if (!input) return;
+    // Append image marker to input as placeholder
+    const marker = `[image:${file.name}]`;
+    input.value = (input.value || "") + marker;
+    autoResize();
+    // TODO: invoke('save_image_to_vfs', { agent_hash, base64, filename })
+    // This is deferred to Phase 2 (VFS file manager)
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---- Tab switching ----------------------------------------------
+
+function switchTab(tabId: "chat" | "profile" | "settings"): void {
+  store.setTab(tabId);
+  document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tabId);
+  });
+  if (tabId === "settings") {
+    void invoke("open_settings_window").catch((e) => console.error("open_settings:", e));
+  }
+}
+
+// ---- Show active chat panel -------------------------------------
+
+function showActiveChat(): void {
+  const noChat = $<HTMLDivElement>("no-chat-state");
+  const activeChat = $<HTMLDivElement>("active-chat");
+  if (!noChat || !activeChat) return;
+  noChat.style.display = "none";
+  activeChat.style.display = "flex";
+
+  // Update header
+  const agent = store.agents.find((a) => a.hash === store.activeAgentHash);
+  const nameEl = $<HTMLDivElement>("chat-name");
+  const avatarEl = $<HTMLDivElement>("chat-avatar");
+  if (nameEl) nameEl.textContent = agent?.name ?? "Agent";
+  if (avatarEl) avatarEl.textContent = (agent?.name ?? "A").charAt(0).toUpperCase();
+}
+
+// ---- Init -------------------------------------------------------
+
+async function initChat(): Promise<void> {
+  // Init SQLite DB
+  try {
+    await invoke("init_db");
+  } catch (e) {
+    console.error("init_db failed:", e);
+  }
+
+  // Check and import legacy V2 history
+  try {
+    const hasLegacy = await invoke<boolean>("check_legacy_chat_history");
+    if (hasLegacy) {
+      const count = await invoke<u64>("import_chat_history");
+      console.log(`Imported ${count} legacy messages`);
+    }
+  } catch (e) {
+    console.error("import_chat_history failed:", e);
+  }
+
+  // Load permissions
+  try {
+    const perms = await invoke<{ user_id?: string; username?: string; is_admin: boolean; agent_permissions: Array<{ agent_hash: string; permission_mode: string }> }>("get_permissions");
+    store.setPermissions(perms);
+  } catch (e) {
+    console.error("get_permissions failed:", e);
+  }
+
+  // Load agents
+  try {
+    const agents = await invoke<AgentInfo[]>("list_agents");
+    store.setAgents(agents);
+    renderChatList(store.chatItems);
+
+    // Auto-select first agent if available
+    if (agents.length > 0) {
+      await selectChat(agents[0].hash);
+    }
+  } catch (e) {
+    console.error("list_agents failed:", e);
+  }
+}
+
+// ---- Composer helpers -------------------------------------------
+
+function autoResize(): void {
+  const input = $<HTMLTextAreaElement>("input");
+  if (!input) return;
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 160) + "px";
+}
+
+function scrollToBottom(): void {
+  const list = $<HTMLDivElement>("messages");
+  if (!list) return;
+  list.scrollTop = list.scrollHeight;
+}
+
+// ---- Utilities --------------------------------------------------
+
+function formatTime(ts: number | string | undefined): string {
+  if (!ts) return "";
+  const n = typeof ts === "string" ? Number(ts) : ts;
+  if (!Number.isFinite(n) || n <= 0) return "";
+  // If it looks like seconds (before year 2100 in seconds), convert to ms
+  const ms = n < 4102444800 ? n * 1000 : n;
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// ---- Event subscriptions ----------------------------------------
 
 async function subscribeEvents(): Promise<void> {
+  // chat-event from WS
   try {
-    await getTauri().listen<ChatMessage>("chat-event", (e) => {
+    await listen<ChatMessage>("chat-event", (e) => {
       const msg = e.payload;
       if (!msg || !msg.id) return;
-      const existing = messageElements.get(msg.id);
-      if (existing) {
-        // Update body text in-place (e.g. server corrected the content).
-        const body = existing.querySelector(".bubble-body") as HTMLElement | null;
-        if (body) body.textContent = msg.content;
-        finalizeStreaming(msg.id, msg.content);
-      } else {
-        renderMessage(msg);
-      }
+      if (msg.agent_hash !== store.activeAgentHash) return;
+      store.appendMessage(msg);
+      const list = $<HTMLDivElement>("messages");
+      if (list) renderMessageEl(list, msg);
+      scrollToBottom();
     });
   } catch (e) {
     console.error("listen chat-event:", e);
   }
 
+  // chat-stream for streaming messages
   try {
-    await getTauri().listen<ChatEvent>("chat-stream", (e) => {
-      const ev = e.payload;
-      if (!ev) return;
-      switch (ev.kind) {
-        case "thinking":
-          renderEventPill("thinking", "思考中…");
-          break;
-        case "tool":
-          renderEventPill("tool", `调用工具: ${describeToolCall(ev.data)}`);
-          break;
-        case "tool_result":
-          renderEventPill("tool", "工具返回完成");
-          break;
-        case "message_start": {
-          const id = (ev.data as { id?: string } | undefined)?.id ?? ev.id;
-          streamingIds.add(id);
-          renderMessage(
-            {
-              id,
-              role: "assistant",
-              content: "",
-              timestamp: ev.timestamp,
-            },
-            { streaming: true },
-          );
-          break;
+    await listen<{ id: string; kind: string; data?: unknown; timestamp?: string }>(
+      "chat-stream",
+      (e) => {
+        const ev = e.payload;
+        if (!ev) return;
+        switch (ev.kind) {
+          case "thinking":
+            renderEventPill("thinking", "思考中…");
+            break;
+          case "tool":
+            renderEventPill("tool", `调用工具: ${describeToolCall(ev.data)}`);
+            break;
+          case "tool_result":
+            renderEventPill("tool", "工具返回完成");
+            break;
+          case "message_start": {
+            const id = (ev.data as { id?: string } | undefined)?.id ?? ev.id;
+            appendStreamingMessage(id, "");
+            break;
+          }
+          case "message_chunk": {
+            const id = (ev.data as { id?: string } | undefined)?.id ?? ev.id;
+            const text = (ev.data as { text?: string } | undefined)?.text ?? "";
+            appendStreamingMessage(id, text);
+            break;
+          }
+          case "message_end": {
+            const id = (ev.data as { id?: string } | undefined)?.id ?? ev.id;
+            const final = (ev.data as { text?: string } | undefined)?.text;
+            finalizeStreaming(id, final);
+            break;
+          }
+          case "done":
+            renderEventPill("done", "✓ 完成");
+            break;
         }
-        case "message_chunk": {
-          const id = (ev.data as { id?: string } | undefined)?.id ?? ev.id;
-          const text = (ev.data as { text?: string } | undefined)?.text ?? "";
-          appendToStreaming(id, text);
-          break;
-        }
-        case "message_end": {
-          const id = (ev.data as { id?: string } | undefined)?.id ?? ev.id;
-          const final = (ev.data as { text?: string } | undefined)?.text;
-          finalizeStreaming(id, final);
-          break;
-        }
-        case "done":
-          renderEventPill("done", "✓ 完成");
-          break;
-        default:
-          // ignore unknown kinds
-          break;
-      }
-    });
+      },
+    );
   } catch (e) {
     console.error("listen chat-stream:", e);
   }
 
+  // file-operation-request
   try {
-    await getTauri().listen<FileOperationRequest>("file-operation-request", (e) => {
-      if (e.payload) renderConsent(e.payload);
-    });
+    await listen<{ op_id: string; operation: string; path: string; reason?: string }>(
+      "file-operation-request",
+      (e) => {
+        const req = e.payload;
+        if (!req) return;
+        // Render consent card inline (deferred to Phase 2)
+        console.log("file operation request:", req);
+      },
+    );
   } catch (e) {
     console.error("listen file-operation-request:", e);
   }
+}
 
-  try {
-    await getTauri().listen<string>("connection-status", (e) => {
-      applyStatus(e.payload ?? "Disconnected");
-    });
-  } catch (e) {
-    console.error("listen connection-status:", e);
-  }
+function renderEventPill(kind: string, label: string): void {
+  const list = $<HTMLDivElement>("messages");
+  if (!list) return;
+  const pill = document.createElement("div");
+  pill.className = `event-pill ${kind}`;
+  pill.textContent = label;
+  list.appendChild(pill);
+  scrollToBottom();
 }
 
 function describeToolCall(data: unknown): string {
@@ -406,72 +565,70 @@ function describeToolCall(data: unknown): string {
   }
 }
 
-// ---- Composer behaviour ------------------------------------------
+// ---- Wire -------------------------------------------------------
 
-function autoResize(): void {
-  const input = $<HTMLTextAreaElement>("input");
-  if (!input) return;
-  input.style.height = "auto";
-  input.style.height = Math.min(input.scrollHeight, 160) + "px";
-}
+function wire(): void {
+  // Set up the extended input box (file cards, attachment button)
+  setupInputBox();
 
-function wireComposer(): void {
-  const input = $<HTMLTextAreaElement>("input");
-  const send = $<HTMLButtonElement>("btn-send");
-  const clear = $<HTMLButtonElement>("btn-clear");
-  const settings = $<HTMLButtonElement>("btn-settings");
-  if (!input || !send) return;
+  // Listen for agent-created events from create-dialog
+  window.addEventListener("agent-created", ((e: CustomEvent<{ agentHash: string }>) => {
+    void selectChat(e.detail.agentHash);
+  }) as EventListener);
 
-  input.addEventListener("input", autoResize);
-  input.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" && !ev.shiftKey) {
-      ev.preventDefault();
-      void sendMessage();
+  // Tab bar
+  document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
+    const tab = btn.dataset.tab as "chat" | "profile" | "settings";
+    if (tab) {
+      btn.addEventListener("click", () => switchTab(tab));
     }
   });
-  send.addEventListener("click", () => void sendMessage());
 
-  if (clear) {
-    clear.addEventListener("click", async () => {
-      if (!window.confirm("确认清空所有对话历史？此操作不可撤销。")) return;
-      try {
-        await invoke("clear_chat_history");
-        const list = $("messages");
-        if (list) {
-          list.innerHTML = "";
-          // Re-add empty state.
-          const empty = document.createElement("div");
-          empty.className = "empty-state";
-          empty.id = "empty-state";
-          empty.innerHTML =
-            '<div class="empty-icon" aria-hidden="true">F</div>' +
-            "<h2>开始一次对话</h2>" +
-            "<p>向 AI 助理发送消息，它会在这里回复你。</p>";
-          list.appendChild(empty);
-        }
-        messageElements.clear();
-        streamingIds.clear();
-      } catch (e) {
-        console.error("clear chat history:", e);
+  // Composer
+  const input = $<HTMLTextAreaElement>("input");
+  const send = $<HTMLButtonElement>("btn-send");
+
+  if (input) {
+    input.addEventListener("input", autoResize);
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !ev.shiftKey) {
+        ev.preventDefault();
+        void sendMessage();
+      }
+    });
+    // Draft autosave on input change
+    input.addEventListener("input", () => {
+      store.setDraft(input.value);
+    });
+    // Paste image
+    input.addEventListener("paste", handlePaste);
+  }
+
+  if (send) {
+    send.addEventListener("click", () => void sendMessage());
+  }
+
+  // New chat button → open create dialog
+  const newChat = $<HTMLButtonElement>("btn-new-chat");
+  if (newChat) {
+    newChat.addEventListener("click", () => {
+      openCreateDialog();
+    });
+  }
+
+  // ⋮ button → open side panel for the active agent
+  const chatMenu = $<HTMLButtonElement>("btn-chat-menu");
+  if (chatMenu) {
+    chatMenu.addEventListener("click", () => {
+      if (store.activeAgentHash) {
+        void openSidePanel(store.activeAgentHash);
       }
     });
   }
-
-  if (settings) {
-    settings.addEventListener("click", () => {
-      void invoke("open_settings_window").catch((e) => console.error("open settings:", e));
-    });
-  }
 }
 
-// ---- Init --------------------------------------------------------
-
 document.addEventListener("DOMContentLoaded", () => {
-  wireComposer();
-  void loadHistory();
+  wire();
+  void initChat();
   void subscribeEvents();
-  void refreshConnectionStatus();
-  // Periodically poll the connection status as a fallback in case
-  // the WS pump forgets to emit.
-  window.setInterval(refreshConnectionStatus, 5000);
 });

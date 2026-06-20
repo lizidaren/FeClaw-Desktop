@@ -324,3 +324,54 @@ pub async fn get_chat_history_path() -> Result<String, String> {
 /// helpers.
 #[allow(dead_code)]
 pub(crate) fn _phantom_marker() {}
+
+// ---------------------------------------------------------------------------
+// V3 Phase 0a: list_agents + SQLite-backed history
+// ---------------------------------------------------------------------------
+
+/// Agent info returned by `GET /api/desktop/agents`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInfo {
+    pub hash: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub avatar_url: Option<String>,
+    pub permission_mode: Option<String>,
+    pub is_online: bool,
+}
+
+/// Fetch the list of agents from the engine.
+/// Calls `GET {cloud_url}/api/desktop/agents` with Bearer JWT auth.
+#[tauri::command]
+pub async fn list_agents() -> Result<Vec<AgentInfo>, String> {
+    let cfg = Config::load();
+    let token = cfg.cloud_token.clone()
+        .ok_or_else(|| "未登录：cloud_token 不存在".to_string())?;
+    let base_url = cfg.cloud_base_url()
+        .ok_or_else(|| "cloud_url 未配置".to_string())?;
+    let url = format!("{}/api/desktop/agents", base_url.trim_end_matches('/'));
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent(concat!("FeClaw-Desktop/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+
+    let resp = client
+        .get(&url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("获取 Agent 列表失败：{e}"))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("获取 Agent 列表失败 ({}): {}", resp.status(), body));
+    }
+
+    let agents: Vec<AgentInfo> = resp.json().await
+        .map_err(|e| format!("解析 Agent 列表响应失败：{e}"))?;
+
+    Ok(agents)
+}

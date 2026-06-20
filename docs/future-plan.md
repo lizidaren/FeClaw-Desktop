@@ -519,11 +519,60 @@ CREATE TABLE settings (
 > - 涉及的关键文件
 > - 引擎侧是否需要改
 > - 估计工时（人日）
-### Phase 0a — 三栏 UI 骨架 + SQLite 初始化 ✅ 第一步
+### Phase 0a — 登录/欢迎页 + 三栏 UI 骨架 + SQLite + 草稿 ✅ 第一步
 
-**目标：** 空的三栏框架能显示，创建 `feclaw.db`，旧的聊天记录能加载进来，切换聊天保留输入草稿。
+**目标：** 登录入口 → 加载权限 → 显示三栏 IM UI → 旧聊天记录可看 → 切换聊天保留草稿。
 
-**三栏布局预览：**
+#### 欢迎页 / 登录（替换现有三卡片）
+
+```
+首次启动 / 未登录时显示：
+
+┌──────────────────────────────────┐
+│                                  │
+│           FeClaw                  │
+│     你的 AI 即时通讯              │
+│                                  │
+│  ┌────────────────────────────┐  │
+│  │ 邮箱 / 用户名              │  │
+│  └────────────────────────────┘  │
+│  ┌────────────────────────────┐  │
+│  │ 密码                       │  │
+│  └────────────────────────────┘  │
+│                                  │
+│  [    登  录    ]                │
+│                                  │
+│  没有账号？注册                   │
+│  ────── 或 ──────                │
+│  自建服务 · 本地运行             │ ← 小字链接
+└──────────────────────────────────┘
+
+状态影响：
+- 登录成功 → JWT 存本地 → GET /api/user/permissions → 进入三栏 IM UI
+- 点击"自建服务" → 弹窗输入 server_url + login_url → 同上流程
+- 点击"本地运行" → 进入本地模式引导（V2 已有）
+```
+
+#### 启动流程
+
+```
+Desktop 启动
+  ├── ~/.feclaw/cloud-token 存在？
+  │   ├── 是 → 验证 JWT → GET /api/user/permissions → 进入三栏 UI
+  │   └── 否 → 显示登录界面
+  │
+  ├── 登录成功后
+  │   ├── 存储 JWT
+  │   ├── GET /api/user/permissions → 缓存到 store.permissions
+  │   ├── GET /api/desktop/agents → 填充聊天列表
+  │   ├── SQLite 初始化 feclaw.db
+  │   └── 导入旧 chat_history.json（如果有）
+  │
+  └── 进入三栏 UI
+```
+
+#### 三栏布局
+
 ```
 ┌──────┬──────────────┬─────────────────────────────┐
 │ Tab  │   聊天列表    │         聊天窗口              │
@@ -534,24 +583,63 @@ CREATE TABLE settings (
 │      │ 群/单聊混排   │                             │
 │ 🙋   │ 头像/备注/    │                             │
 │ 我的 │ 最新消息/红点  │                             │
+│      │ 订阅/权限状态  │                             │
 └──────┴──────────────┴─────────────────────────────┘
 ```
 
-**关键交付：**
-- `src-tauri/src/chat/index.html` 重写为三栏布局
-- `src-tauri/src/chat/chat.ts` + `src-tauri/src/chat/store.ts`（状态管理）
-- `src-tauri/src/db.rs`（新建）— SQLite 初始化 + 建 6 张表
-- `src-tauri/src/chat.rs` 新增命令：`list_agents` / `get_chat_history_for_agent(agent_hash)`
-- V2 兼容：检测 `chat_history.json`，有则一次性导入 `chat_messages` 表
-- **消息草稿：** 切换聊天时当前输入框内容保存到 `settings` 表（`key=draft:<channel>`），切回来恢复
-- 引擎端：新增 `GET /api/desktop/agents`（云模式）
-- 新增命令：`init_db` / `import_chat_history` / `list_agents` / `save_draft` / `load_draft`
+#### 关键交付
 
-**完成条件：** 三栏可见 + 旧消息能看 + 切换聊天保留输入内容
+| 交付 | 文件 | 说明 |
+|------|------|------|
+| 欢迎页 HTML（登录表单） | `src-tauri/src/welcome/index.html` | **重写**现有三卡片页 |
+| 登录流程 TS | `src-tauri/src/welcome/welcome.ts` | 登录/自建/本地 三路由 |
+| 三栏 HTML 骨架 | `src-tauri/src/chat/index.html` | **重写**现有单栏 |
+| 状态管理 | `src-tauri/src/chat/store.ts` | 当前Tab/聊天/消息/permissions |
+| SQLite 初始化 | `src-tauri/src/db.rs`（新建）| 建 6 张表 |
+| V2 历史导入 | `src-tauri/src/db.rs` | 检测 → 导入 → 标记已处理 |
+| 消息草稿 | `src-tauri/src/store.ts` + `db.rs` | 存 `settings:draft:<channel>` |
+| 图片存 VFS 只读 | `src-tauri/src/chat/chat.ts` | 写入 Agent VFS images/ |
+| 登录命令 | `src-tauri/src/auth.rs` | 复用 `cloud_login` |
+| 权限命令 | `src-tauri/src/welcome.rs` / `chat.rs` | `get_permissions` → 缓存 |
+| Agent 列表命令 | `src-tauri/src/chat.rs` | `list_agents` |
+| SQLite 命令 | `src-tauri/src/db.rs` | `init_db` / `import_chat_history` / `save_draft` / `load_draft` |
+| Engine 端 | `FeClaw/routers/` | `GET /api/user/permissions`（新建）+ `GET /api/desktop/agents`（新建）|
 
-**前置：** V2 文件桥接完成
+#### Tauri 命令清单
 
-**工时：** 3 天
+```rust
+// auth.rs - 已有
+#[tauri::command] async fn cloud_login(url, login_url, username, password) → Result<CloudSession>
+
+// db.rs - 新建
+#[tauri::command] fn init_db() → Result<()>
+#[tauri::command] fn check_legacy_chat_history() → Result<bool>
+#[tauri::command] fn import_chat_history() → Result<u64> // 返回导入条数
+#[tauri::command] fn save_draft(channel: String, content: String) → Result<()>
+#[tauri::command] fn load_draft(channel: String) → Result<Option<String>>
+
+// welcome.rs - 已有 + 扩展
+#[tauri::command] async fn get_permissions() → Result<UserPermissions>
+
+// chat.rs - 已有 + 扩展
+#[tauri::command] async fn list_agents() → Result<Vec<AgentInfo>>
+#[tauri::command] async fn get_chat_history(agent_hash: String) → Result<Vec<ChatMessage>>
+```
+
+#### 完成条件
+
+```
+1. 启动 → 显示登录表单
+2. 登录成功 → 进入三栏 IM UI
+3. 中栏显示 Agent 列表（从 Engine 获取）
+4. 点击 Agent → 右栏加载聊天记录（从 SQLite / Engine）
+5. 输入框打字 → 切换到其他聊天 → 切回来 → 内容保留
+6. 粘贴图片 → 存 VFS images/ → 在聊天中显示
+7. V2 遗留 chat_history.json → 启动时自动导入
+8. permissions API 已调用并缓存
+```
+
+**工时：** 4 天（+1 天用于欢迎页重写）
 
 ---
 

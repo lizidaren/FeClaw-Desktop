@@ -1,11 +1,12 @@
+// src-tauri/src/welcome/welcome.ts
 function getTauri() {
   const g = window.__TAURI__;
   if (!g?.core) {
-    throw new Error("Tauri global not available; did you enable withGlobalTauri?");
+    throw new Error("Tauri global not available");
   }
   return g.core;
 }
-const invoke = (cmd, args) => getTauri().invoke(cmd, args);
+var invoke = (cmd, args) => getTauri().invoke(cmd, args);
 function $(id) {
   return document.getElementById(id);
 }
@@ -16,134 +17,108 @@ function setStatus(text, kind = "info") {
   el.classList.remove("success", "error");
   if (kind !== "info") el.classList.add(kind);
 }
-async function saveOfficial() {
-  setStatus("\u6B63\u5728\u914D\u7F6E\u5B98\u65B9\u5E73\u53F0\u2026", "info");
-  try {
-    const result = await invoke("save_welcome_config", {
-      args: { mode: "official" }
-    });
-    if (!result.saved) {
-      setStatus("\u914D\u7F6E\u5931\u8D25\uFF1A\u670D\u52A1\u5668\u672A\u786E\u8BA4", "error");
-      return;
-    }
-    setStatus("\u2713 \u5DF2\u9009\u62E9\u5B98\u65B9\u5E73\u53F0\uFF0C\u6B63\u5728\u6253\u5F00\u767B\u5F55\u2026", "success");
-    await openCloudLogin();
-  } catch (e) {
-    const msg = typeof e === "string" ? e : "\u4FDD\u5B58\u5931\u8D25";
-    setStatus(msg, "error");
-  }
-}
-async function saveSelfhosted() {
-  const urlEl = $("server-url");
-  const loginEl = $("login-url");
-  if (!urlEl) return;
-  const url = urlEl.value.trim();
-  if (!url) {
-    setStatus("\u8BF7\u586B\u5199\u670D\u52A1\u5668\u5730\u5740", "error");
-    urlEl.focus();
+async function handleLogin() {
+  const usernameEl = $("username");
+  const passwordEl = $("password");
+  const btn = $("btn-login");
+  if (!usernameEl || !passwordEl || !btn) return;
+  const username = usernameEl.value.trim();
+  const password = passwordEl.value;
+  if (!username) {
+    setStatus("\u8BF7\u8F93\u5165\u90AE\u7BB1\u6216\u7528\u6237\u540D", "error");
+    usernameEl.focus();
     return;
   }
-  setStatus("\u6B63\u5728\u4FDD\u5B58\u2026", "info");
+  if (!password) {
+    setStatus("\u8BF7\u8F93\u5165\u5BC6\u7801", "error");
+    passwordEl.focus();
+    return;
+  }
+  btn.disabled = true;
+  setStatus("\u6B63\u5728\u767B\u5F55\u2026", "info");
   try {
-    const result = await invoke("save_welcome_config", {
-      args: {
-        mode: "selfhosted",
-        serverUrl: url,
-        loginUrl: loginEl?.value.trim() ?? ""
-      }
-    });
-    if (!result.saved) {
-      setStatus("\u914D\u7F6E\u5931\u8D25\uFF1A\u670D\u52A1\u5668\u672A\u786E\u8BA4", "error");
+    const session = await invoke(
+      "get_cloud_session"
+    );
+    if (session.connected) {
+      setStatus("\u2713 \u5DF2\u767B\u5F55\uFF0C\u6B63\u5728\u6253\u5F00\u804A\u5929\u2026", "success");
+      await openChatWindow();
       return;
     }
-    setStatus("\u2713 \u5DF2\u4FDD\u5B58\uFF0C\u6B63\u5728\u6253\u5F00\u767B\u5F55\u2026", "success");
-    await openCloudLogin();
-  } catch (e) {
-    const msg = typeof e === "string" ? e : "\u4FDD\u5B58\u5931\u8D25";
-    setStatus(msg, "error");
-  }
-}
-async function pickLocal() {
-  setStatus("\u6B63\u5728\u5207\u6362\u5230\u672C\u5730\u6A21\u5F0F\u2026", "info");
-  try {
-    const result = await invoke("save_welcome_config", {
-      args: { mode: "local" }
+    const serverUrl = session.url ?? "https://feclaw.lizidaren.cn";
+    const loginUrl = session.login_url ?? serverUrl;
+    const token = await invoke("cloud_login", {
+      url: serverUrl,
+      loginUrl,
+      username,
+      password
     });
-    if (result.redirect_to_local_setup) {
-      setStatus("\u2713 \u5DF2\u9009\u62E9\u672C\u5730\u6A21\u5F0F\uFF0C\u6B63\u5728\u6253\u5F00\u914D\u7F6E\u5411\u5BFC\u2026", "success");
-      try {
-        await invoke("open_local_setup_window");
-      } catch (e) {
-        console.error("open_local_setup_window failed:", e);
-      }
-      setTimeout(() => {
-        window.close();
-      }, 400);
-    } else {
-      setStatus("\u914D\u7F6E\u5931\u8D25\uFF1A\u672A\u89E6\u53D1\u672C\u5730\u6D41\u7A0B", "error");
-    }
+    setStatus("\u2713 \u767B\u5F55\u6210\u529F\uFF0C\u6B63\u5728\u6253\u5F00\u804A\u5929\u2026", "success");
+    await new Promise((r) => setTimeout(r, 400));
+    await openChatWindow();
   } catch (e) {
-    const msg = typeof e === "string" ? e : "\u4FDD\u5B58\u5931\u8D25";
+    const msg = typeof e === "string" ? e : e?.message ?? "\u767B\u5F55\u5931\u8D25";
     setStatus(msg, "error");
+  } finally {
+    btn.disabled = false;
   }
 }
-async function openCloudLogin() {
+async function openChatWindow() {
   try {
-    await invoke("open_settings_window");
+    await invoke("open_chat_window");
+    window.close();
   } catch (e) {
-    console.error("open_settings_window failed:", e);
-    setStatus("\u8BF7\u6253\u5F00 \u8BBE\u7F6E \u2192 \u4E91\u7AEF \u5B8C\u6210\u767B\u5F55", "info");
+    console.error("open_chat_window failed:", e);
+    setStatus("\u65E0\u6CD5\u6253\u5F00\u804A\u5929\u7A97\u53E3", "error");
   }
 }
-async function tryAutoDiscover() {
-  const urlEl = $("server-url");
-  const loginEl = $("login-url");
-  if (!urlEl) return;
-  const url = urlEl.value.trim();
-  if (!url) return;
+async function handleSelfhosted() {
+  setStatus("\u6B63\u5728\u6253\u5F00\u81EA\u5EFA\u670D\u52A1\u914D\u7F6E\u2026", "info");
   try {
-    const body = await invoke("discover_well_known", { url });
-    if (body && loginEl) {
-      const parsed = JSON.parse(body);
-      const endpoint = parsed.auth?.endpoint;
-      if (endpoint && !loginEl.value) {
-        loginEl.value = endpoint.replace(/\/api\/auth\/login\/?$/, "");
-      }
-    }
-  } catch {
+    await invoke("open_local_setup_window");
+    setTimeout(() => {
+      window.close();
+    }, 400);
+  } catch (e) {
+    console.error("open_local_setup_window failed:", e);
+    setStatus("\u65E0\u6CD5\u6253\u5F00\u914D\u7F6E\u5411\u5BFC", "error");
   }
 }
-let debounceTimer;
-function debounceAutoDiscover() {
-  if (debounceTimer) window.clearTimeout(debounceTimer);
-  debounceTimer = window.setTimeout(() => {
-    void tryAutoDiscover();
-  }, 800);
+function handleRegister() {
+  setStatus("\u8BF7\u8BBF\u95EE\u5B98\u65B9\u5E73\u53F0\u6CE8\u518C\u8D26\u53F7", "info");
 }
 function wire() {
-  document.querySelectorAll(".card").forEach((card) => {
-    card.addEventListener("click", (ev) => {
-      const target = ev.target;
-      if (target.closest(".selfhosted-form")) return;
-      card.querySelector(".card-foot button")?.click();
+  const btnLogin = $("btn-login");
+  const btnSelfhosted = $("btn-selfhosted");
+  const btnRegister = $("btn-register");
+  const passwordEl = $("password");
+  const usernameEl = $("username");
+  if (btnLogin) {
+    btnLogin.addEventListener("click", () => void handleLogin());
+  }
+  if (btnSelfhosted) {
+    btnSelfhosted.addEventListener("click", (e) => {
+      e.preventDefault();
+      void handleSelfhosted();
     });
-    card.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") {
+  }
+  if (btnRegister) {
+    btnRegister.addEventListener("click", (e) => {
+      e.preventDefault();
+      handleRegister();
+    });
+  }
+  if (passwordEl) {
+    passwordEl.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
         ev.preventDefault();
-        card.querySelector(".card-foot button")?.click();
+        void handleLogin();
       }
     });
-  });
-  document.querySelectorAll("[data-mode]").forEach((btn) => {
-    const mode = btn.dataset.mode;
-    btn.addEventListener("click", () => {
-      if (mode === "official") void saveOfficial();
-      else if (mode === "selfhosted") void saveSelfhosted();
-      else if (mode === "local") void pickLocal();
-    });
-  });
-  const urlEl = $("server-url");
-  if (urlEl) urlEl.addEventListener("input", debounceAutoDiscover);
+  }
+  if (usernameEl) {
+    usernameEl.focus();
+  }
 }
 document.addEventListener("DOMContentLoaded", () => {
   wire();

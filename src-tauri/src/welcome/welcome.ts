@@ -1,14 +1,15 @@
 // =========================================================
-// FeClaw Desktop — Welcome page
+// FeClaw Desktop — Welcome page (login form)
 // =========================================================
 //
-// Three-card layout: official / selfhosted / local.
-// Persists the selection to `~/.feclaw/config.toml` via the
-// `save_welcome_config` Tauri command.
+// Flow:
+//   - Login form → cloud_login → JWT stored in config.toml
+//   - On success → close welcome, open chat window
+//   - "自建服务·本地运行" → open local_setup window
 //
-// The compiled bundle is `welcome.js` (built with esbuild — see
-// project docs). The page is loaded inside a Tauri WebviewWindow
-// via `welcome::open_welcome_window` on first launch.
+// The compiled bundle is welcome.js (built with esbuild).
+// The page is loaded inside a Tauri WebviewWindow via
+// `welcome::open_welcome_window` on first launch.
 
 type TauriCore = {
   invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
@@ -17,7 +18,7 @@ type TauriCore = {
 function getTauri(): TauriCore {
   const g = (window as unknown as { __TAURI__?: { core?: TauriCore } }).__TAURI__;
   if (!g?.core) {
-    throw new Error("Tauri global not available; did you enable withGlobalTauri?");
+    throw new Error("Tauri global not available");
   }
   return g.core;
 }
@@ -38,160 +39,139 @@ function setStatus(text: string, kind: "info" | "success" | "error" = "info"): v
   if (kind !== "info") el.classList.add(kind);
 }
 
-type WelcomeResult = {
-  saved: boolean;
-  redirect_to_local_setup: boolean;
-  mode: string;
-};
+// ---- Login handler ---------------------------------------------
+async function handleLogin(): Promise<void> {
+  const usernameEl = $<HTMLInputElement>("username");
+  const passwordEl = $<HTMLInputElement>("password");
+  const btn = $<HTMLButtonElement>("btn-login");
+  if (!usernameEl || !passwordEl || !btn) return;
 
-// ---- Save handlers ---------------------------------------------
-async function saveOfficial(): Promise<void> {
-  setStatus("正在配置官方平台…", "info");
-  try {
-    const result = await invoke<WelcomeResult>("save_welcome_config", {
-      args: { mode: "official" },
-    });
-    if (!result.saved) {
-      setStatus("配置失败：服务器未确认", "error");
-      return;
-    }
-    setStatus("✓ 已选择官方平台，正在打开登录…", "success");
-    await openCloudLogin();
-  } catch (e) {
-    const msg = typeof e === "string" ? e : "保存失败";
-    setStatus(msg, "error");
-  }
-}
+  const username = usernameEl.value.trim();
+  const password = passwordEl.value;
 
-async function saveSelfhosted(): Promise<void> {
-  const urlEl = $<HTMLInputElement>("server-url");
-  const loginEl = $<HTMLInputElement>("login-url");
-  if (!urlEl) return;
-  const url = urlEl.value.trim();
-  if (!url) {
-    setStatus("请填写服务器地址", "error");
-    urlEl.focus();
+  if (!username) {
+    setStatus("请输入邮箱或用户名", "error");
+    usernameEl.focus();
     return;
   }
-  setStatus("正在保存…", "info");
+  if (!password) {
+    setStatus("请输入密码", "error");
+    passwordEl.focus();
+    return;
+  }
+
+  btn.disabled = true;
+  setStatus("正在登录…", "info");
+
   try {
-    const result = await invoke<WelcomeResult>("save_welcome_config", {
-      args: {
-        mode: "selfhosted",
-        serverUrl: url,
-        loginUrl: loginEl?.value.trim() ?? "",
-      },
-    });
-    if (!result.saved) {
-      setStatus("配置失败：服务器未确认", "error");
+    // Load cloud session to get the URLs
+    const session = await invoke<{ connected: boolean; url?: string; login_url?: string }>(
+      "get_cloud_session",
+    );
+
+    // If already connected, just proceed to chat
+    if (session.connected) {
+      setStatus("✓ 已登录，正在打开聊天…", "success");
+      await openChatWindow();
       return;
     }
-    setStatus("✓ 已保存，正在打开登录…", "success");
-    await openCloudLogin();
-  } catch (e) {
-    const msg = typeof e === "string" ? e : "保存失败";
-    setStatus(msg, "error");
-  }
-}
 
-async function pickLocal(): Promise<void> {
-  setStatus("正在切换到本地模式…", "info");
-  try {
-    const result = await invoke<WelcomeResult>("save_welcome_config", {
-      args: { mode: "local" },
+    // Otherwise do the login
+    // We need server URL - for official mode use feclaw.lizidaren.cn
+    const serverUrl = session.url ?? "https://feclaw.lizidaren.cn";
+    const loginUrl = session.login_url ?? serverUrl;
+
+    const token = await invoke<string>("cloud_login", {
+      url: serverUrl,
+      loginUrl: loginUrl,
+      username,
+      password,
     });
-    if (result.redirect_to_local_setup) {
-      setStatus("✓ 已选择本地模式，正在打开配置向导…", "success");
-      // Open the local-setup wizard and close the welcome window.
-      try {
-        await invoke("open_local_setup_window");
-      } catch (e) {
-        console.error("open_local_setup_window failed:", e);
-      }
-      setTimeout(() => {
-        window.close();
-      }, 400);
-    } else {
-      setStatus("配置失败：未触发本地流程", "error");
-    }
-  } catch (e) {
-    const msg = typeof e === "string" ? e : "保存失败";
+
+    setStatus("✓ 登录成功，正在打开聊天…", "success");
+    // Small delay so user sees success message
+    await new Promise((r) => setTimeout(r, 400));
+    await openChatWindow();
+  } catch (e: unknown) {
+    const msg = typeof e === "string" ? e : (e as { message?: string })?.message ?? "登录失败";
     setStatus(msg, "error");
+  } finally {
+    btn.disabled = false;
   }
 }
 
-async function openCloudLogin(): Promise<void> {
+async function openChatWindow(): Promise<void> {
   try {
-    await invoke("open_settings_window");
+    await invoke("open_chat_window");
+    // Close welcome window after opening chat
+    window.close();
   } catch (e) {
-    // Fall back to telling the user to open Settings manually.
-    console.error("open_settings_window failed:", e);
-    setStatus("请打开 设置 → 云端 完成登录", "info");
+    console.error("open_chat_window failed:", e);
+    setStatus("无法打开聊天窗口", "error");
   }
 }
 
-// ---- Optional: auto-discover login URL via /.well-known ---------
-async function tryAutoDiscover(): Promise<void> {
-  const urlEl = $<HTMLInputElement>("server-url");
-  const loginEl = $<HTMLInputElement>("login-url");
-  if (!urlEl) return;
-  const url = urlEl.value.trim();
-  if (!url) return;
-  // Only auto-discover when login URL is empty AND user has paused
-  // typing for a moment — simple debounce handled by the input event.
+// ---- Self-hosted / local ----------------------------------------
+async function handleSelfhosted(): Promise<void> {
+  setStatus("正在打开自建服务配置…", "info");
+  // For now, redirect to local_setup
   try {
-    const body = await invoke<string | null>("discover_well_known", { url });
-    if (body && loginEl) {
-      const parsed = JSON.parse(body) as { auth?: { endpoint?: string } };
-      const endpoint = parsed.auth?.endpoint;
-      if (endpoint && !loginEl.value) {
-        loginEl.value = endpoint.replace(/\/api\/auth\/login\/?$/, "");
-      }
-    }
-  } catch {
-    /* ignore — auto-discover is best-effort */
+    await invoke("open_local_setup_window");
+    setTimeout(() => {
+      window.close();
+    }, 400);
+  } catch (e) {
+    console.error("open_local_setup_window failed:", e);
+    setStatus("无法打开配置向导", "error");
   }
 }
 
-let debounceTimer: number | undefined;
-function debounceAutoDiscover(): void {
-  if (debounceTimer) window.clearTimeout(debounceTimer);
-  debounceTimer = window.setTimeout(() => {
-    void tryAutoDiscover();
-  }, 800);
+function handleRegister(): void {
+  // In the future this would open a registration URL
+  // For now, show a message pointing to the platform
+  setStatus("请访问官方平台注册账号", "info");
 }
 
 // ---- Wiring -----------------------------------------------------
 function wire(): void {
-  // Card click → same as the embedded button.
-  document.querySelectorAll<HTMLElement>(".card").forEach((card) => {
-    card.addEventListener("click", (ev) => {
-      // Don't trigger when clicking inside the self-hosted form.
-      const target = ev.target as HTMLElement;
-      if (target.closest(".selfhosted-form")) return;
-      card.querySelector<HTMLButtonElement>(".card-foot button")?.click();
+  const btnLogin = $<HTMLButtonElement>("btn-login");
+  const btnSelfhosted = $<HTMLAnchorElement>("btn-selfhosted");
+  const btnRegister = $<HTMLAnchorElement>("btn-register");
+  const passwordEl = $<HTMLInputElement>("password");
+  const usernameEl = $<HTMLInputElement>("username");
+
+  if (btnLogin) {
+    btnLogin.addEventListener("click", () => void handleLogin());
+  }
+
+  if (btnSelfhosted) {
+    btnSelfhosted.addEventListener("click", (e) => {
+      e.preventDefault();
+      void handleSelfhosted();
     });
-    card.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") {
+  }
+
+  if (btnRegister) {
+    btnRegister.addEventListener("click", (e) => {
+      e.preventDefault();
+      handleRegister();
+    });
+  }
+
+  // Enter key on password triggers login
+  if (passwordEl) {
+    passwordEl.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
         ev.preventDefault();
-        card.querySelector<HTMLButtonElement>(".card-foot button")?.click();
+        void handleLogin();
       }
     });
-  });
+  }
 
-  // Buttons.
-  document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach((btn) => {
-    const mode = btn.dataset.mode;
-    btn.addEventListener("click", () => {
-      if (mode === "official") void saveOfficial();
-      else if (mode === "selfhosted") void saveSelfhosted();
-      else if (mode === "local") void pickLocal();
-    });
-  });
-
-  // Auto-discover when the user types a server URL.
-  const urlEl = $<HTMLInputElement>("server-url");
-  if (urlEl) urlEl.addEventListener("input", debounceAutoDiscover);
+  // Auto-focus username field
+  if (usernameEl) {
+    usernameEl.focus();
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {

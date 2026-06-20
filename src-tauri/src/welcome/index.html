@@ -3,68 +3,44 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>欢迎使用 FeClaw Desktop</title>
+  <title>欢迎使用 FeClaw</title>
   <link rel="stylesheet" href="welcome.css" />
 </head>
 <body>
   <div class="page">
     <header class="hero">
       <div class="hero-mark" aria-hidden="true">F</div>
-      <h1>欢迎使用 FeClaw Desktop</h1>
-      <p class="subtitle">选择一种使用方式，即可开始</p>
+      <h1>FeClaw</h1>
+      <p class="subtitle">你的 AI 即时通讯</p>
     </header>
 
-    <main class="cards" id="cards">
-      <article class="card" data-mode="official" tabindex="0" role="button" aria-label="官方平台">
-        <div class="card-icon" aria-hidden="true">★</div>
-        <h2>官方平台</h2>
-        <p>连接到 <code>feclaw.lizidaren.cn</code>，开箱即用</p>
-        <ul class="bullets">
-          <li>无需配置服务器</li>
-          <li>使用 Platform 账号登录</li>
-          <li>功能持续同步</li>
-        </ul>
-        <div class="card-foot">
-          <button class="btn btn-primary" data-mode="official">使用官方平台</button>
-        </div>
-      </article>
-
-      <article class="card" data-mode="selfhosted" tabindex="0" role="button" aria-label="自建服务器">
-        <div class="card-icon" aria-hidden="true">⚙</div>
-        <h2>自建服务器</h2>
-        <p>连接到你部署的 FeClaw 引擎</p>
-        <div class="selfhosted-form" id="selfhosted-form">
-          <label>
-            <span>服务器地址</span>
-            <input id="server-url" type="url" placeholder="https://feclaw.example.com" autocomplete="off" spellcheck="false" />
-          </label>
-          <label>
-            <span>登录地址（可选）</span>
-            <input id="login-url" type="url" placeholder="留空则使用服务器地址" autocomplete="off" spellcheck="false" />
-            <small>大多数自建用户可以留空；只有当你使用独立的 OAuth/Platform 服务时才需要填写</small>
-          </label>
-        </div>
-        <div class="card-foot">
-          <button class="btn btn-primary" data-mode="selfhosted" id="btn-selfhosted-save">保存并继续</button>
-        </div>
-      </article>
-
-      <article class="card" data-mode="local" tabindex="0" role="button" aria-label="本地模式">
-        <div class="card-icon" aria-hidden="true">▶</div>
-        <h2>本地模式</h2>
-        <p>在本地电脑上运行 FeClaw 引擎</p>
-        <ul class="bullets">
-          <li>完全离线运行</li>
-          <li>需要 Git 和 Python 3.10+</li>
-          <li>首次启动会克隆引擎仓库</li>
-        </ul>
-        <div class="card-foot">
-          <button class="btn btn-secondary" data-mode="local">配置本地环境</button>
-        </div>
-      </article>
+    <main class="login-form" id="login-form">
+      <div class="form-group">
+        <label for="username">邮箱 / 用户名</label>
+        <input
+          id="username"
+          type="text"
+          placeholder="请输入邮箱或用户名"
+          autocomplete="username"
+          spellcheck="false"
+        />
+      </div>
+      <div class="form-group">
+        <label for="password">密码</label>
+        <input
+          id="password"
+          type="password"
+          placeholder="请输入密码"
+          autocomplete="current-password"
+        />
+      </div>
+      <button type="button" class="btn btn-primary" id="btn-login">登 录</button>
     </main>
 
-    <footer class="page-foot">
+    <footer class="login-foot">
+      <a href="#" id="btn-register">没有账号？注册</a>
+      <span class="divider">— 或 —</span>
+      <a href="#" id="btn-selfhosted">自建服务 · 本地运行</a>
       <span id="status" class="status" role="status" aria-live="polite"></span>
     </footer>
   </div>

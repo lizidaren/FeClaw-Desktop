@@ -8,43 +8,91 @@
 </head>
 <body data-theme="system">
   <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true">F</div>
-        <div class="brand-text">
-          <div class="brand-title">FeClaw Desktop</div>
-          <div class="brand-subtitle">与 AI 助理对话</div>
+
+    <!-- Left Tab Bar -->
+    <nav class="tab-bar" id="tab-bar" aria-label="功能导航">
+      <button class="tab-btn active" data-tab="chat" title="聊天">
+        <span class="tab-icon" aria-hidden="true">💬</span>
+        <span class="tab-label">聊天</span>
+      </button>
+      <button class="tab-btn" data-tab="profile" title="我的">
+        <span class="tab-icon" aria-hidden="true">🙋</span>
+        <span class="tab-label">我的</span>
+      </button>
+      <button class="tab-btn" data-tab="settings" title="设置">
+        <span class="tab-icon" aria-hidden="true">⚙</span>
+        <span class="tab-label">设置</span>
+      </button>
+    </nav>
+
+    <!-- Middle: Chat List Panel -->
+    <aside class="chat-list-panel" id="chat-list-panel">
+      <header class="panel-header">
+        <h2 class="panel-title" id="panel-title">聊天</h2>
+        <button type="button" class="icon-btn" id="btn-new-chat" title="新建聊天">+</button>
+      </header>
+      <div class="chat-list" id="chat-list" role="listbox" aria-label="聊天列表">
+        <!-- Chat items populated by JS -->
+        <div class="empty-list-hint" id="empty-list-hint">
+          <span>暂无聊天</span>
+          <small>从右侧选择一个 Agent 开始对话</small>
         </div>
       </div>
-      <div class="topbar-right">
-        <span id="connection-indicator" class="conn-pill" data-state="disconnected">
-          <span class="dot" aria-hidden="true"></span>
-          <span id="connection-label">未连接</span>
-        </span>
-        <button type="button" class="icon-btn" id="btn-clear" title="清空对话历史">⌫</button>
-        <button type="button" class="icon-btn" id="btn-settings" title="打开设置">⚙</button>
-      </div>
-    </header>
+    </aside>
 
-    <main class="messages" id="messages" aria-live="polite">
-      <div class="empty-state" id="empty-state">
-        <div class="empty-icon" aria-hidden="true">F</div>
-        <h2>开始一次对话</h2>
-        <p>向 AI 助理发送消息，它会在这里回复你。</p>
+    <!-- Right: Chat Window Panel -->
+    <main class="chat-window-panel" id="chat-window-panel">
+      <!-- No chat selected state -->
+      <div class="no-chat-state" id="no-chat-state">
+        <div class="no-chat-icon" aria-hidden="true">F</div>
+        <h2>选择一个 Agent 开始聊天</h2>
+        <p>从左侧列表选择一个 AI 助理，即可开始对话</p>
+      </div>
+
+      <!-- Active chat -->
+      <div class="active-chat" id="active-chat" style="display:none;">
+        <header class="chat-header" id="chat-header">
+          <div class="chat-header-info">
+            <div class="chat-avatar" id="chat-avatar" aria-hidden="true">A</div>
+            <div class="chat-header-text">
+              <div class="chat-name" id="chat-name">Agent</div>
+              <div class="chat-status" id="chat-status">在线</div>
+            </div>
+          </div>
+          <div class="chat-header-actions">
+            <button type="button" class="icon-btn" id="btn-chat-menu" title="更多">⋮</button>
+          </div>
+        </header>
+
+        <div class="messages" id="messages" aria-live="polite">
+          <!-- Messages rendered by JS -->
+        </div>
+
+        <footer class="composer">
+          <textarea
+            id="input"
+            class="input"
+            rows="1"
+            placeholder="输入消息，按 Enter 发送（Shift+Enter 换行）"
+            autocomplete="off"
+            spellcheck="false"
+          ></textarea>
+          <button type="button" class="btn btn-primary" id="btn-send">发送</button>
+        </footer>
       </div>
     </main>
 
-    <footer class="composer">
-      <textarea
-        id="input"
-        class="input"
-        rows="1"
-        placeholder="输入消息，按 Enter 发送（Shift+Enter 换行）"
-        autocomplete="off"
-        spellcheck="false"
-      ></textarea>
-      <button type="button" class="btn btn-primary" id="btn-send">发送</button>
-    </footer>
+  </div>
+
+  <!-- Profile Panel (left sidebar extended view) -->
+  <div class="profile-panel" id="profile-panel" style="display:none;">
+    <h2>我的</h2>
+    <div class="profile-info" id="profile-info">
+      <!-- username, permissions summary -->
+    </div>
+    <div class="permission-summary" id="permission-summary">
+      <!-- per-agent permission list -->
+    </div>
   </div>
 
   <script type="module" src="chat.js"></script>

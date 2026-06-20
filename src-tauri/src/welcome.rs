@@ -202,3 +202,59 @@ pub async fn open_welcome_window<R: tauri::Runtime>(
 pub fn config_path() -> PathBuf {
     Config::config_path()
 }
+
+// ---------------------------------------------------------------------------
+// Permissions (V3 Phase 0a)
+// ---------------------------------------------------------------------------
+
+/// User permissions returned by the engine's `GET /api/user/permissions`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserPermissions {
+    pub user_id: Option<String>,
+    pub username: Option<String>,
+    pub is_admin: bool,
+    pub agent_permissions: Vec<AgentPermission>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPermission {
+    pub agent_hash: String,
+    pub permission_mode: String,
+}
+
+/// Fetch user permissions from the engine.
+/// Calls `GET {cloud_url}/api/user/permissions` with Bearer JWT auth.
+#[tauri::command]
+pub async fn get_permissions() -> Result<UserPermissions, String> {
+    let cfg = Config::load();
+    let token = cfg.cloud_token.clone()
+        .ok_or_else(|| "未登录：cloud_token 不存在".to_string())?;
+    let base_url = cfg.cloud_base_url()
+        .ok_or_else(|| "cloud_url 未配置".to_string())?;
+    let url = format!("{}/api/user/permissions", base_url.trim_end_matches('/'));
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent(concat!("FeClaw-Desktop/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+
+    let resp = client
+        .get(&url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("获取权限失败：{e}"))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("获取权限失败 ({}): {}", resp.status(), body));
+    }
+
+    let perms: UserPermissions = resp.json().await
+        .map_err(|e| format!("解析权限响应失败：{e}"))?;
+
+    Ok(perms)
+}

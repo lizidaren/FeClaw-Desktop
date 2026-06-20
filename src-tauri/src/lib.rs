@@ -17,12 +17,15 @@ mod autostart;
 mod chat;
 mod config;
 mod consent;
+mod create;
+mod db;
 mod engine;
 mod executor;
 mod file_bridge;
 mod file_ops;
 mod local_setup;
 mod settings;
+mod side_panel;
 mod tray;
 mod welcome;
 mod ws;
@@ -111,6 +114,7 @@ pub fn run() {
             welcome::save_welcome_config,
             welcome::discover_well_known,
             welcome::open_welcome_window,
+            welcome::get_permissions,
             chat::get_chat_history,
             chat::append_chat_message,
             chat::clear_chat_history,
@@ -119,6 +123,18 @@ pub fn run() {
             chat::get_connection_status,
             chat::get_chat_history_path,
             chat::send_consent_response,
+            chat::list_agents,
+            chat::get_chat_history_by_agent,
+            chat::insert_chat_message,
+            chat::delete_chat_message,
+            create::create_agent,
+            create::create_group_placeholder,
+            create::pick_local_file,
+            db::init_db,
+            db::check_legacy_chat_history,
+            db::import_chat_history,
+            db::save_draft,
+            db::load_draft,
             local_setup::check_git_installed,
             local_setup::check_python_version,
             local_setup::clone_feclaw,
@@ -130,6 +146,10 @@ pub fn run() {
             local_setup::save_local_engine_config,
             local_setup::default_engine_dest,
             local_setup::open_local_setup_window,
+            side_panel::get_agent_panel_info,
+            side_panel::update_agent_alias,
+            side_panel::toggle_pin,
+            side_panel::toggle_dnd,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
