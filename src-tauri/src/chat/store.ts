@@ -56,6 +56,33 @@ export type ChatItem = {
   last_time: string;
   unread: boolean;
   active?: boolean;
+  // Group chat support
+  is_group?: boolean;
+  group_id?: string;
+};
+
+export type GroupInfo = {
+  id: string;
+  name: string;
+  announcement: string;
+  memberCount: number;
+  createdAt: number;
+  // client-only fields
+  unreadCount: number;
+  lastMessage?: string;
+};
+
+export type GroupMessage = {
+  id: string;
+  group_id: string;
+  sender_type: "user" | "agent";
+  sender_hash?: string;
+  sender_name?: string;
+  content: string;
+  message_type: string;
+  attachments?: Attachment[];
+  created_at: number;
+  timestamp?: string;
 };
 
 // ---- Store -----------------------------------------------------
@@ -81,6 +108,15 @@ class Store {
 
   // Draft text for the active chat
   draft: string = "";
+
+  // Group list
+  groups: GroupInfo[] = [];
+
+  // Currently active group id
+  activeGroupId: string | null = null;
+
+  // Group messages: map from group_id -> messages
+  groupMessages: Map<string, GroupMessage[]> = new Map();
 
   // Callbacks for reactive updates
   private listeners: Set<(store: Store) => void> = new Set();
@@ -114,10 +150,24 @@ class Store {
     if (this.activeAgentHash === agentHash) return;
     this.activeAgentHash = agentHash;
     this.messages = [];
+    this.activeGroupId = null;
     // Update active state in chat items
     this.chatItems = this.chatItems.map((item) => ({
       ...item,
-      active: item.agent_hash === agentHash,
+      active: !item.is_group && item.agent_hash === agentHash,
+    }));
+    this.notify();
+  }
+
+  setActiveGroup(groupId: string | null): void {
+    if (this.activeGroupId === groupId) return;
+    this.activeGroupId = groupId;
+    this.activeAgentHash = null;
+    this.messages = [];
+    // Update active state in chat items
+    this.chatItems = this.chatItems.map((item) => ({
+      ...item,
+      active: item.is_group && item.group_id === groupId,
     }));
     this.notify();
   }
@@ -134,6 +184,46 @@ class Store {
 
   setDraft(text: string): void {
     this.draft = text;
+    this.notify();
+  }
+
+  // ---- Group methods ----
+
+  setGroups(groups: GroupInfo[]): void {
+    this.groups = groups;
+    // Rebuild group chat items
+    const groupItems: ChatItem[] = groups.map((g) => ({
+      agent_hash: g.id,
+      name: g.name,
+      avatar_letter: "👥",
+      last_message: g.lastMessage ?? "",
+      last_time: "",
+      unread: g.unreadCount > 0,
+      active: g.id === this.activeGroupId,
+      is_group: true,
+      group_id: g.id,
+    }));
+    // Merge with agent chat items, keeping all
+    this.chatItems = [...this.chatItems, ...groupItems];
+    this.notify();
+  }
+
+  getGroupById(id: string): GroupInfo | undefined {
+    return this.groups.find((g) => g.id === id);
+  }
+
+  setGroupMessages(groupId: string, msgs: GroupMessage[]): void {
+    this.groupMessages.set(groupId, msgs);
+    this.notify();
+  }
+
+  appendGroupMessage(groupId: string, msg: GroupMessage): void {
+    const existing = this.groupMessages.get(groupId) ?? [];
+    this.groupMessages.set(groupId, [...existing, msg]);
+    // Update last message on group
+    this.groups = this.groups.map((g) =>
+      g.id === groupId ? { ...g, lastMessage: msg.content } : g
+    );
     this.notify();
   }
 

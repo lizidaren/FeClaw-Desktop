@@ -24,6 +24,7 @@ mod executor;
 mod file_bridge;
 mod file_manager;
 mod file_ops;
+mod group;
 mod local_setup;
 mod right_click;
 mod settings;
@@ -180,6 +181,14 @@ pub fn run() {
             right_click::unregister_right_click,
             right_click::is_right_click_registered,
             right_click::get_executable_path,
+            group::list_groups,
+            group::get_group_detail,
+            group::get_group_messages,
+            group::create_group,
+            group::add_group_member,
+            group::remove_group_member,
+            group::delete_group,
+            chat::send_group_message,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -325,6 +334,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         consent,
         executor,
         cancel_token.clone(),
+        Some(app.clone()),
     );
 
     // 7. Status pump — updates AppState + tray icon.

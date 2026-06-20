@@ -1082,10 +1082,9 @@ function buildComposerToolbar(): void {
         </button>
         <div style="border-top: 1px solid var(--border-soft); margin: 4px 0;"></div>
         <div class="attach-dropdown-section">群组</div>
-        <button type="button" class="attach-item disabled" id="attach-group" title="Phase 4 实现">
+        <button type="button" class="attach-item" id="attach-group" title="创建群聊">
           <span class="attach-item-icon">👥</span>
           <span class="attach-item-text">创建群聊</span>
-          <span class="attach-item-badge">待实现</span>
         </button>
       </div>
     </div>
@@ -1122,6 +1121,21 @@ function buildComposerToolbar(): void {
 
   document.getElementById("attach-cloud")?.addEventListener("click", () => {
     openCloudBrowser();
+  });
+
+  document.getElementById("attach-group")?.addEventListener("click", () => {
+    closeMenu();
+    // Open create dialog with group mode
+    import("../components/create-dialog").then(({ openCreateDialog }) => {
+      openCreateDialog();
+      // After dialog opens, select the group radio button
+      setTimeout(() => {
+        const groupRadio = document.querySelector<HTMLInputElement>('input[name="agent-type"][value="group"]');
+        if (groupRadio) groupRadio.checked = true;
+        // Trigger change event to show group members
+        groupRadio?.dispatchEvent(new Event("change", { bubbles: true }));
+      }, 50);
+    });
   });
 
   // Close menu on outside click

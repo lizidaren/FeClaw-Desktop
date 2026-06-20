@@ -11,7 +11,7 @@
 //
 // Compiled to chat.js with esbuild (see project docs).
 
-import { store, type AgentInfo, type ChatMessage, type ChatItem, type Attachment } from "./store";
+import { store, type AgentInfo, type ChatMessage, type ChatItem, type Attachment, type GroupInfo, type GroupMessage } from "./store";
 import { openCreateDialog } from "./components/create-dialog";
 import { openSidePanel } from "./components/side-panel";
 import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImageCards, clearImageCards } from "./components/input-box";
@@ -66,12 +66,16 @@ function renderChatList(items: ChatItem[]): void {
 
   for (const item of items) {
     const el = document.createElement("div");
-    el.className = "chat-item" + (item.active ? " active" : "");
-    el.dataset.agentHash = item.agent_hash;
+    el.className = "chat-item" + (item.active ? " active" : "") + (item.is_group ? " group-item" : "");
+    if (item.is_group) {
+      el.dataset.groupId = item.group_id;
+    } else {
+      el.dataset.agentHash = item.agent_hash;
+    }
     el.setAttribute("role", "option");
     el.setAttribute("aria-selected", String(!!item.active));
     el.innerHTML = `
-      <div class="chat-item-avatar">${item.avatar_letter}</div>
+      <div class="chat-item-avatar">${item.is_group ? "👥" : item.avatar_letter}</div>
       <div class="chat-item-info">
         <div class="chat-item-name">${escapeHtml(item.name)}</div>
         <div class="chat-item-preview">${escapeHtml(item.last_message)}</div>
@@ -81,7 +85,13 @@ function renderChatList(items: ChatItem[]): void {
         ${item.unread ? '<span class="chat-item-badge"></span>' : ""}
       </div>
     `;
-    el.addEventListener("click", () => selectChat(item.agent_hash));
+    el.addEventListener("click", () => {
+      if (item.is_group && item.group_id) {
+        void selectGroup(item.group_id);
+      } else {
+        void selectChat(item.agent_hash);
+      }
+    });
     list.appendChild(el);
   }
 }
@@ -406,6 +416,75 @@ async function loadChatHistory(agentHash: string): Promise<void> {
   }
 }
 
+async function selectGroup(groupId: string): Promise<void> {
+  // Save current draft before switching
+  if (store.activeAgentHash) {
+    const input = $<HTMLTextAreaElement>("input");
+    if (input && input.value.trim()) {
+      try {
+        await invoke("save_draft", {
+          channel: `im:${store.activeAgentHash}`,
+          content: input.value,
+        });
+      } catch (e) {
+        console.error("save_draft failed:", e);
+      }
+    }
+  }
+
+  // Activate group chat
+  store.setActiveGroup(groupId);
+  renderChatList(store.chatItems);
+
+  // Load draft
+  const input = $<HTMLTextAreaElement>("input");
+  if (input) input.value = "";
+  try {
+    const draft = await invoke<string | null>("load_draft", {
+      channel: `group:${groupId}`,
+    });
+    if (draft && input) {
+      input.value = draft;
+      autoResize();
+    }
+  } catch (e) {
+    console.error("load_draft failed:", e);
+  }
+
+  // Load group messages
+  await loadGroupMessages(groupId);
+  showActiveChat();
+}
+
+async function loadGroupMessages(groupId: string): Promise<void> {
+  try {
+    const msgs = await invoke<GroupMessage[]>("get_group_messages", {
+      groupId,
+    });
+    // Convert to ChatMessage format for rendering
+    const chatMsgs: ChatMessage[] = msgs.map((m) => ({
+      id: m.id,
+      channel: `group:${groupId}`,
+      agent_hash: m.sender_hash,
+      role: m.sender_type === "user" ? "user" : "assistant",
+      content: m.content,
+      message_type: m.message_type,
+      created_at: m.created_at,
+      synced: true,
+      is_deleted: false,
+      timestamp: formatTime(m.created_at),
+      agent: m.sender_name,
+      attachments: m.attachments as Attachment[],
+    }));
+    store.setMessages(chatMsgs);
+    renderMessages(chatMsgs);
+  } catch (e) {
+    console.error("load_group_messages failed:", e);
+    store.setMessages([]);
+    renderMessages([]);
+  }
+}
+
 async function sendMessage(): Promise<void> {
   const input = $<HTMLTextAreaElement>("input");
   const btn = $<HTMLButtonElement>("btn-send");
@@ -413,7 +492,6 @@ async function sendMessage(): Promise<void> {
   const text = input.value.trim();
   const imgCards = getImageCards();
   if (!text && getFileCards().length === 0 && imgCards.length === 0) return;
-  if (!store.activeAgentHash) return;
 
   btn.disabled = true;
 
@@ -436,14 +514,19 @@ async function sendMessage(): Promise<void> {
   autoResize();
   clearFileCards();
 
+  // Determine if sending to group or agent
+  const isGroup = store.activeGroupId !== null;
+  const targetId = isGroup ? store.activeGroupId! : store.activeAgentHash;
+  const channel = isGroup ? `group:${targetId}` : `im:${targetId}`;
+
   // Send image messages first (each as its own bubble)
   for (const img of imgCards) {
     const imgId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const imgTs = Math.floor(Date.now() / 1000);
     const imgMsg: ChatMessage = {
       id: imgId,
-      channel: `im:${store.activeAgentHash}`,
-      agent_hash: store.activeAgentHash,
+      channel,
+      agent_hash: targetId,
       role: "user",
       content: img.data_url,
       message_type: "image",
@@ -456,7 +539,7 @@ async function sendMessage(): Promise<void> {
       await invoke("insert_chat_message", {
         id: imgMsg.id,
         channel: imgMsg.channel,
-        agentHash: store.activeAgentHash,
+        agentHash: targetId,
         role: imgMsg.role,
         content: imgMsg.content,
         messageType: "image",
@@ -478,8 +561,8 @@ async function sendMessage(): Promise<void> {
     const ts = Math.floor(Date.now() / 1000);
     const msg: ChatMessage = {
       id,
-      channel: `im:${store.activeAgentHash}`,
-      agent_hash: store.activeAgentHash,
+      channel,
+      agent_hash: targetId,
       role: "user",
       content: text,
       message_type: "text",
@@ -489,19 +572,21 @@ async function sendMessage(): Promise<void> {
       timestamp: formatTime(ts),
     };
 
-    // Insert into DB
-    try {
-      await invoke("insert_chat_message", {
-        id: msg.id,
-        channel: msg.channel,
-        agentHash: store.activeAgentHash,
-        role: msg.role,
-        content: msg.content,
-        messageType: msg.message_type ?? "text",
-        createdAt: ts * 1000, // ms
-      });
-    } catch (e) {
-      console.error("insert_chat_message failed:", e);
+    // Insert into DB (only for agent messages; group history handled differently)
+    if (!isGroup) {
+      try {
+        await invoke("insert_chat_message", {
+          id: msg.id,
+          channel: msg.channel,
+          agentHash: targetId,
+          role: msg.role,
+          content: msg.content,
+          messageType: msg.message_type ?? "text",
+          createdAt: ts * 1000,
+        });
+      } catch (e) {
+        console.error("insert_chat_message failed:", e);
+      }
     }
 
     store.appendMessage(msg);
@@ -512,13 +597,22 @@ async function sendMessage(): Promise<void> {
 
   // Send via WS
   try {
-    await invoke<string>("send_chat_message", { text: fullText });
+    if (isGroup) {
+      await invoke<string>("send_group_message", {
+        group_id: targetId,
+        content: fullText,
+        mentions: null,
+        attachments: null,
+      });
+    } else {
+      await invoke<string>("send_chat_message", { text: fullText });
+    }
   } catch (e) {
     const errMsg = typeof e === "string" ? e : "发送失败";
     store.appendMessage({
       id: `err-${Date.now()}`,
-      channel: `im:${store.activeAgentHash}`,
-      agent_hash: store.activeAgentHash,
+      channel,
+      agent_hash: targetId,
       role: "assistant",
       content: `⚠ ${errMsg}`,
       message_type: "text",
@@ -528,8 +622,8 @@ async function sendMessage(): Promise<void> {
     if (list2) {
       renderMessageEl(list2, {
         id: `err-${Date.now()}`,
-        channel: `im:${store.activeAgentHash}`,
-        agent_hash: store.activeAgentHash,
+        channel,
+        agent_hash: targetId,
         role: "assistant",
         content: `⚠ ${errMsg}`,
         message_type: "text",
@@ -564,11 +658,23 @@ function showActiveChat(): void {
   activeChat.style.display = "flex";
 
   // Update header
-  const agent = store.agents.find((a) => a.hash === store.activeAgentHash);
-  const nameEl = $<HTMLDivElement>("chat-name");
-  const avatarEl = $<HTMLDivElement>("chat-avatar");
-  if (nameEl) nameEl.textContent = agent?.name ?? "Agent";
-  if (avatarEl) avatarEl.textContent = (agent?.name ?? "A").charAt(0).toUpperCase();
+  if (store.activeGroupId) {
+    const group = store.getGroupById(store.activeGroupId);
+    const nameEl = $<HTMLDivElement>("chat-name");
+    const avatarEl = $<HTMLDivElement>("chat-avatar");
+    const statusEl = $<HTMLDivElement>("chat-status");
+    if (nameEl) nameEl.textContent = group?.name ?? "群聊";
+    if (avatarEl) avatarEl.textContent = "👥";
+    if (statusEl) statusEl.textContent = `成员：${group?.memberCount ?? 0}`;
+  } else {
+    const agent = store.agents.find((a) => a.hash === store.activeAgentHash);
+    const nameEl = $<HTMLDivElement>("chat-name");
+    const avatarEl = $<HTMLDivElement>("chat-avatar");
+    const statusEl = $<HTMLDivElement>("chat-status");
+    if (nameEl) nameEl.textContent = agent?.name ?? "Agent";
+    if (avatarEl) avatarEl.textContent = (agent?.name ?? "A").charAt(0).toUpperCase();
+    if (statusEl) statusEl.textContent = "在线";
+  }
 }
 
 // ---- Init -------------------------------------------------------
@@ -612,6 +718,25 @@ async function initChat(): Promise<void> {
     }
   } catch (e) {
     console.error("list_agents failed:", e);
+  }
+
+  // Load groups
+  try {
+    const groups = await invoke<GroupInfo[]>("list_groups");
+    // Transform API fields to client fields (snake_case → camelCase handled by invoke)
+    const clientGroups: GroupInfo[] = groups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      announcement: g.announcement,
+      memberCount: g.memberCount,
+      createdAt: g.createdAt,
+      unreadCount: 0,
+      lastMessage: g.lastMessage,
+    }));
+    store.setGroups(clientGroups);
+    renderChatList(store.chatItems);
+  } catch (e) {
+    console.error("list_groups failed:", e);
   }
 }
 
@@ -741,6 +866,95 @@ async function subscribeEvents(): Promise<void> {
   } catch (e) {
     console.error("listen right-click-pending:", e);
   }
+
+  // group-message from WS (engine → desktop)
+  try {
+    await listen<{ group_id: string; message: GroupMessage }>("group-message", (e) => {
+      const { group_id, message } = e.payload;
+      if (!group_id || !message) return;
+      // Only show if this group is active
+      if (store.activeGroupId !== group_id) return;
+      const chatMsg: ChatMessage = {
+        id: message.id,
+        channel: `group:${group_id}`,
+        agent_hash: message.sender_hash,
+        role: message.sender_type === "user" ? "user" : "assistant",
+        content: message.content,
+        message_type: message.message_type,
+        created_at: message.created_at,
+        synced: true,
+        is_deleted: false,
+        timestamp: formatTime(message.created_at),
+        agent: message.sender_name,
+        attachments: message.attachments as Attachment[],
+      };
+      store.appendMessage(chatMsg);
+      const list = $<HTMLDivElement>("messages");
+      if (list) renderMessageEl(list, chatMsg);
+      scrollToBottom();
+    });
+  } catch (e) {
+    console.error("listen group-message:", e);
+  }
+
+  // group-event from WS (member joined/left/renamed)
+  try {
+    await listen<{ group_id: string; event: string; data?: Record<string, unknown> }>("group-event", (e) => {
+      const { group_id, event, data } = e.payload;
+      if (!group_id || !event) return;
+      const group = store.getGroupById(group_id);
+      const name = (data?.name as string) ?? group?.name ?? "未知群";
+      let text = "";
+      if (event === "member_joined") {
+        text = `${data?.member_name ?? "某人"} 加入了群聊`;
+      } else if (event === "member_left") {
+        text = `${data?.member_name ?? "某人"} 退出了群聊`;
+      } else if (event === "group_renamed") {
+        text = `群名称已更改为：${name}`;
+      }
+      if (!text) return;
+      // Show system event pill in messages
+      const list = $<HTMLDivElement>("messages");
+      if (list) {
+        const pill = document.createElement("div");
+        pill.className = "event-pill system";
+        pill.textContent = text;
+        list.appendChild(pill);
+        scrollToBottom();
+      }
+      // Reload group info
+      if (store.activeGroupId === group_id) {
+        void loadGroupMessages(group_id);
+      }
+    });
+  } catch (e) {
+    console.error("listen group-event:", e);
+  }
+
+  // group-updated from WS
+  try {
+    await listen<{ group_id: string; data?: { name?: string; announcement?: string; member_count?: number } }>("group-updated", (e) => {
+      const { group_id, data } = e.payload;
+      if (!group_id) return;
+      // Update group info in store
+      const idx = store.groups.findIndex((g) => g.id === group_id);
+      if (idx >= 0 && data) {
+        const updated = { ...store.groups[idx] };
+        if (data.name) updated.name = data.name;
+        if (data.announcement) updated.announcement = data.announcement;
+        if (data.member_count !== undefined) updated.memberCount = data.member_count;
+        store.groups[idx] = updated;
+        // Re-render chat list
+        renderChatList(store.chatItems);
+        // Update header if this is active
+        if (store.activeGroupId === group_id) {
+          showActiveChat();
+        }
+      }
+    });
+  } catch (e) {
+    console.error("listen group-updated:", e);
+  }
 }
 
 function renderEventPill(kind: string, label: string): void {
@@ -776,6 +990,11 @@ function wire(): void {
   // Listen for agent-created events from create-dialog
   window.addEventListener("agent-created", ((e: CustomEvent<{ agentHash: string }>) => {
     void selectChat(e.detail.agentHash);
+  }) as EventListener);
+
+  // Listen for group-selected events from create-dialog
+  window.addEventListener("group-selected", ((e: CustomEvent<{ groupId: string }>) => {
+    void selectGroup(e.detail.groupId);
   }) as EventListener);
 
   // Tab bar

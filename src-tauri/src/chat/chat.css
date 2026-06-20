@@ -269,6 +269,107 @@ html, body {
   background: var(--primary);
 }
 
+/* Group chat list item */
+.chat-item.group-item .chat-item-avatar {
+  background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+}
+
+/* Group header (member count) */
+.chat-header .chat-status {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Group message sender color coding */
+.bubble.group-msg {
+  /* Base group message styles */
+}
+
+/* Agent message color variants (rotating by sender hash) */
+.bubble.group-agent-0 .bubble-body {
+  background: #1e3a5f;
+  border-color: #1e3a5f;
+}
+.bubble.group-agent-1 .bubble-body {
+  background: #134e4a;
+  border-color: #134e4a;
+}
+.bubble.group-agent-2 .bubble-body {
+  background: #3b1f5e;
+  border-color: #3b1f5e;
+}
+.bubble.group-agent-3 .bubble-body {
+  background: #4a1f1f;
+  border-color: #4a1f1f;
+}
+
+/* User message in group (same as regular user) */
+.bubble.group-user .bubble-body {
+  background: var(--bg-bubble-user);
+  color: white;
+  border-color: var(--bg-bubble-user);
+}
+
+/* System event pill in group */
+.event-pill.system {
+  background: rgba(139, 92, 246, 0.1);
+  border-color: rgba(139, 92, 246, 0.3);
+  color: #a78bfa;
+}
+
+/* Group chat item active state */
+.chat-item.group-item.active {
+  background: var(--bg-active);
+}
+
+/* ---- Create Dialog: Group checkbox list ---- */
+.cd-checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.cd-checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.cd-checkbox-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--primary);
+}
+
+.cd-checkbox-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.cd-checkbox-name {
+  flex: 1;
+  font-weight: 500;
+}
+
+.cd-empty-agents {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 8px 0;
+  text-align: center;
+}
+
 /* ---- Right: Chat Window Panel ------------------------------- */
 
 .chat-window-panel {

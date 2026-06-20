@@ -23,8 +23,9 @@ use crate::ws_types::{
     CommandExecPayload, CommandExecPayloadOut, CommandExecResponse, ConnectionStatus,
     FileDeletePayload, FileReadPayload, FileReadResponse, FileReadResponsePayload,
     FileWritePayload, FileWriteResponse, FileWriteResponsePayload, NotificationPayload,
-    WsRequest,
+    WsRequest, WsSendGroupMessage,
 };
+use tauri::Emitter;
 
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -73,6 +74,8 @@ pub struct WsClient {
     /// Cancel token: when set to true by the control pump, the run loop
     /// exits gracefully to trigger a reconnect.
     cancel_token: Arc<AtomicBool>,
+    /// Optional AppHandle for emitting Tauri events to the frontend.
+    app_handle: Option<tauri::AppHandle>,
 }
 
 impl WsClient {
@@ -83,6 +86,7 @@ impl WsClient {
         consent: Arc<tokio::sync::Mutex<ConsentManager>>,
         executor: Arc<CommandExecutor>,
         cancel_token: Arc<AtomicBool>,
+        app_handle: Option<tauri::AppHandle>,
     ) -> Self {
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
         Self {
@@ -96,6 +100,7 @@ impl WsClient {
             last_pong_at: std::sync::Mutex::new(None),
             last_close_code: std::sync::Mutex::new(None),
             cancel_token,
+            app_handle,
         }
     }
 
@@ -368,6 +373,48 @@ impl WsClient {
                     path = path.as_str(),
                     "file_operation_request received — consent prompts are P1.2"
                 );
+            }
+            WsRequest::GroupMessage { group_id, message } => {
+                tracing::info!(
+                    group_id = group_id.as_str(),
+                    message_id = message.id.as_str(),
+                    "group_message received"
+                );
+                if let Some(ref handle) = self.app_handle {
+                    let payload = serde_json::json!({
+                        "group_id": group_id,
+                        "message": message,
+                    });
+                    let _ = handle.emit("group-message", payload);
+                }
+            }
+            WsRequest::GroupEvent { group_id, event, data } => {
+                tracing::info!(
+                    group_id = group_id.as_str(),
+                    event = event.as_str(),
+                    "group_event received"
+                );
+                if let Some(ref handle) = self.app_handle {
+                    let payload = serde_json::json!({
+                        "group_id": group_id,
+                        "event": event,
+                        "data": data,
+                    });
+                    let _ = handle.emit("group-event", payload);
+                }
+            }
+            WsRequest::GroupUpdated { group_id, data } => {
+                tracing::info!(
+                    group_id = group_id.as_str(),
+                    "group_updated received"
+                );
+                if let Some(ref handle) = self.app_handle {
+                    let payload = serde_json::json!({
+                        "group_id": group_id,
+                        "data": data,
+                    });
+                    let _ = handle.emit("group-updated", payload);
+                }
             }
             WsRequest::Pong => {}
         }

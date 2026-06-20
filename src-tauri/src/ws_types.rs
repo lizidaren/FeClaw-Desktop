@@ -24,6 +24,43 @@ pub fn current_timestamp() -> String {
         .unwrap_or_default()
 }
 
+/// Inbound group message from the engine.
+#[derive(Debug, Deserialize)]
+pub struct GroupMessagePayload {
+    pub id: String,
+    #[serde(rename = "sender_type")]
+    pub sender_type: String,
+    #[serde(rename = "sender_hash")]
+    pub sender_hash: Option<String>,
+    #[serde(rename = "sender_name")]
+    pub sender_name: Option<String>,
+    pub content: String,
+    #[serde(rename = "message_type")]
+    pub message_type: String,
+    pub attachments: Option<Vec<serde_json::Value>>,
+    pub round: Option<u32>,
+    #[serde(rename = "is_tail")]
+    pub is_tail: Option<bool>,
+    pub timestamp: Option<u64>,
+}
+
+/// Inbound group event (member joined/left/renamed).
+#[derive(Debug, Deserialize)]
+pub struct GroupEventPayload {
+    pub event: String,
+    pub data: Option<serde_json::Value>,
+}
+
+/// Group info update payload.
+#[derive(Debug, Deserialize)]
+pub struct GroupUpdatedPayload {
+    pub id: String,
+    pub name: Option<String>,
+    pub announcement: Option<String>,
+    #[serde(rename = "member_count")]
+    pub member_count: Option<usize>,
+}
+
 /// Inbound message envelope from the engine/agent. PR 4 will add a real
 /// dispatcher that handles `CommandExec`.
 #[derive(Debug, Deserialize)]
@@ -105,6 +142,30 @@ pub enum WsRequest {
         reason: Option<String>,
         #[serde(default)]
         timestamp: Option<String>,
+    },
+    /// Inbound group message (engine → desktop).
+    #[serde(rename = "group_message")]
+    GroupMessage {
+        #[serde(rename = "group_id")]
+        group_id: String,
+        message: GroupMessagePayload,
+    },
+    /// Inbound group event notification (member joined/left/renamed).
+    #[serde(rename = "group_event")]
+    GroupEvent {
+        #[serde(rename = "group_id")]
+        group_id: String,
+        event: String,
+        #[serde(default)]
+        data: Option<serde_json::Value>,
+    },
+    /// Inbound group info update.
+    #[serde(rename = "group_updated")]
+    GroupUpdated {
+        #[serde(rename = "group_id")]
+        group_id: String,
+        #[serde(default)]
+        data: Option<GroupUpdatedPayload>,
     },
 }
 
@@ -239,6 +300,32 @@ pub enum ConsentDecision {
     Allow,
     Deny,
     AlwaysAllow,
+}
+
+/// Outbound: send a message to a group via WebSocket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WsSendGroupMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    #[serde(rename = "group_id")]
+    pub group_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub mentions: Option<Vec<String>>,
+    #[serde(default)]
+    pub attachments: Option<Vec<serde_json::Value>>,
+}
+
+impl Default for WsSendGroupMessage {
+    fn default() -> Self {
+        Self {
+            msg_type: "send_group_message".to_string(),
+            group_id: String::new(),
+            content: String::new(),
+            mentions: None,
+            attachments: None,
+        }
+    }
 }
 
 #[cfg(test)]

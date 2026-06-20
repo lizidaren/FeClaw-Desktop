@@ -180,6 +180,51 @@ pub async fn send_chat_message(
     Ok(id)
 }
 
+/// Send a group message via the shared WS channel.
+#[tauri::command]
+pub async fn send_group_message(
+    group_id: String,
+    content: String,
+    mentions: Option<Vec<String>>,
+    attachments: Option<Vec<serde_json::Value>>,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Err("消息不能为空".to_string());
+    }
+
+    let id = format!(
+        "gmsg-{}-{}",
+        crate::ws_types::current_timestamp(),
+        uuid_like_suffix()
+    );
+    let ts = crate::ws_types::current_timestamp();
+
+    let envelope = serde_json::json!({
+        "type": "send_group_message",
+        "id": id,
+        "group_id": group_id,
+        "content": trimmed,
+        "mentions": mentions,
+        "attachments": attachments,
+        "timestamp": ts,
+    });
+    let json = serde_json::to_string(&envelope)
+        .map_err(|e| format!("序列化群消息失败：{e}"))?;
+
+    let tx = state.ws_outgoing.clone();
+    let tx_guard = tx.write().await;
+    if let Some(tx) = tx_guard.as_ref() {
+        tx.send(json)
+            .map_err(|_| "WebSocket 已断开，消息发送失败".to_string())?;
+    } else {
+        return Err("WebSocket 发送端未初始化".to_string());
+    }
+
+    Ok(id)
+}
+
 /// Append a message to history AND emit a `chat-event` so any open chat
 /// window re-renders. Used internally by [`send_chat_message`] and by the
 /// WS inbound dispatcher (for `chat_reply` and `chat_event` messages).

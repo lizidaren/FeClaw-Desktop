@@ -2,17 +2,17 @@
 // FeClaw Desktop — Create Agent Dialog (Phase 0b V3)
 // =========================================================
 //
-// Popup modal for creating a new Agent.
+// Popup modal for creating a new Agent or Group.
 // Shown when the user clicks the ➕ (new chat) button.
 //
 // Flow:
 //   user clicks ➕ → show dialog → pick type + name → confirm
-//     → invoke create_agent → add to store → switch to new chat
+//     → invoke create_agent or create_group → add to store → switch to new chat
 //
 // The dialog is injected as a hidden element into the DOM and
 // toggled via CSS classes.
 
-import { store, type AgentInfo } from "../store";
+import { store, type AgentInfo, type GroupInfo } from "../store";
 
 type TauriCore = {
   invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
@@ -80,6 +80,16 @@ function ensureDialog(): HTMLElement {
             </div>
           </div>
         </label>
+        <label class="cd-radio-card">
+          <input type="radio" name="agent-type" value="group" />
+          <div class="cd-radio-content">
+            <span class="cd-radio-icon">👥</span>
+            <div class="cd-radio-text">
+              <span class="cd-radio-title">群聊</span>
+              <span class="cd-radio-desc">多 Agent 协作讨论</span>
+            </div>
+          </div>
+        </label>
       </div>
       <p class="cd-section-label" style="margin-top:16px;">名称</p>
       <input
@@ -90,6 +100,10 @@ function ensureDialog(): HTMLElement {
         maxlength="40"
         autocomplete="off"
       />
+      <div id="cd-group-members" style="display:none; margin-top:12px;">
+        <p class="cd-section-label" style="margin-top:8px;">选择成员</p>
+        <div id="cd-agent-checkboxes" class="cd-checkbox-list"></div>
+      </div>
       <p class="cd-error" id="cd-error" style="display:none;"></p>
     </div>
     <div class="cd-footer">
@@ -140,6 +154,14 @@ function showDialog(): void {
   // Default to classic
   const classicRadio = document.querySelector<HTMLInputElement>('input[name="agent-type"][value="classic"]');
   if (classicRadio) classicRadio.checked = true;
+  // Reset name placeholder and group members visibility
+  if (nameInput) nameInput.placeholder = "给 AI 助理起个名字";
+  const groupMembers = document.getElementById("cd-group-members");
+  if (groupMembers) groupMembers.style.display = "none";
+  // Populate agent checkboxes for group mode
+  populateAgentCheckboxes();
+  // Wire radio change to show/hide group members
+  wireRadioChanges();
 }
 
 function hideDialog(): void {
@@ -147,6 +169,41 @@ function hideDialog(): void {
   if (overlay) overlay.style.display = "none";
   const dialog = document.getElementById(DIALOG_ID);
   if (dialog) dialog.style.display = "none";
+}
+
+function populateAgentCheckboxes(): void {
+  const container = document.getElementById("cd-agent-checkboxes");
+  if (!container) return;
+  container.innerHTML = "";
+  for (const agent of store.agents) {
+    const item = document.createElement("label");
+    item.className = "cd-checkbox-item";
+    item.innerHTML = `
+      <input type="checkbox" name="cd-group-member" value="${escapeHtml(agent.hash)}" />
+      <span class="cd-checkbox-name">${escapeHtml(agent.name)}</span>
+    `;
+    container.appendChild(item);
+  }
+  if (store.agents.length === 0) {
+    container.innerHTML = '<div class="cd-empty-agents">暂无 Agent，请先创建 Agent</div>';
+  }
+}
+
+function wireRadioChanges(): void {
+  const radios = document.querySelectorAll<HTMLInputElement>('input[name="agent-type"]');
+  const nameInput = document.getElementById("cd-name-input") as HTMLInputElement;
+  const groupMembers = document.getElementById("cd-group-members");
+  for (const radio of radios) {
+    radio.addEventListener("change", () => {
+      if (radio.value === "group") {
+        if (nameInput) nameInput.placeholder = "给群聊起个名字";
+        if (groupMembers) groupMembers.style.display = "block";
+      } else {
+        if (nameInput) nameInput.placeholder = "给 AI 助理起个名字";
+        if (groupMembers) groupMembers.style.display = "none";
+      }
+    });
+  }
 }
 
 async function handleConfirm(): Promise<void> {
@@ -172,19 +229,48 @@ async function handleConfirm(): Promise<void> {
   errorEl.style.display = "none";
 
   try {
-    const newAgent = await invoke<AgentInfo>("create_agent", {
-      name,
-      agent_type: agentType,
-    });
+    if (agentType === "group") {
+      // Collect selected agent hashes
+      const checkboxes = document.querySelectorAll<HTMLInputElement>('input[name="cd-group-member"]:checked');
+      const memberHashes = Array.from(checkboxes).map((cb) => cb.value);
+      if (memberHashes.length < 2) {
+        errorEl.textContent = "请至少选择 2 个成员";
+        errorEl.style.display = "block";
+        return;
+      }
+      const newGroup = await invoke<GroupInfo>("create_group", {
+        name,
+        memberHashes,
+      });
+      // Add to store and switch to the new group
+      store.setGroups([...store.groups, {
+        id: newGroup.id,
+        name: newGroup.name,
+        announcement: newGroup.announcement,
+        memberCount: newGroup.memberCount,
+        createdAt: newGroup.createdAt,
+        unreadCount: 0,
+      }]);
+      // Switch to the new group via custom event
+      window.dispatchEvent(
+        new CustomEvent("group-selected", { detail: { groupId: newGroup.id } }),
+      );
+      hideDialog();
+    } else {
+      const newAgent = await invoke<AgentInfo>("create_agent", {
+        name,
+        agent_type: agentType,
+      });
 
-    // Add to store and switch to the new agent
-    const currentAgents = store.agents;
-    store.setAgents([...currentAgents, newAgent]);
+      // Add to store and switch to the new agent
+      const currentAgents = store.agents;
+      store.setAgents([...currentAgents, newAgent]);
 
-    // Switch to the new chat
-    await selectChat(newAgent.hash);
+      // Switch to the new chat
+      await selectChat(newAgent.hash);
 
-    hideDialog();
+      hideDialog();
+    }
   } catch (err) {
     const msg = typeof err === "string" ? err : (err as Error)?.message ?? "创建失败";
     errorEl.textContent = msg;
