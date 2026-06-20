@@ -1,10 +1,11 @@
 // =========================================================
-// FeClaw Desktop — Agent Side Panel (Phase 0c V3)
+// FeClaw Desktop — Agent Side Panel (Phase 0c + 2C V3)
 // =========================================================
 //
 // Sliding panel from the right edge of the chat window.
 // Shows agent avatar, editable alias, pin/dnd toggles,
-// and permission mode dropdown.
+// permission mode dropdown, config manager, file manager,
+// and app list.
 //
 // Layout:
 //   ┌─── side-overlay (full-screen dim) ────────────────┐
@@ -20,8 +21,16 @@
 //   │  │   📌 置顶聊天            [toggle switch]│  │
 //   │  │   🔕 免打扰              [toggle switch]│  │
 //   │  │                                          │  │
+//   │  │   📂 文件管理器         [打开]           │  │ ← Phase 2C
+//   │  │   ⚙️ 配置管理           [打开]           │  │ ← Phase 2C
+//   │  │                                          │  │
 //   │  │   🛡️ 权限模式                         │  │
-//   │  │   [dropdown: 禁止/严格/平衡/宽松/完全]  │  │
+//   │  │   [dropdown: 禁止/严格/平衡/宽松/完全]  │  │ ← Phase 2C write-back
+//   │  │                                          │  │
+//   │  │   🏪 小程序                          │  │ ← Phase 2C
+//   │  │   ├── 复习计划生成器                  │  │
+//   │  │   └── 错题分析器                     │  │
+//   │  │                                          │  │
 //   │  └──────────────────────────────────────────┘  │
 //   └───────────────────────────────────────────────┘
 //
@@ -53,6 +62,13 @@ interface AgentPanelInfo {
   is_pinned: boolean;
   is_dnd: boolean;
   permission_mode: string;
+}
+
+interface AppInfo {
+  app_id: string;
+  name: string;
+  description: string;
+  icon_url: string | null;
 }
 
 const PERMISSION_LABELS: Record<string, string> = {
@@ -130,6 +146,16 @@ function buildPanel(): void {
         </label>
       </div>
 
+      <div class="sp-btn-row" id="sp-file-manager-row">
+        <span class="sp-btn-label">📂 文件管理器</span>
+        <button type="button" class="sp-btn" id="sp-open-file-manager">打开</button>
+      </div>
+
+      <div class="sp-btn-row" id="sp-config-row">
+        <span class="sp-btn-label">⚙️ 配置管理</span>
+        <button type="button" class="sp-btn" id="sp-open-config">打开</button>
+      </div>
+
       <div class="sp-field" style="margin-top:16px;">
         <label class="sp-label">🛡️ 权限模式</label>
         <select class="sp-select" id="sp-permission-select">
@@ -137,6 +163,12 @@ function buildPanel(): void {
             (o) => `<option value="${o.value}">${o.label}</option>`,
           ).join("")}
         </select>
+      </div>
+
+      <div class="sp-section" id="sp-apps-section">
+        <div class="sp-section-header">🏪 小程序</div>
+        <div class="sp-apps-loading" id="sp-apps-loading">加载中...</div>
+        <div class="sp-apps-list" id="sp-apps-list"></div>
       </div>
     </div>
   `;
@@ -151,26 +183,38 @@ function buildPanel(): void {
   document.getElementById("sp-alias-input")!.addEventListener("blur", () => {
     if (!currentAgentHash) return;
     const input = document.getElementById("sp-alias-input") as HTMLInputElement;
-    void saveAlias(input.value);
+    void saveAliasAndSync(input.value);
   });
 
   // Pin toggle
   document.getElementById("sp-toggle-pin")!.addEventListener("change", () => {
     if (!currentAgentHash) return;
-    void togglePin();
+    void togglePinAndSync();
   });
 
   // DND toggle
   document.getElementById("sp-toggle-dnd")!.addEventListener("change", () => {
     if (!currentAgentHash) return;
-    void toggleDnd();
+    void toggleDndAndSync();
   });
 
-  // Permission mode select
+  // Permission mode select → Phase 2C write-back
   document.getElementById("sp-permission-select")!.addEventListener("change", () => {
     if (!currentAgentHash) return;
-    // TODO: wire to set_permission_mode when that command is added
-    console.log("permission mode changed:", (document.getElementById("sp-permission-select") as HTMLSelectElement).value);
+    const select = document.getElementById("sp-permission-select") as HTMLSelectElement;
+    void setPermissionModeAndSync(select.value);
+  });
+
+  // File manager button → Phase 2C
+  document.getElementById("sp-open-file-manager")!.addEventListener("click", () => {
+    if (!currentAgentHash) return;
+    void openFileManager();
+  });
+
+  // Config button → Phase 2C
+  document.getElementById("sp-open-config")!.addEventListener("click", () => {
+    if (!currentAgentHash) return;
+    void openConfig();
   });
 
   // ESC to close
@@ -185,7 +229,7 @@ function handleEscKey(e: KeyboardEvent): void {
 
 // ---- Open / Close ------------------------------------------------
 
-function openSidePanelImpl(info: AgentPanelInfo, agentHash: string): void {
+async function openSidePanelImpl(info: AgentPanelInfo, agentHash: string): Promise<void> {
   buildPanel();
 
   const overlay = document.getElementById(OVERLAY_ID)!;
@@ -193,7 +237,6 @@ function openSidePanelImpl(info: AgentPanelInfo, agentHash: string): void {
 
   // Populate fields
   const avatarEl = document.getElementById("sp-avatar")!;
-  // Show first char of alias or name as avatar letter
   const name = info.alias || store.agents.find((a) => a.hash === agentHash)?.name || "A";
   avatarEl.textContent = name.charAt(0).toUpperCase();
 
@@ -220,6 +263,9 @@ function openSidePanelImpl(info: AgentPanelInfo, agentHash: string): void {
 
   // Focus alias input for quick editing
   aliasInput.focus();
+
+  // Load apps from Engine → Phase 2C
+  void loadApps(agentHash);
 }
 
 function closeSidePanel(): void {
@@ -231,7 +277,60 @@ function closeSidePanel(): void {
   currentAgentHash = null;
 }
 
-// ---- API calls ---------------------------------------------------
+// ---- App list (Phase 2C) ----------------------------------------
+
+async function loadApps(agentHash: string): Promise<void> {
+  const loadingEl = document.getElementById("sp-apps-loading");
+  const listEl = document.getElementById("sp-apps-list");
+  if (!loadingEl || !listEl) return;
+
+  try {
+    const apps = await invoke<AppInfo[]>("list_agent_apps", { agent_hash: agentHash });
+    loadingEl.style.display = "none";
+
+    if (!apps || apps.length === 0) {
+      listEl.innerHTML = '<div class="sp-apps-empty">暂无可用小程序</div>';
+      return;
+    }
+
+    listEl.innerHTML = apps
+      .map(
+        (app) => `
+      <div class="sp-app-card" data-app-id="${app.app_id}" data-name="${app.name}" data-url="${app.icon_url ?? ""}">
+        <div class="sp-app-icon">${(app.icon_url ?? "").startsWith("http") ? `<img src="${app.icon_url}" alt="" width="24" height="24" />` : "📦"}</div>
+        <div class="sp-app-info">
+          <div class="sp-app-name">${app.name}</div>
+          <div class="sp-app-desc">${app.description}</div>
+        </div>
+      </div>`,
+      )
+      .join("");
+
+    // Wire app card clicks → open in browser/popup
+    listEl.querySelectorAll(".sp-app-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        const appId = card.getAttribute("data-app-id");
+        if (appId) void openApp(appId);
+      });
+    });
+  } catch (e) {
+    console.error("list_agent_apps failed:", e);
+    loadingEl.style.display = "none";
+    listEl.innerHTML = '<div class="sp-apps-empty">加载失败</div>';
+  }
+}
+
+async function openApp(appId: string): Promise<void> {
+  // Open app in browser via Tauri
+  try {
+    await invoke("open_app", { app_id: appId });
+  } catch {
+    // Fallback: just log
+    console.warn("open_app not implemented, app_id:", appId);
+  }
+}
+
+// ---- API calls (Phase 0c + 2C sync) ----------------------------
 
 async function saveAlias(alias: string): Promise<void> {
   if (!currentAgentHash) return;
@@ -242,25 +341,88 @@ async function saveAlias(alias: string): Promise<void> {
   }
 }
 
-async function togglePin(): Promise<void> {
+async function syncSettings(): Promise<void> {
   if (!currentAgentHash) return;
   try {
-    const newVal = await invoke<boolean>("toggle_pin", { agent_hash: currentAgentHash });
-    const pinToggle = document.getElementById("sp-toggle-pin") as HTMLInputElement;
-    if (pinToggle) pinToggle.checked = newVal;
+    await invoke("sync_agent_settings", { agent_hash: currentAgentHash });
   } catch (e) {
-    console.error("toggle_pin failed:", e);
+    // Non-fatal: log warning only
+    console.warn("sync_agent_settings failed (non-fatal):", e);
   }
 }
 
-async function toggleDnd(): Promise<void> {
-  if (!currentAgentHash) return;
+async function saveAliasAndSync(alias: string): Promise<void> {
+  await saveAlias(alias);
+  // Fire-and-forget sync; don't await to keep UI responsive
+  void syncSettings();
+}
+
+async function togglePin(): Promise<boolean> {
+  if (!currentAgentHash) return false;
   try {
-    const newVal = await invoke<boolean>("toggle_dnd", { agent_hash: currentAgentHash });
-    const dndToggle = document.getElementById("sp-toggle-dnd") as HTMLInputElement;
-    if (dndToggle) dndToggle.checked = newVal;
+    return await invoke<boolean>("toggle_pin", { agent_hash: currentAgentHash });
+  } catch (e) {
+    console.error("toggle_pin failed:", e);
+    return false;
+  }
+}
+
+async function togglePinAndSync(): Promise<void> {
+  const newVal = await togglePin();
+  const pinToggle = document.getElementById("sp-toggle-pin") as HTMLInputElement;
+  if (pinToggle) pinToggle.checked = newVal;
+  void syncSettings();
+}
+
+async function toggleDnd(): Promise<boolean> {
+  if (!currentAgentHash) return false;
+  try {
+    return await invoke<boolean>("toggle_dnd", { agent_hash: currentAgentHash });
   } catch (e) {
     console.error("toggle_dnd failed:", e);
+    return false;
+  }
+}
+
+async function toggleDndAndSync(): Promise<void> {
+  const newVal = await toggleDnd();
+  const dndToggle = document.getElementById("sp-toggle-dnd") as HTMLInputElement;
+  if (dndToggle) dndToggle.checked = newVal;
+  void syncSettings();
+}
+
+// Phase 2C: permission mode write-back
+async function setPermissionMode(mode: string): Promise<void> {
+  if (!currentAgentHash) return;
+  try {
+    await invoke("set_agent_permission_mode", { agent_hash: currentAgentHash, mode });
+  } catch (e) {
+    console.error("set_agent_permission_mode failed:", e);
+  }
+}
+
+async function setPermissionModeAndSync(mode: string): Promise<void> {
+  await setPermissionMode(mode);
+  void syncSettings();
+}
+
+// Phase 2C: open config window
+async function openConfig(): Promise<void> {
+  if (!currentAgentHash) return;
+  try {
+    await invoke("open_config_window", { agent_hash: currentAgentHash });
+  } catch (e) {
+    console.error("open_config_window failed:", e);
+  }
+}
+
+// Phase 2C: open file manager window
+async function openFileManager(): Promise<void> {
+  if (!currentAgentHash) return;
+  try {
+    await invoke("open_file_manager_window", { agent_hash: currentAgentHash });
+  } catch (e) {
+    console.error("open_file_manager_window failed:", e);
   }
 }
 
@@ -271,7 +433,7 @@ export async function openSidePanel(agentHash: string): Promise<void> {
     const info = await invoke<AgentPanelInfo>("get_agent_panel_info", {
       agent_hash: agentHash,
     });
-    openSidePanelImpl(info, agentHash);
+    await openSidePanelImpl(info, agentHash);
   } catch (e) {
     console.error("get_agent_panel_info failed:", e);
   }

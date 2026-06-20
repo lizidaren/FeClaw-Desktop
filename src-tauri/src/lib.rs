@@ -154,6 +154,11 @@ pub fn run() {
             side_panel::update_agent_alias,
             side_panel::toggle_pin,
             side_panel::toggle_dnd,
+            side_panel::set_agent_permission_mode,
+            side_panel::sync_agent_settings,
+            side_panel::list_agent_apps,
+            side_panel::open_config_window,
+            side_panel::open_file_manager_window,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

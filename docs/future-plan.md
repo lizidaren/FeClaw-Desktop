@@ -694,147 +694,666 @@ Desktop 启动
 
 ---
 
-### Phase 2 — 三 dot 菜单 + VFS 文件管理器 + 小侧栏
+### Phase 2 — VFS 文件管理器 + 侧栏补完 + 设置同步 + WS 附件渲染
 
-**目标：** 聊天窗口右上角 `⋮` → 右侧展开小侧栏，包含完整的 Agent 管理功能。
+**目标：** 实现完整的 VFS 文件资源管理器（Windows 资源管理器风格）、补完侧栏功能、设置同步到服务器、渲染 Agent 发送的附件消息。
 
-**小侧栏完整内容：**
+**前置：** Phase 0c（侧栏骨架）、Phase 4a（Engine API）
+
+---
+
+#### 2A — VFS 文件资源管理器（Desktop 侧新窗口/侧面板）
+
+**Tauri Rust 后端：**
+- `src-tauri/src/file_manager.rs`（新建）— VFS 操作命令
+  - `list_vfs_dir(agent_hash, path)` — 列出目录内容（调用 Engine `GET /api/user/agents/{hash}/vfs?path=...`）
+  - `get_vfs_preview_url(agent_hash, path)` — 获取 presigned 下载 URL（1 天 TTL）
+  - `get_vfs_upload_url(agent_hash, path)` — 获取 presigned 上传 URL（1 小时 TTL）
+  - `vfs_mkdir(agent_hash, path)` — 新建文件夹（Engine REST）
+  - `vfs_rm(agent_hash, path)` — 删除（Engine REST）
+  - `vfs_mv(agent_hash, from, to)` — 重命名/移动（Engine REST）
+  - `vfs_notify_events(agent_hash, events[])` — 操作事件通知 Engine
+  - `vfs_set_permission(agent_hash, path, permission)` — 设置 Agent 文件权限
+
+**前端 TypeScript 组件：**
+- `src-tauri/src/chat/components/vfs-panel.ts`（新建）— 文件管理器 UI
+
+**布局（Windows 资源管理器风格）：**
 ```
-┌── Agent 设置 ──────────────────────┐
-│                                     │
-│  [头像]                              │
-│  备注名（显示名，可编辑）             │
-│                                     │
-│  📌 置顶聊天       [开/关]          │
-│  🔕 免打扰         [开/关]          │
-│                                     │
-│  📂 VFS 文件编辑器                   │
-│  ├── 浏览目录结构                    │
-│  ├── 编辑非二进制文件                 │
-│  ├── 上传/下载                       │
-│  └── 新建文件夹                      │
-│                                     │
-│  ⚙️ 配置管理                         │
-│  └── 同网页版 {hash}.feclaw/         │
-│      lizidaren.cn/settings           │
-│                                     │
-│  🛡️ 权限模式                         │
-│  └── 当前：平衡 (L2) ▼              │
-│                                     │
-│  🏪 小程序列表                       │
-│  └── 3 个可用 App                    │
-│                                     │
-│  📱 群广场设置（仅群聊）             │
-│  └── [开/关]                         │
-└─────────────────────────────────────┘
+┌───────────────────────────────────────────┐
+│ 📂 /workspace/   [搜索过滤框]             │ ← 面包屑
+├──────────────┬────────────────────────────┤
+│ 目录树       │ 文件列表                   │
+│              │                            │
+│ /            │ 📄 三角公式.png  2.3MB  图 │ ← 可排序
+│ ├── work..   │ 📄 复习计划.md   12KB  文 │
+│ ├── ima..    │ 📂 exams/          --  文 │
+│ ├── conf..   │ 📂 notes/          --  文 │
+│ └── age..    │                            │
+│              │ 列：名称 / 大小 / 修改时间  │
+└──────────────┴────────────────────────────┘
 ```
 
-**关键交付：**
-- `src-tauri/src/file_manager.rs` + `src-tauri/src/file_manager/index.html`（VFS 编辑器）
-- `src-tauri/src/side_panel.rs`（新建）— 小侧栏状态管理 + Agent 属性变更命令
-  - `get_agent_panel_info(agent_hash)` — 获取所有侧栏展示数据
-  - `update_agent_alias(agent_hash, alias)` — 修改备注名
-  - `toggle_agent_pin(agent_hash)` — 置顶
-  - `toggle_agent_dnd(agent_hash)` — 免打扰
-  - `get_agent_permission_mode(agent_hash)` / `set_agent_permission_mode(agent_hash, mode)`
-  - `update_agent_config(agent_hash, config)` — 引擎配置代理
-- 引擎端：`GET /api/desktop/agents/{hash}/vfs`、`GET /api/desktop/agents/{hash}/apps`、`GET /api/desktop/agents/{hash}/config`
-- 复用 `virtual_filesystem.py` 已有逻辑
+- 目录树：展开/折叠、懒加载、双击展开
+- 文件列表：双击进入目录、列排序、Ctrl+点击/Shift+多选
+- 空白处右键菜单：上传 / 新建文件 / 新建文件夹 / 刷新 / 粘贴
 
-**工时：** 5–6 天
+**文件右键菜单：**
+```
+📄 三角公式.png
+├── 预览              → 查看器（图片/音视频）
+├── 编辑              → 编辑器（代码/json/toml/md）
+├── 本地查看          → 下载到临时目录 + 系统默认打开
+├── ─────────
+├── 复制 / 剪切        → 剪贴板操作
+├── 重命名
+├── 下载              → 保存到本地文件系统
+├── ─────────
+└── 权限              → 弹窗设置 Agent 权限
+```
+
+#### 2B — 文件预览/查看器/编辑器
+
+**查看器（只读）：**
+| 类型 | 渲染方式 |
+|:----:|:--------:|
+| 图片 png/jpg/gif/webp | Rust `reqwest` 下载 presigned URL → bytes → `data:` URL → `<img>`（带缩放/全屏按钮）|
+| 音视频 mp3/mp4 | `<audio>` / `<video>` 同样 data URL |
+| 其他二进制 | 只显示下载按钮 |
+
+**编辑器（可写）：**
+| 类型 | 行为 |
+|:----:|:----:|
+| 代码 .py/.js/.ts/.rs 等 | 文本编辑器 + 语法高亮 → Ctrl+S 保存 → presigned PUT 回写 VFS |
+| JSON / TOML / YAML | 同上 |
+| Markdown `.md` | 默认渲染查看器 → 右下角[编辑]按钮 → 文本编辑器 → [查看]返回渲染模式 |
+| 其他文本文件 | 简易文本编辑器 |
+
+- 关闭编辑器时未保存 → 确认弹窗
+- 保存调用 `PUT presigned_url` 直连 COS → 成功后调 `vfs_notify_events` 通知 Engine
+
+#### 2C — 小侧栏补完（Phase 0c 基础上）
+
+Phase 0c 已有的（保留）：
+- ✅ 侧栏滑入/滑出动画 + 遮罩 + ESC/✕/遮罩关闭
+- ✅ Agent 头像（首字母占位）
+- ✅ 别名编辑（本地 SQLite）
+- ✅ 置顶/免打扰开关（本地 SQLite）
+- ✅ 权限模式下拉（本地 SQLite，write-back TODO）
+
+**Phase 2 补齐：**
+
+1. **设置同步服务器：** 别名/置顶/免打扰/权限模式修改后，异步调用 `PATCH /api/user/agents/{hash}/settings` 同步到 Engine
+2. **权限模式 write-back:** 完成 Phase 0c 的 TODO，下拉选择后写入本地 + 同步服务器
+3. **配置管理：** 原生 Windows 风格配置 UI（不复用网页版），内容与网页 settings 一致：
+   - Soul.md 编辑
+   - System prompt 编辑
+   - 工具开关列表
+   - 模型选择
+4. **小程序列表：** 调用 `GET /api/user/agents/{hash}/apps` → 卡片列表展示，点击打开
+5. **群广场设置：** 开关占位（Phase 5 实现）
+6. **VFS 入口：** 侧栏里放一个"📂 打开文件管理器"按钮，点击展开文件管理器面板不是新窗口，侧栏内切换面板）
+
+#### 2D — WS 消息附件渲染
+
+Engine 侧 Agent 已可通过工具发送带 `attachments[]` 的消息：
+
+```json
+// Agent 回复带图片
+{
+  "role": "assistant",
+  "content": "我画了个草图👇",
+  "attachments": [{
+    "type": "image",
+    "source": "vfs",
+    "path": "/images/草图.png",
+    "name": "草图.png"
+  }]
+}
+```
+
+**Desktop WS 收到后：**
+1. 检测 `message.attachments` 存在
+2. 对每个附件：
+   - `type=image` → 调用 `get_vfs_preview_url` → Rust 下载 → data URL → 内联图片
+   - `type=file` → 显示文件卡片（图标+名+大小，点击下载）
+   - `type=miniapp_card` → 显示小程序卡片（Phase 6）
+3. 附件渲染在消息气泡内的 content 下方，以 WeChat 风格展示
+
+#### 2E — Engine 侧新增接口
+
+| 端点 | 方法 | 说明 |
+|:----:|:----:|------|
+| `/api/user/agents/{hash}/vfs` | GET | 列出目录（`?path=/workspace/&depth=1`）|
+| `/api/user/agents/{hash}/vfs/url` | GET | 获取 presigned URL（`?path=...&mode=view|download`）|
+| `/api/user/agents/{hash}/vfs/url-upload` | POST | 获取 presigned PUT URL |
+| `/api/user/agents/{hash}/vfs/mkdir` | POST | 新建文件夹 |
+| `/api/user/agents/{hash}/vfs/rm` | DELETE | 删除文件/文件夹 |
+| `/api/user/agents/{hash}/vfs/mv` | POST | 重命名/移动 |
+| `/api/user/agents/{hash}/vfs/permissions` | PATCH | 设置 Agent 文件权限 |
+| `/api/user/agents/{hash}/vfs/events` | POST | 文件操作事件通知（日志式，不阻塞）|
+| `/api/user/agents/{hash}/settings` | PATCH | 更新别名/置顶/免打扰/权限模式 |
+| `/api/user/agents/{hash}/apps` | GET | 小程序列表 |
+| `/api/user/agents/{hash}/config` | GET/PUT | 配置管理 |
+
+所有 VFS 读写操作走 COS presigned URL，不占用服务器带宽。
+目录/重命名/删除等元数据操作走 Engine REST API（小请求）。
+
+**文件浏览数据流：**
+```
+Desktop → Engine GET /api/user/agents/{hash}/vfs?path=/workspace/
+  ← Engine 返回 [{name, type(dir|file), size, mtime, content_type}]
+  → Desktop 渲染目录树/文件列表
+
+Desktop 点击预览图片 → Engine GET /api/user/agents/{hash}/vfs/url?path=xxx&mode=view
+  ← Engine 返回 presigned COS URL（1 天 TTL）
+  → Desktop Rust reqwest 下载 bytes
+  → data: URL → <img> 显示
+
+Desktop 上传文件 → Engine POST /api/user/agents/{hash}/vfs/url-upload?path=xxx
+  ← Engine 返回 presigned PUT URL（1 小时 TTL）
+  → Desktop HTTP PUT 直传 COS（0 服务器带宽）
+  → Desktop POST vfs/events 通知 Engine
+```
+
+**远期：** 绑定自定义域名后可绕过 presigned URL，直接 `https://vfs.feclaw.lizidaren.cn/agents/{hash}/...` 访问。
+
+#### 文件权限管理
+
+利用 Engine 已有的 `FilePermission` 表 + `permission_service.py`：
+
+```python
+# Desktop 设置权限 → PATCH /api/user/agents/{hash}/vfs/permissions
+# body: { path: "/workspace/复习计划.md", permission: "read" }
+
+# Engine 侧写入 FilePermission 表：
+# { agent_hash, file_path, permission: "read"|"readwrite"|"none" }
+# "none" = Agent 不可见该文件（从 Agent 的 VFS 视角隐藏）
+```
+
+Desktop 右键文件 → 「权限」→ 弹窗三选一：
+| 选项 | FilePermission 值 | 效果 |
+|:----:|:-----------------:|------|
+| 🔒 隐藏 | `none` | Agent ls 看不到、读不了 |
+| 📖 只读 | `read` | Agent 可看不可改 |
+| ✏️ 可读可写 | `readwrite` | Agent 完全访问（默认）|
+
+---
+
+**工期估计（Claude Code 会话数）：**
+
+| 子块 | 会话数 | 说明 |
+|:----:|:------:|------|
+| 2A VFS 文件管理器 | ~1.5 | 目录树/文件列表/右键菜单/Tauri 命令 |
+| 2B 查看器/编辑器 | ~1.5 | 图片渲染/代码编辑器/MD 双模式/保存 |
+| 2C 侧栏补完 | ~1 | 设置同步/配置管理/小程序列表 |
+| 2D WS 附件渲染 | ~0.5 | WS 消息解析 + 附件卡片渲染 |
+| 2E Engine 接口 | ~1 | 8 个新端点 |
+
+**总计：~5-6 个 Claude Code 会话，可拆 2A+2C 和 2B+2D+2E 两轮并行**
+
+**完成条件：**
+```
+1. 侧栏打开文件管理器 → 显示目录树+文件列表
+2. 可浏览 VFS 目录、排序、刷新
+3. 双击图片 → 查看器显示
+4. 双击代码文件 → 编辑器打开 + 语法高亮
+5. 编辑保存 → COS 回写成功
+6. Markdown 查看→编辑切换正常
+7. 右键文件有完整菜单（预览/编辑/重命名/删除/本地查看/下载/权限）
+8. 右键空白有上传/新建/刷新
+9. 权限弹窗 → 修改生效（隐藏/只读/读写）
+10. 别名/置顶/免打扰修改 → 同步到 Engine
+11. Agent 发图片 → Desktop 消息气泡内显示内联图片
+12. 所有操作通知 Engine（vfs/events）
+```
 
 ---
 
 ### Phase 3 — Windows 右键菜单（📎 引用 / 📤 发送）
 
-**目标：** 资源管理器右键 → 「FeClaw 引用」/「FeClaw 发送」→ Desktop 收到文件路径 → 加入当前聊天待发送列表。
+**目标：** 资源管理器右键 → 「FeClaw 引用」/「FeClaw 发送」→ Desktop 收到文件路径 → 弹出选择框 → 加入聊天。
 
-**关键交付：**
-- `src-tauri/src/right_click.rs` 注册表操作（HKCU）
-- `main.rs` 解析 `--right-click reference/send <path>` 参数
-- 设置中加开关（默认关，让用户显式启用）
-- 安全：复用 `file_bridge::resolve_desktop_path` 的路径遍历防护
+**前置：** Phase 1（文件引用卡片）、Phase 0b（pick_local_file）
 
-**依赖：** `winreg = "0.52"`
+#### 右键菜单注册
 
+向 Windows 注册表 `HKCU\Software\Classes\*\shell\` 写入两个菜单项：
 
-**工时：** 3–4 天
+| 菜单项 | 命令 |
+|:------:|:----|
+| 📎 FeClaw 引用 | `feclaw-desktop.exe --right-click reference "%1"` |
+| 📤 FeClaw 发送 | `feclaw-desktop.exe --right-click send "%1"` |
+
+- `src-tauri/src/right_click.rs`（新建）— 注册表读写（`winreg` crate）
+  - `register_right_click()` / `unregister_right_click()`
+  - 写注册表路径：`HKCU\Software\Classes\*\shell\FeClawReference` + `command`
+- 设置页开关：默认关 → 用户显式开启 → 写入注册表
+- 卸载时清理注册表项
+
+#### 全部执行流程
+
+```
+用户右键文件 → FeClaw 引用/发送
+  ↓
+Desktop 进程启动（如果未运行）
+  ↓
+main.rs 解析 `--right-click <mode> <path>` 参数
+  ↓
+检查运行模式（代码开关 is_cloud_mode，兼容本地/第三方）
+  │
+  ├── 云模式 + 已登录 → 弹出文件发送选择框
+  ├── 云模式 + 未登录 → 提示登录 → 登录后弹出选择框
+  └── 本地模式 → 跳过检查，直接弹出选择框
+  ↓
+显示发送选择框（新窗口/弹窗）：
+  ┌── 发送文件 ────────────────────┐
+  │                                 │
+  │ 📄 复习计划.pdf  (2.3 MB)        │ ← 文件名+大小+图标
+  │                                 │
+  │ 发送方式：                      │
+  │ ○ 📎 引用（Agent 可读写）        │
+  │ ● 📤 发送（只读副本）            │
+  │                                 │
+  │ 发送到：                        │
+  │ [我的数学助手 ▼]                │ ← Agent 下拉选择
+  │                                 │
+  │ 附加消息（可选）：               │
+  │ ┌─────────────────────────────┐ │
+  │ │ 帮我看看这个文件             │ │ ← 富文本输入框
+  │ │                             │ │
+  │ └─────────────────────────────┘ │
+  │                                 │
+  │ [取消]  [发送]                   │
+  └─────────────────────────────────┘
+  ↓
+点击发送 → 文件卡片嵌入目标 Agent 聊天输入框
+```
+
+**附加输入框支持：** 文字 + Ctrl+V 粘贴图片（复用 Phase 1 粘贴逻辑）
+
+#### Rust 实现
+
+```rust
+// right_click.rs
+#[tauri::command]
+fn register_right_click() -> Result<()> {
+    // HKCU\Software\Classes\*\shell\FeClawReference
+    // HKCU\Software\Classes\*\shell\FeClawSend
+}
+
+#[tauri::command]
+fn unregister_right_click() -> Result<()> {
+    // 清理注册表项
+}
+
+#[tauri::command]  
+fn is_right_click_registered() -> Result<bool> {
+    // 检查注册表项是否存在
+}
+
+// main.rs
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() >= 4 && args[1] == "--right-click" {
+        let mode = &args[2]; // "reference" | "send"
+        let file_path = &args[3];
+        // 启动发送流程，不显示正常窗口
+    }
+}
+```
+
+#### 安全
+
+- 复用 `file_bridge::resolve_desktop_path` 路径遍历防护
+- `--right-click` 参数用 `"%1"` 传递（Windows shell 自动加引号）
+- 文件类型白名单：默认全部允许，可配置（可选）
+
+#### 依赖
+
+- `winreg = "0.52"`（已计划）
+- `single-instance` 或 Tauri 内置 single instance 防止多实例冲突
+
+**潜在坑点（决策/缓解）：**
+
+| 坑 | 等级 | 缓解 |
+|:--:|:----:|:-----|
+| WSL 无法测试注册表 | 🟡 中 | 代码逻辑正确即可，注册表验证需真 Windows |
+| 卸载后注册表残留 | 🟢 低 | `unregister_right_click()` 卸载钩子 |
+| 多实例冲突 | 🟡 中 | Tauri `single_instance` 配置 + IPC 传递文件路径到已运行实例 |
+| 敏感文件类型（.exe/.bat）| 🟢 低 | 初期不做限制，用户自觉。后续可加文件类型黑名单 |
+| 文件路径含特殊字符 | 🟢 低 | Windows `"%1"` 已处理空格，Unicode 由 Rust String 原生支持 |
+| 启动延迟感 | 🟡 中 | Desktop 冷启动 ~2-3s，可能感觉慢。可考虑开机常驻托盘进程 |
+| 企业 Windows 锁注册表 | 🟢 低 | 极少数场景，降级为无右键菜单 |
+
+**工时估计：** ~1-2 个 Claude Code 会话
 
 ---
 
 ### Phase 4 — 群聊引擎侧（核心改动：群上云）
 
-**目标：** Engine 侧新增 Group 模型层 + API + WS 端点。群数据由服务器管理，Desktop 是消费方。
+**目标：** Engine 侧新增 Group 模型层 + API + WS 端点 + Dispatch 路由引擎。
+群数据由服务器管理，Desktop 是消费方。
 
-**引擎侧新增文件：**
-- `models/group.py` — Group + GroupMember + GroupMoments 模型
-- `services/group_service.py` — 群聊核心逻辑（创建/路由/上下文管理）
-- `routers/group.py` — REST API + WS 端点
+**前置：** Phase 2（VFS 事件通知）、Phase 0a（三栏 UI 骨架）
 
-**引擎侧 API 端点：**
-```
-POST   /api/groups/create               — 创建群
-POST   /api/groups/{id}/send            — 发送群消息（用户触发）
-POST   /api/groups/{id}/join            — 拉 Agent 入群
-POST   /api/groups/{id}/leave           — 踢出 Agent
-PATCH  /api/groups/{id}/settings        — 更新群设置（改名/公告/权限/广场开关）
-DELETE /api/groups/{id}                 — 解散群
-GET    /api/groups/{id}/messages        — 获取历史消息
-GET    /api/desktop/groups              — Desktop 列出用户所有群
-WS     /ws/desktop/groups/{group_id}    — 群消息实时推送
-```
+---
 
-**典型消息路由（备课场景）：**
-```
-用户"我想学三角函数" → POST /api/groups/{id}/send
-  → group_service.send_message() 分发消息给群内每个 Agent
-    → 并行调用 3 次 chat_service.chat()（各 Agent 独立思考）
-      Agent A (老师): 生成教案 + 知识点拆解
-      Agent B (好学生): 提挑战性问题
-      Agent C (学困生): 指出易错点
-  → 聚合结果 → WS 推送给 Desktop
-  → Desktop 按时间线渲染群聊窗口
-```
+#### 4.1 — 设计决策（历史记录）
 
-**引擎侧数据 model：**
+| 编号 | 问题 | 决策 |
+|:----:|:----:|:-----|
+| D4.1 | 消息路由策略 | **并行异步自驱：** 用户/Agent 发消息 → 所有成员同时收到 → 各 Agent 独立决定回复/NO_REPLY/后台任务。NO_REPLY 休眠在以下条件解除：用户新消息 / 自己被 @ / 群消息数 > 2×总人数 |
+| D4.2 | 上下文组装 | **原始时间线 + 人格 + Session Memory：** 群聊历史按时间顺序拼接（像微信聊天记录）。Agent 人格和 session memory 正常注入。system prompt 引导 IM 模式（短消息、后台任务）。上下文爆了：保留最近约 15% 模型上下文窗口不做压缩，更远的 compact |
+| D4.3 | Agent 发言入口 | **Dispatch 架构（方案 F）：** Engine group_service 管理 dispatch 轮次，不创建永久 loop。见下方详细设计 |
+| D4.4 | 超时处理 | **不设超时：** Agent 想做长程任务就让它做，不拦着 |
+| D4.5 | WS 消息格式 | 见下方 WS 协议定义 |
+| D4.6 | MAX_ROUNDS | **100 轮**，设为 tier 配置项 max_group_rounds。用户发新消息重置计数器。所有成员 NO_REPLY 时自然结束 |
+| D4.7 | 发消息走 WS 不走 REST | 群聊发消息全程走 WebSocket，无 POST /api/groups/{id}/send 端点 |
+| D4.8 | 群公共工作区路径 | COS 单独路径 `feclaw/groups/{id}/`。Agent 在群上下文中通过 `/mnt/group/` 访问，匹配 `/mnt/desktop/` 的即插即用风格。Agent 自身的 `/workspace/` 不受影响 |
+| D4.9 | 群统一权限优先级 | 群设置了 `unified_permission_mode` → 群内所有 Agent 以此为准。Agent 个人权限模式只在单聊中生效。支持兼容（Agent 自身禁止但群里允许）|
+| D4.10 | WS 连接策略 | 单条 WS 连接，消息加 `channel: "im" | "group:{id}"` 字段区分，Desktop 路由到对应聊天窗口 |
+
+#### 4.2 — Dispatch 路由引擎（核心设计）
+
 ```python
+# services/group_service.py
+
+class GroupDispatchService:
+    """
+    群聊消息路由引擎。
+
+    不维护永久 asyncio loop。每次新消息触发 dispatch 轮次，
+    每轮分配 asyncio.create_task 让各 Agent 独立决定。
+    """
+
+    MAX_ROUNDS = 100  # 默认值，按 user.tier 可配置
+
+    async def on_message(self, group_id: str, sender: str,
+                         content: str, mentions: list[str],
+                         attachments: list[dict] = None):
+        """
+        收到新消息后触发 dispatch。
+
+        1. 持久化 GroupMessage
+        2. 调用 dispatch_to_members(round=0)
+        """
+
+    async def dispatch_to_members(self, group_id: str,
+                                   exclude: str, round: int = 0):
+        """遍历群成员，对每个 Agent 决策是否发言。"""
+        if round >= self.MAX_ROUNDS:
+            return  # 安全阀
+
+        members = self.get_members(group_id)
+        tasks = []
+        for member in members:
+            if member.agent_hash == exclude:
+                continue
+            if self.should_wake(member, group_id, round):
+                tasks.append(
+                    asyncio.create_task(self.agent_reply(member, group_id, round))
+                )
+
+        if tasks:
+            await asyncio.gather(*tasks)
+            # 如果有新消息产生（其他 Agent 回复了）
+            # → dispatch_to_members(round+1)
+
+    def should_wake(self, member, group_id, round) -> bool:
+        """决定 Agent 是否需要发言。"""
+        if round == 0:
+            return True  # 用户新消息 → 全唤醒
+        if member.is_silent:
+            if self.was_mentioned(member): return True  # @唤醒
+            if self.msg_volume_exceeded(group_id): return True  # 消息量唤醒
+            return False  # 继续沉默
+        return True  # 非沉默 → 参与本轮
+
+    async def agent_reply(self, member, group_id, round):
+        """单个 Agent 的发言逻辑。"""
+        context = self.build_context(member, group_id)
+
+        response = await llm.chat(member.agent_hash, [
+            {"role": "system", "content": IM_GROUP_SYSTEM_PROMPT},
+            *context
+        ])
+
+        if response.strip().upper() == "NO_REPLY":
+            member.is_silent = True
+            self.save_member(member)
+            return
+
+        # 正常回复
+        msg_id = self.post_message(group_id, member.agent_hash, response)
+        await self.push_to_clients(group_id, msg_id)  # WS 推送
+        member.is_silent = False
+        self.save_member(member)
+
+        # 新消息 → 触发下一轮
+        await self.dispatch_to_members(group_id, exclude=member.agent_hash,
+                                       round=round + 1)
+
+    def build_context(self, member, group_id) -> list:
+        """
+        组装 Agent 看到的群聊上下文。
+
+        格式类似微信群聊天记录：
+        [群名] 数学复习讨论组
+        [公告] 讨论三角函数复习计划
+        ---
+        张三（用户）说：我想学三角函数
+        李老师（Agent A）说：建议从正弦函数开始
+        王学霸（Agent B）说：先看历年真题分布
+        """
+```
+
+#### 4.3 — 数据模型
+
+```python
+# models/group.py
+import uuid
+from datetime import datetime
+from sqlalchemy import Column, String, Boolean, DateTime, JSON, Text, Integer
+
 class Group(Base):
-    id: str (UUID)
-    name: str
-    announcement: str (群公告)
-    announcement_updated_at: datetime
-    owner_user_id: int
-    settings: JSON (allow_agent_edit_name, allow_agent_edit_announce, 
-                    moments_enabled, unified_permission_mode)
-    # unified_permission_mode: str — 群统一权限级别 ("disabled"|"strict"|"balanced"|"relaxed"|"full")
-    # 设置为 non-null 时覆盖群内各 Agent 的独立权限配置
-    context_isolation: bool = True
-    created_at / updated_at
+    __tablename__ = "groups"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(100), nullable=False)
+    announcement = Column(Text, default="")
+    announcement_updated_at = Column(DateTime, nullable=True)
+    owner_user_id = Column(Integer, nullable=False, index=True)
+    settings = Column(JSON, default=dict)
+    context_isolation = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+    deleted_at = Column(DateTime, nullable=True)  # 软删除
 
 class GroupMember(Base):
-    group_id: str → Group.id
-    agent_hash: str → AgentProfile.hash
-    role: str ("owner" | "member")
+    __tablename__ = "group_members"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(String(36), nullable=False, index=True)
+    agent_hash = Column(String(4), nullable=False)
+    role = Column(String(16), default="member")  # "owner" | "member"
+    is_silent = Column(Boolean, default=False)  # NO_REPLY 沉默状态
+    joined_at = Column(DateTime, default=datetime.utcnow)
 
 class GroupMessage(Base):
-    id: str (UUID)
-    group_id: str → Group.id
-    sender_type: str ("user" | "agent")
-    sender_hash: str (agent_hash 或 None)
-    content: str
-    message_type: str ("text" | "image" | "file" | "consent_card" | "question_box")
-    mentions: list[str] (@提及的 agent_hash 列表)
-    created_at
+    __tablename__ = "group_messages"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    group_id = Column(String(36), nullable=False, index=True)
+    sender_type = Column(String(8), nullable=False)  # "user" | "agent"
+    sender_hash = Column(String(4), nullable=True)
+    content = Column(Text)
+    message_type = Column(String(32), default="text")  # text | image | miniapp_card
+    attachments = Column(JSON, nullable=True)
+    mentions = Column(JSON, default=list)
+    round = Column(Integer, default=0)  # dispatch 轮次号（用于调试）
+    created_at = Column(DateTime, default=datetime.utcnow)
 ```
 
-**上下文隔离：** group_service 在构建每条消息的上下文时，只注入该群的历史消息，不混入单聊记录。
+#### 4.4 — Engine REST API
 
-**Desktop 侧改动：**
-- `src-tauri/src/group.rs` — HTTP 客户端调用 Engine Group API（不是本地数据管理）
-- `ws.rs` 扩展 — 接收群聊 WS 消息类型 `group_message` / `group_event`
-- 前端渲染 — 群聊窗口独立 Tab，消息按 sender 分色显示
+| 端点 | 方法 | 说明 |
+|:----:|:----:|:-----|
+| /api/groups | POST | 创建群（body: name, members[]）|
+| /api/groups | GET | 列表用户的所有群 |
+| /api/groups/{id} | GET | 群详情（含成员）|
+| /api/groups/{id} | PATCH | 更新群设置（改名/公告/权限/广场开关）|
+| /api/groups/{id} | DELETE | 解散群（软删除）|
+| /api/groups/{id}/join | POST | 拉 Agent 入群 |
+| /api/groups/{id}/leave | POST | 踢出 Agent |
+| /api/groups/{id}/messages | GET | 历史消息（?before=timestamp&limit=50）|
 
-**工时：** 引擎 4–5 天 + Desktop 2–3 天
+不发消息通过 REST，所有消息走 WebSocket。
+
+#### 4.5 — WebSocket 协议
+
+**Desktop → Engine（群消息）：**
+```json
+{
+  "type": "send_group_message",
+  "group_id": "uuid-xxx",
+  "content": "我想学三角函数",
+  "mentions": ["agent_hash_1"],
+  "attachments": [
+    {
+      "type": "image",
+      "source": "vfs",
+      "path": "/images/三角公式.png",
+      "name": "三角公式.png",
+      "size_bytes": 204800
+    },
+    {
+      "type": "miniapp_card",
+      "app_id": "复习计划生成器",
+      "title": "三角函数复习计划",
+      "preview_image": "/images/preview.png",
+      "data": { "plan_id": "xxx" }
+    }
+  ]
+}
+```
+
+**Engine → Desktop（群消息推送）：**
+```json
+{
+  "type": "group_message",
+  "group_id": "uuid-xxx",
+  "message": {
+    "id": "msg-uuid",
+    "sender_type": "agent",
+    "sender_hash": "abc123",
+    "sender_name": "李老师",
+    "content": "建议从正弦函数开始...",
+    "content_type": "text",
+    "attachments": [],
+    "round": 0,
+    "is_tail": true,
+    "timestamp": 1710000000
+  }
+}
+```
+
+**Engine → Desktop（群事件推送）：**
+```json
+{
+  "type": "group_event",
+  "group_id": "uuid-xxx",
+  "event": "member_joined",
+  "data": { "agent_hash": "def456", "agent_name": "王学霸" }
+}
+```
+
+Desktop WS 连接：WS /ws/desktop（已有）→ 消息类型扩展 send_group_message / group_message / group_event
+
+#### 4.6 — 上下文压缩策略
+
+当 Agent 的群聊上下文超过 LLM 窗口大小时：
+
+```python
+CONTEXT_WINDOW_KEEP_RATIO = 0.15  # 保留最近 15% 不压缩
+
+def build_context(self, member, group_id) -> list:
+    messages = self.get_recent_messages(group_id)
+    total_chars = sum(len(m.content) for m in messages)
+    model_window = self.get_model_window(member.agent_hash)
+
+    if total_chars > model_window:
+        keep_count = max(1, int(len(messages) * CONTEXT_WINDOW_KEEP_RATIO))
+        recent = messages[-keep_count:]  # 最近的不压缩
+        older = messages[:-keep_count]  # 更远的压缩
+        compressed = self.summarize_messages(older)
+        context = compressed + recent
+    else:
+        context = messages
+    return context
+```
+
+#### 4.7 — 权限集成
+
+| 控制点 | 配置键 | 默认值 |
+|:------:|:------:|:------:|
+| 群聊功能开关 | features_enabled.group_chat | true |
+| 最大群数 | max_groups | -1（不限）|
+| 最大成员数 | max_group_members | -1（不限）|
+| 最大 dispatch 轮数 | max_group_rounds | 100 |
+| 群统一权限模式 | Group.settings.unified_permission_mode | null（不覆盖）|
+
+tier 配置示例：
+```python
+TIER_CONFIGS = {
+    "pro":  { "max_groups": 5, "max_group_members": 20, "max_group_rounds": 100 },
+    "enterprise": { "max_groups": -1, "max_group_members": -1, "max_group_rounds": 200 },
+}
+```
+
+#### 4.8 — Desktop 侧改动
+
+| 文件 | 改动 |
+|:----:|:-----|
+| src-tauri/src/group.rs（新建）| HTTP 客户端调用 Engine Group REST API |
+| src-tauri/src/ws.rs | 扩展 WS 消息解析 |
+| src-tauri/src/chat/store.ts | 新增 groups[], activeGroupId |
+| src-tauri/src/chat/chat.ts | 群消息发送走 WS + 群消息渲染 |
+| src-tauri/src/chat/chat.css | 群聊消息按 sender 分色 |
+
+**群聊 UI 预览：**
+```
+中栏（聊天列表）
+  ├── 💬 三角公式复习群
+  ├── 💬 李老师
+  └── 💬 王学霸
+
+右栏（群聊窗口）
+  张三（用户）：我想学三角函数
+  李老师：从正弦开始  （蓝）
+  王学霸：先看真题分布 （绿）
+```
+
+**工时估计（Claude Code 会话数）：**
+| 子块 | 会话数 | 说明 |
+|:----:|:------:|------|
+| 4.2 Dispatch Engine | ~1.5 | DispatchService + should_wake + agent_reply |
+| 4.3-4.4 模型+API | ~1 | 3 个模型 + 7 个 REST 端点 |
+| 4.5 WS 协议扩展 | ~1 | Engine WS + Desktop WS 扩展 |
+| 4.6 压缩策略 | ~0.5 | summarizer 实现 |
+| 4.8 Desktop UI | ~2 | 群聊 Tab + 消息渲染 + 分色 |
+
+总计：~6 个 Claude Code 会话
+
+---
+
+### Phase 4b — Agent 自建临时群（远期，Phase 4 后）
+
+**概念：** Agent 遇到复杂任务时可自主创建临时群，拉入多个自己设计的人格 Agent 进行讨论，完成后自动解散。
+
+**目标状态：**
+- Agent 新增工具 create_temp_group(personas, task, max_rounds=20)
+- 临时 Agent 实例不持久化到 AgentProfile（只在内存 + 一次 dispatch 链）
+- Token 消耗算在发起 Agent 的上下文
+- 默认后台静默执行，用户可选展开查看讨论过程
+- 权限控制：agent_can_create_temp_groups，默认关
 
 ---
 
