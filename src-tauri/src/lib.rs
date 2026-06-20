@@ -268,7 +268,6 @@ pub fn run() {
                 Ok(())
             })
             .build(tauri::generate_context!())
-            .await
             .expect("error while building tauri application");
 
         #[cfg(feature = "global-shortcut")]

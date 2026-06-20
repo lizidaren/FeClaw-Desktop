@@ -340,10 +340,10 @@ impl WsClient {
                 self.spawn_command_exec(id, payload).await;
             }
             WsRequest::FileRead { id, timestamp: _, payload } => {
-                self.handle_file_read(id, payload);
+                self.handle_file_read(id, payload).await;
             }
             WsRequest::FileWrite { id, timestamp: _, payload } => {
-                self.handle_file_write(id, payload);
+                self.handle_file_write(id, payload).await;
             }
             WsRequest::FileDelete { id, timestamp: _, payload } => {
                 self.handle_file_delete_not_implemented(id, payload);
@@ -449,7 +449,7 @@ impl WsClient {
         Ok(())
     }
 
-    fn handle_file_read(&self, id: String, payload: FileReadPayload) {
+    async fn handle_file_read(&self, id: String, payload: FileReadPayload) {
         tracing::info!(
             "file_read_request id={id} path={}",
             payload.path
@@ -551,7 +551,7 @@ impl WsClient {
         self.send_file_response(&resp, "file_read_response");
     }
 
-    fn handle_file_write(&self, id: String, payload: FileWritePayload) {
+    async fn handle_file_write(&self, id: String, payload: FileWritePayload) {
         tracing::info!(
             "file_write_request id={id} path={} content_len={}",
             payload.path,
