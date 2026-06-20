@@ -144,6 +144,7 @@ pub fn run() {
                     if let Err(e) = welcome::open_welcome_window(handle.clone()).await {
                         tracing::warn!("failed to open welcome window on first launch: {e}");
                     }
+                    return;
                 }
                 if let Err(e) = startup(handle).await {
                     tracing::error!("startup failed: {e:#}");
