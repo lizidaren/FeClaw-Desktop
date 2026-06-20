@@ -314,6 +314,7 @@ impl EngineManager {
                     );
                     Self::clear_token(&shared_config).await;
                     Self::request_cloud_login(&ui_tx);
+                    Self::emit_auth_failure(&ui_tx, "cached token rejected");
                     tokio::time::sleep(CLOUD_LOGIN_BACKOFF).await;
                     continue;
                 }
@@ -343,13 +344,32 @@ impl EngineManager {
             let (close_code, result) = ws.run_once().await;
 
             // 6. Auth-failure close codes invalidate the JWT.
-            if matches!(close_code, Some(4001) | Some(4002)) {
+            //
+            // Codes we treat as auth failures (per the cloud WS contract):
+            //   4001 — invalid / expired token
+            //   4002 — forbidden (account disabled, scope mismatch, …)
+            //   4003 — authentication required (peer demanded creds we
+            //          didn't supply, e.g. after a server-side session
+            //          invalidation)
+            //
+            // In every case the JWT is no longer usable, so we clear it
+            // and notify the UI. 4003 is added on top of the original
+            // 4001/4002 pair so a missing-or-stale cookie also lands in
+            // the same "please re-authenticate" path.
+            if matches!(close_code, Some(4001) | Some(4002) | Some(4003)) {
+                let reason = match close_code {
+                    Some(4001) => "token invalid or expired",
+                    Some(4002) => "forbidden",
+                    Some(4003) => "authentication required",
+                    _ => "unknown auth failure",
+                };
                 tracing::warn!(
-                    "cloud auth failure (close code {:?}); clearing token",
+                    "cloud auth failure (close code {:?}, reason={reason}); clearing token",
                     close_code
                 );
                 Self::clear_token(&shared_config).await;
                 Self::request_cloud_login(&ui_tx);
+                Self::emit_auth_failure(&ui_tx, reason);
                 tokio::time::sleep(CLOUD_LOGIN_BACKOFF).await;
                 continue;
             }
@@ -373,6 +393,28 @@ impl EngineManager {
             tracing::error!(
                 "no ui_tx; cannot request cloud login. \
                  The user must manually sign in via Settings."
+            );
+        }
+    }
+
+    /// Surface a cloud auth failure to the UI by emitting
+    /// `ControlMsg::AuthFailure`. The control pump in `lib.rs` turns this
+    /// into a `auth-failure` Tauri event so the chat window can show an
+    /// inline "session expired" banner immediately, without waiting for
+    /// the user to navigate to Settings.
+    ///
+    /// `reason` is a short human-readable string (e.g. `"token invalid or
+    /// expired"`, `"forbidden"`, `"authentication required"`). The frontend
+    /// decides whether to translate / display it.
+    fn emit_auth_failure(ui_tx: &Option<mpsc::UnboundedSender<ControlMsg>>, reason: &str) {
+        if let Some(tx) = ui_tx {
+            let _ = tx.send(ControlMsg::AuthFailure {
+                reason: reason.to_string(),
+            });
+        } else {
+            tracing::error!(
+                "no ui_tx; cannot forward auth-failure event. \
+                 The user will only see this on the next reconnect attempt."
             );
         }
     }

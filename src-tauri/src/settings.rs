@@ -262,6 +262,7 @@ struct LoginResponse {
 /// Cloud session info surfaced to the UI. Used by the Settings page to
 /// decide whether to show the login form or the "already connected" card.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CloudSession {
     pub connected: bool,
     pub username: Option<String>,

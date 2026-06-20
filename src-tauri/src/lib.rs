@@ -55,6 +55,12 @@ pub enum ControlMsg {
     /// the login form. Emitted by `EngineManager::cloud_loop` whenever
     /// the cloud token is missing or rejected (4001/4002 close codes).
     ShowCloudLogin,
+    /// The cloud engine rejected our credentials (close code 4001, 4002,
+    /// or 4003). The control pump turns this into a frontend `auth-failure`
+    /// Tauri event so the chat UI can show a "session expired, please
+    /// re-authenticate" notice without waiting for the user to open
+    /// Settings.
+    AuthFailure { reason: String },
     /// Exit the application cleanly.
     Quit,
 }
@@ -295,6 +301,17 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
                     }
                     if let Err(e) = app_for_control.emit("navigate-settings", "cloud") {
                         tracing::warn!("emit navigate-settings: {e}");
+                    }
+                }
+                ControlMsg::AuthFailure { reason } => {
+                    tracing::warn!("control: auth failure forwarded to UI (reason={reason})");
+                    // Forward to the frontend so any open chat window can
+                    // show a "session expired" banner immediately. The
+                    // payload is the reason string the server sent (or a
+                    // synthesised message when the server didn't include
+                    // one); the UI decides how to render it.
+                    if let Err(e) = app_for_control.emit("auth-failure", &reason) {
+                        tracing::warn!("emit auth-failure: {e}");
                     }
                 }
                 ControlMsg::Quit => {

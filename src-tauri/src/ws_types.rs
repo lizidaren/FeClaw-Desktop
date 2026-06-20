@@ -179,6 +179,29 @@ pub struct FileReadResponsePayload {
     pub error: Option<String>,
 }
 
+/// Outbound response to a `file_write_request` (V2 file bridge).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FileWriteResponse {
+    pub id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    #[serde(default)]
+    pub payload: FileWriteResponsePayload,
+}
+
+/// Payload inside [`FileWriteResponse`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct FileWriteResponsePayload {
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+}
+
 /// Outbound response to a `file_delete_request` (V2 file bridge).
 /// Kept for protocol completeness; MVP returns error.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -458,6 +481,42 @@ mod tests {
             Some("file bridge not implemented in MVP".to_string())
         );
         assert!(resp.payload.content.is_none());
+    }
+
+    // --- FileWriteResponse round-trip ---
+
+    #[test]
+    fn file_write_response_success_roundtrip() {
+        let resp = FileWriteResponse {
+            id: "fw-001".to_string(),
+            status: "ok".to_string(),
+            timestamp: Some("1700000000".to_string()),
+            payload: FileWriteResponsePayload {
+                success: true,
+                error: None,
+                content_length: Some(42),
+                hash: Some("sha256:deadbeef".to_string()),
+            },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: FileWriteResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, resp);
+    }
+
+    #[test]
+    fn file_write_response_error_roundtrip() {
+        let json = r#"{
+            "id": "fw-002",
+            "status": "error",
+            "payload": { "success": false, "error": "permission denied" }
+        }"#;
+        let resp: FileWriteResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.id, "fw-002");
+        assert_eq!(resp.status, "error");
+        assert!(!resp.payload.success);
+        assert_eq!(resp.payload.error, Some("permission denied".to_string()));
+        assert!(resp.payload.content_length.is_none());
+        assert!(resp.payload.hash.is_none());
     }
 
     // --- FileDeleteResponse round-trip ---

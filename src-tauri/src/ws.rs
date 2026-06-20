@@ -18,14 +18,18 @@ use std::time::Instant;
 
 use crate::consent::{ConsentManager, Decision};
 use crate::executor::CommandExecutor;
+use crate::file_bridge;
 use crate::ws_types::{
     CommandExecPayload, CommandExecPayloadOut, CommandExecResponse, ConnectionStatus,
     FileDeletePayload, FileReadPayload, FileReadResponse, FileReadResponsePayload,
-    FileWritePayload, NotificationPayload, WsRequest,
+    FileWritePayload, FileWriteResponse, FileWriteResponsePayload, NotificationPayload,
+    WsRequest,
 };
 
 use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,6 +43,13 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const PONG_TIMEOUT: Duration = Duration::from_secs(35);
 const MAX_RECONNECT_ATTEMPTS: u32 = 30;
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+
+/// Maximum file size for an inbound `file_read_request` / `file_write_request`
+/// over the WS bridge. Matches the cap used by `file_ops::MAX_FILE_BYTES` so
+/// a single message can't blow up memory or a websocket frame. Requests
+/// larger than this are rejected with an error envelope rather than
+/// silently truncated.
+const MAX_BRIDGE_BYTES: u64 = 1024 * 1024;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -324,10 +335,10 @@ impl WsClient {
                 self.spawn_command_exec(id, payload).await;
             }
             WsRequest::FileRead { id, timestamp: _, payload } => {
-                self.handle_file_read_not_implemented(id, payload);
+                self.handle_file_read(id, payload);
             }
             WsRequest::FileWrite { id, timestamp: _, payload } => {
-                self.handle_file_write_not_implemented(id, payload);
+                self.handle_file_write(id, payload);
             }
             WsRequest::FileDelete { id, timestamp: _, payload } => {
                 self.handle_file_delete_not_implemented(id, payload);
@@ -363,43 +374,224 @@ impl WsClient {
         Ok(())
     }
 
-    fn handle_file_read_not_implemented(&self, id: String, payload: FileReadPayload) {
+    fn handle_file_read(&self, id: String, payload: FileReadPayload) {
         tracing::info!(
-            "file_read_request received but file bridge is V2 (id={id}, path={})",
+            "file_read_request id={id} path={}",
             payload.path
         );
         let ts = crate::ws_types::current_timestamp();
-        let resp = FileReadResponse {
-            id,
-            status: "error".to_string(),
-            timestamp: Some(ts),
-            payload: FileReadResponsePayload {
-                content: None,
-                error: Some("file bridge not implemented in MVP".to_string()),
+
+        // Resolve the VFS path → local path. The bridge enforces the
+        // `/mnt/desktop/` prefix and blocks `..` traversal, so any escape
+        // attempt shows up here as an Err.
+        let resolved = match file_bridge::resolve_desktop_path(&payload.path) {
+            Ok(p) => p,
+            Err(e) => {
+                let resp = FileReadResponse {
+                    id,
+                    status: "error".to_string(),
+                    timestamp: Some(ts),
+                    payload: FileReadResponsePayload {
+                        content: None,
+                        error: Some(format!("invalid path: {e}")),
+                    },
+                };
+                return self.send_file_response(&resp, "file_read_response");
+            }
+        };
+
+        // Enforce the size cap synchronously via `metadata` so we don't
+        // allocate the full file just to reject it.
+        let size = match std::fs::metadata(&resolved) {
+            Ok(m) => m.len(),
+            Err(e) => {
+                let resp = FileReadResponse {
+                    id,
+                    status: "error".to_string(),
+                    timestamp: Some(crate::ws_types::current_timestamp()),
+                    payload: FileReadResponsePayload {
+                        content: None,
+                        error: Some(format!("stat {}: {e}", resolved.display())),
+                    },
+                };
+                return self.send_file_response(&resp, "file_read_response");
+            }
+        };
+        if size > MAX_BRIDGE_BYTES {
+            let resp = FileReadResponse {
+                id,
+                status: "error".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileReadResponsePayload {
+                    content: None,
+                    error: Some(format!(
+                        "file too large: {size} bytes (max {MAX_BRIDGE_BYTES}); consider streaming"
+                    )),
+                },
+            };
+            return self.send_file_response(&resp, "file_read_response");
+        }
+
+        // Read + base64-encode. Done in a blocking task because file I/O
+        // can stall on slow disks / antivirus scans.
+        let path_for_err = resolved.clone();
+        let result = async_runtime::spawn_blocking(move || -> Result<(String, u64)> {
+            let bytes = std::fs::read(&resolved)
+                .map_err(|e| anyhow!("read {}: {e}", resolved.display()))?;
+            let len = bytes.len() as u64;
+            let encoded = BASE64.encode(&bytes);
+            Ok((encoded, len))
+        })
+        .await;
+
+        let resp = match result {
+            Ok(Ok((encoded, _len))) => FileReadResponse {
+                id,
+                status: "ok".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileReadResponsePayload {
+                    content: Some(encoded),
+                    error: None,
+                },
+            },
+            Ok(Err(e)) => FileReadResponse {
+                id,
+                status: "error".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileReadResponsePayload {
+                    content: None,
+                    error: Some(format!("{e}")),
+                },
+            },
+            Err(e) => FileReadResponse {
+                id,
+                status: "error".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileReadResponsePayload {
+                    content: None,
+                    error: Some(format!("read task panicked: {e} (path={path_for_err})")),
+                },
             },
         };
-        let mut value = serde_json::to_value(&resp).unwrap_or_else(|_| {
-            serde_json::json!({ "id": "", "status": "error", "payload": {} })
-        });
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("type".to_string(), serde_json::Value::String("file_read_response".to_string()));
-        }
-        self.send_json(&value);
+        self.send_file_response(&resp, "file_read_response");
     }
 
-    fn handle_file_write_not_implemented(&self, id: String, payload: FileWritePayload) {
+    fn handle_file_write(&self, id: String, payload: FileWritePayload) {
         tracing::info!(
-            "file_write_request received but file bridge is V2 (id={id}, path={})",
-            payload.path
+            "file_write_request id={id} path={} content_len={}",
+            payload.path,
+            payload.content.len()
         );
         let ts = crate::ws_types::current_timestamp();
-        self.send_json(&serde_json::json!({
-            "type": "file_write_response",
-            "id": id,
-            "status": "error",
-            "timestamp": ts,
-            "payload": { "error": "file bridge not implemented in MVP" },
-        }));
+
+        // Resolve the VFS path → local path.
+        let resolved = match file_bridge::resolve_desktop_path(&payload.path) {
+            Ok(p) => p,
+            Err(e) => {
+                let resp = FileWriteResponse {
+                    id,
+                    status: "error".to_string(),
+                    timestamp: Some(ts),
+                    payload: FileWriteResponsePayload {
+                        success: false,
+                        error: Some(format!("invalid path: {e}")),
+                        content_length: None,
+                        hash: None,
+                    },
+                };
+                return self.send_file_response(&resp, "file_write_response");
+            }
+        };
+
+        // Decode the base64 payload first so the size check is on the
+        // actual bytes written, not the encoded string length.
+        let decoded = match BASE64.decode(payload.content.as_bytes()) {
+            Ok(b) => b,
+            Err(e) => {
+                let resp = FileWriteResponse {
+                    id,
+                    status: "error".to_string(),
+                    timestamp: Some(crate::ws_types::current_timestamp()),
+                    payload: FileWriteResponsePayload {
+                        success: false,
+                        error: Some(format!("base64 decode failed: {e}")),
+                        content_length: None,
+                        hash: None,
+                    },
+                };
+                return self.send_file_response(&resp, "file_write_response");
+            }
+        };
+
+        if decoded.len() as u64 > MAX_BRIDGE_BYTES {
+            let resp = FileWriteResponse {
+                id,
+                status: "error".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileWriteResponsePayload {
+                    success: false,
+                    error: Some(format!(
+                        "file too large: {} bytes (max {MAX_BRIDGE_BYTES})",
+                        decoded.len()
+                    )),
+                    content_length: None,
+                    hash: None,
+                },
+            };
+            return self.send_file_response(&resp, "file_write_response");
+        }
+
+        // Write to disk in a blocking task. The path is dropped after the
+        // closure so we clone first for the error path.
+        let path_for_err = resolved.clone();
+        let decoded_len = decoded.len() as u64;
+        let result = async_runtime::spawn_blocking(move || -> Result<u64> {
+            if let Some(parent) = resolved.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| anyhow!("mkdir {}: {e}", parent.display()))?;
+            }
+            std::fs::write(&resolved, &decoded)
+                .map_err(|e| anyhow!("write {}: {e}", resolved.display()))?;
+            Ok(decoded_len)
+        })
+        .await;
+
+        let resp = match result {
+            Ok(Ok(len)) => FileWriteResponse {
+                id,
+                status: "ok".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileWriteResponsePayload {
+                    success: true,
+                    error: None,
+                    content_length: Some(len),
+                    hash: None,
+                },
+            },
+            Ok(Err(e)) => FileWriteResponse {
+                id,
+                status: "error".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileWriteResponsePayload {
+                    success: false,
+                    error: Some(format!("{e}")),
+                    content_length: None,
+                    hash: None,
+                },
+            },
+            Err(e) => FileWriteResponse {
+                id,
+                status: "error".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileWriteResponsePayload {
+                    success: false,
+                    error: Some(format!("write task panicked: {e} (path={path_for_err})")),
+                    content_length: None,
+                    hash: None,
+                },
+            },
+        };
+        self.send_file_response(&resp, "file_write_response");
     }
 
     fn handle_file_delete_not_implemented(&self, id: String, payload: FileDeletePayload) {
@@ -445,6 +637,26 @@ impl WsClient {
             }
             Err(e) => tracing::error!("ws serialize response: {e}"),
         }
+    }
+
+    /// Serialize a typed file response, attach the `type` discriminator, and
+    /// push it onto the outgoing WS channel. Centralised so the read/write
+    /// branches stay symmetrical and the wire-format details live in one
+    /// place.
+    fn send_file_response<T>(&self, resp: &T, kind: &str)
+    where
+        T: Serialize,
+    {
+        let mut value = serde_json::to_value(resp).unwrap_or_else(|_| {
+            serde_json::json!({ "id": "", "status": "error", "payload": {} })
+        });
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "type".to_string(),
+                serde_json::Value::String(kind.to_string()),
+            );
+        }
+        self.send_json(&value);
     }
 
     async fn spawn_command_exec(&self, id: String, payload: CommandExecPayload) {

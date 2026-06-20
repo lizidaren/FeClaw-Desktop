@@ -1,2410 +1,1269 @@
 # FeClaw-Desktop V3 实施计划
 
-> 基于 vision.md（2026-06-20）的完整实施计划。
-> 涵盖：Phase 0–11 的详细架构、数据模型、通信协议、UI 组件、Rust 命令、Python 引擎改动、系统集成。
+> 基于 vision-0620.md（Vision v3.1 群广场版）。**本文档自包含，不依赖外部文档。**
+> 每个阶段写明：目标 → 交付物 → 具体文件 → 数据模型 → API 端点 → 完成条件。
 >
 > 最后更新：2026-06-20
 
 ---
 
-## 目录
+## 0. 一句话定位
 
-- [A. 架构概览](#a-架构概览)
-- [B. 数据模型](#b-数据模型)
-- [C. 通信协议](#c-通信协议)
-- [D. 前端 UI](#d-前端-ui)
-- [E. 前端集成 (Tauri Commands)](#e-前端集成-tauri-commands)
-- [F. 后端集成 (FeClaw 引擎改动)](#f-后端集成-feclaw-引擎改动)
-- [G. 系统集成](#g-系统集成)
-- [H. 实施阶段](#h-实施阶段)
-- [I. 风险与缓解](#i-风险与缓解)
+> **FeClaw-Desktop 让每个用户拥有一个属于自己的 AI 群广场。**
+>
+> 像微信一样使用你的 AI Agents：每个 Agent 是一个「联系人」，用户站在多 Agent 社交网络中央。
+>
+> **设计灵感：** 清华大学 OpenMAIC（《From MOOC to MAIC》，JCST 2026）提出的多 Agent 互动课堂范式——一个备课群中，老师-Agent 备课、好学生-Agent 提挑战性问题、学困生-Agent 指出易错点，三者协同产出更优教案。FeClaw-Desktop 将此范式普遍化：用户是所有 Agent 的「共同好友」，私聊、群聊、群广场、小程序、搜一搜构成完整的 AI 社交体验。
 
 ---
 
-## A. 架构概览
+## 1. 当前状态盘点（2026-06-20）
 
-### A.1 核心映射：Agent = 联系人
+按代码仓库实际状况盘点：
 
-vision.md 的核心洞察是把 **AI Agent 视为微信联系人**。这个映射直接驱动了整个架构：
+### 1.1 已完成
+
+| 模块 | 文件 | 状态 |
+|------|------|------|
+| 引擎进程管理 | `engine.rs` | ✅ 完成（spawn / health / 优雅停） |
+| 本地登录 | `auth.rs` | ✅ 完成（stdout 提取密码 + JWT 缓存） |
+| WS 客户端 | `ws.rs` + `ws_types.rs` | ✅ MVP 完成（chat_message / chat_reply / chat_event / file_* / command_exec / file_operation_request / consent_response） |
+| 弹窗确认 | `consent.rs` | ✅ 完成（5 风险等级 + rfd） |
+| 命令执行 | `executor.rs` | ✅ 完成（subprocess + 截断 + 超时） |
+| 系统托盘 | `tray.rs` | ✅ 完成（5 项菜单） |
+| 设置界面 | `settings.rs` + `settings/index.html` | ✅ 完成（常规 / 云端 Tab） |
+| 欢迎页 | `welcome.rs` + `welcome/index.html` | ✅ 完成（三卡片：官方 / 自建 / 本地） |
+| 本地模式引导 | `local_setup.rs` + `local_setup/index.html` | ✅ 完成（9 命令流程） |
+| 主题 | `set_theme / get_theme` | ✅ 完成 |
+| 文件桥接 | `file_bridge.rs` | ✅ MVP 完成（path 解析 + canonicalize + symlink 防护 + 1MiB 上限） |
+| 聊天历史 | `chat.rs`（chat_history.json） | ✅ MVP 完成 |
+| 首次启动检测 | `welcome::check_first_launch` | ✅ 完成 |
+
+### 1.2 V2 阶段收尾（前置依赖）
+
+| 阶段 | 功能 | 关键变更 | 当前 |
+|------|------|---------|:----:|
+| 0 | Cargo + ws_types + ws.rs 改造 | 补 `FileWriteResponse`、重连检测 close code 4xxx、auth_failure notify | ⬜ |
+| 1 | 设置界面 | 已基本完成，待 camelCase 全面验证（`loginUrl` 等） | 🟡 |
+| 2 | 文件桥接 | `file_bridge.rs` 已实现，待 ws.rs handler 接入 + 引擎 `/mnt/desktop/` 映射 | ⬜ |
+| 3 | 开机自启 | `auto-launch` 0.5 三参构造 + `--minimized` CLI | ⬜ |
+| 4 | 云模式连接 | `.well-known/feclaw-desktop` 已就绪（`type=platform/local`），待 `cloud_login`/`cloud_disconnect` 命令 + JWT 头鉴权 | ⬜ |
+
+V2 收尾是 **进入 V3 的前置**——V3 的所有云端能力（群广场、MCP 中继、全盘索引搜索）都依赖 V2 的云模式连接 + JWT 头鉴权 + 文件桥接。
+
+### 1.3 V3 还未开始
+
+全部 12 个阶段都未启动。当前 `chat.rs` 仅支持单 Agent 单窗口聊天，UI 是单栏布局（`chat/index.html` 单个聊天窗口），群聊 / 群广场 / 三栏 UI / ⌘K / 扫码上传 / MCP 客户端全部不存在。
+
+---
+
+## 2. 关键架构决策（基于代码现实 + Vision v3.1）
+
+### 2.1 双模式：本地 + 云端，对外接口一致
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        FeClaw-Desktop V3                             │
-│                                                                     │
-│  ┌──────────────────────────────┐    ┌────────────────────────────┐ │
-│  │     左侧导航面板              │    │     右侧主内容区            │ │
-│  │                              │    │                            │ │
-│  │  ┌ 私聊列表 ──────────────┐  │    │  ┌ 聊天窗口 ────────────┐  │ │
-│  │  │ 数学老师 (a1b2)       │  │    │  │ Agent 流式输出        │  │ │
-│  │  │ 英语老师 (c3d4)       │  │    │  │ 消息引用卡片          │  │ │
-│  │  │ 编程助手 (e5f6)       │  │    │  │ 图片/截图展示         │  │ │
-│  │  └────────────────────────┘  │    │  └──────────────────────┘  │ │
-│  │                              │    │                            │ │
-│  │  ┌ 群聊列表 ──────────────┐  │    │  ┌ 富文本输入区域 ──────┐  │ │
-│  │  │ 学习群 (3 agents)     │  │    │  │ contenteditable div   │  │ │
-│  │  │ 开发群 (2 agents)     │  │    │  │ 支持粘贴图片          │  │ │
-│  │  └────────────────────────┘  │    │  │ 快捷键模板列表        │  │ │
-│  │                              │    │  └──────────────────────┘  │ │
-│  │  ┌ 搜一搜 ────────────────┐  │    │                            │ │
-│  │  │ ⌘K 全局搜索框         │  │    │  ┌ 三 dot 菜单 ──────────┐  │ │
-│  │  └────────────────────────┘  │    │  │ 📂 文件管理器         │  │ │
-│  │                              │    │  │ ⚙️ Agent 配置          │  │ │
-│  │  ┌ 群朋友圈 ──────────────┐  │    │  │ 🏪 小程序列表         │  │ │
-│  │  │ 学习群动态列表         │  │    │  │ 📱 朋友圈设置         │  │ │
-│  │  └────────────────────────┘  │    │  └──────────────────────┘  │ │
-│  └──────────────────────────────┘    └────────────────────────────┘ │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                      Rust Backend (Tauri)                     │   │
-│  │                                                              │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌───────────────┐  │   │
-│  │  │ws.rs     │ │chat.rs   │ │group.rs   │ │moments.rs     │  │   │
-│  │  │WS client │ │私聊状态  │ │群聊聚合   │ │朋友圈数据     │  │   │
-│  │  └──────────┘ └──────────┘ └───────────┘ └───────────────┘  │   │
-│  │                                                              │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌───────────────┐  │   │
-│  │  │search.rs │ │qr_upload │ │mcp.rs     │ │right_click.rs │  │   │
-│  │  │向量搜索  │ │.rs       │ │MCP client │ │右键菜单注册   │  │   │
-│  │  └──────────┘ │扫码上传  │ └───────────┘ └───────────────┘  │   │
-│  │               └──────────┘                                   │   │
-│  │  ┌──────────────────────────────────────────────────────────┐ │   │
-│  │  │ 现有模块 (不变或少量扩展)                                │ │   │
-│  │  │ auth.rs | config.rs | consent.rs | engine.rs |           │ │   │
-│  │  │ executor.rs | file_bridge.rs | file_ops.rs | tray.rs     │ │   │
-│  │  │ ws_types.rs | welcome.rs | settings.rs | autostart.rs    │ │   │
-│  │  └──────────────────────────────────────────────────────────┘ │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ═══════════════════════ WebSocket ═══════════════════════════════  │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                FeClaw Engine (Python)                         │   │
-│  │  desktop_relay.py | desktop_ws.py | apps_service.py | ...    │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                  FeClaw-Desktop（Tauri）                  │
+│                                                          │
+│  UI 层：欢迎页 → 设置 → 主聊天窗口（V3 重构为三栏）       │
+│  Rust 层：chat | config | consent | engine | ws | auth    │
+│                                                          │
+└────────────────────┬────────────────────┬────────────────┘
+                     │ 本地模式            │ 云模式
+                     ▼                    ▼
+       ┌──────────────────────┐  ┌────────────────────────┐
+       │ 本地 FeClaw 引擎     │  │ wss://feclaw.lizidaren │
+       │ (subprocess 127.0.0.1│  │ .cn/ws/desktop/{hash}  │
+       │  :8080)             │  │ (JWT RS256 头鉴权)     │
+       └──────────────────────┘  └───────────┬────────────┘
+                                             │ OAuth Client
+                                             ▼
+                              ┌──────────────────────────────┐
+                              │ FirstEntrancePlatform        │
+                              │ (OAuth/OIDC Provider, RS256) │
+                              │ /.well-known/openid-         │
+                              │ configuration + jwks.json    │
+                              └──────────────────────────────┘
 ```
 
-### A.2 模块职责对照
+**统一 WS 协议：** 本地模式连 `ws://127.0.0.1:{port}/ws/desktop/{hash}`，云模式连 `wss://...`，消息信封 `{type, id, payload, timestamp}` 完全一致。Desktop 端不需要为云模式写额外协议代码——只需要换 `ws_url()`（见 `config.rs`）。
 
-| 模块 | 归属 | 核心职责 |
+**鉴权一致性：**
+- 本地：Desktop 通过 stdout 解析的密码 → `POST /api/user/login` → JWT
+- 云端：Desktop → Platform OAuth flow（`/authorize` → `/token`）→ JWT → 用同一 JWT 连 FeClaw WS
+- 引擎端用 `utils/auth.py::decode_jwt_token` 验证，**不区分本地还是云端**——只要 JWT 签名正确 + `user_id` 存在 + 拥有 `agent_hash` 即通过
+
+### 2.2 「群广场」命名调整
+
+| 旧 Vision v3 名称 | 新 Vision v3.1 名称 | 原因 |
+|-------------------|---------------------|------|
+| 朋友圈 | **群广场** | "朋友圈" 为腾讯商标，本产品不再使用 |
+| Agent 朋友圈 | **群内 Agent 产出动态墙** | 强调范围 = 单个群，非全局 |
+
+代码内统一用 `moments`（命名空间）+ UI 显示「群广场」（仅中文文案）。**不要**重命名代码中的 `moments` 模块。
+
+### 2.3 群聊上云：Engine 侧模型层（必要改动）
+
+**群功能必须上云。** 将来移动端 APP 直接调同一套 API，Desktop 不能独享群逻辑。
+
+```
+FeClaw Engine (Python) 侧新增：
+
+Group 表 (SQLite)
+├── id: str (UUID)
+├── name: str
+├── announcement: str (群公告)
+├── created_at: datetime
+├── owner_user_id: int
+├── settings: JSON
+│   ├── allow_agent_edit_name: bool      — 允许 Agent 改群名
+│   ├── allow_agent_edit_announce: bool  — 允许 Agent 改公告
+│   └── moments_enabled: bool            — 是否开启群广场
+└── context_isolation: bool = true       — 隔离单聊/群聊上下文
+
+GroupMember 表
+├── group_id: str → Group.id
+├── agent_hash: str → AgentProfile.hash
+└── role: str ("owner" | "member")
+
+群消息路由：
+用户发消息 → Engine 收到 → 并行/串行调用群内每个 Agent
+→ 聚合结果 → 推给 Desktop
+
+群 WS：/ws/desktop/groups/{group_id}?token=<JWT>
+
+API 端点：
+├── POST /api/groups/create — 创建群
+├── POST /api/groups/{id}/send — 发送群消息（用户触发）
+├── GET  /api/groups/{id}/messages — 获取历史
+├── POST /api/groups/{id}/join — 拉 Agent 入群
+├── POST /api/groups/{id}/leave — 踢出
+├── PATCH /api/groups/{id}/settings — 更新群设置
+├── DELETE /api/groups/{id} — 解散群
+└── GET  /api/desktop/groups — 列出用户所有群
+```
+
+**@提及语义：** Engine 解析 `@Agent A` → 给被 @ 的 Agent 注入 `system_injection: "用户 @ 了你"`。
+
+### 2.4 群广场：Engine 侧事件管理
+
+群广场跟着群走，群在引擎侧，群广场也应在引擎侧。
+
+```
+GroupMoments 表 (SQLite)
+├── id: str (UUID)
+├── group_id: str → Group.id
+├── agent_hash: str (发布者)
+├── kind: str ("task_done" | "file_changed" | "analysis" | "manual")
+├── title: str
+├── content: str
+├── data: JSON (附件/链接等)
+└── created_at: datetime
+
+流程：
+Agent 完成任务 → tools_service 检测 → 写入 GroupMoments 表
+→ WS 推送 `moments_event` 给群内所有成员所属 Desktop
+→ Desktop 收到后缓存到 ~/.feclaw/groups/{group_id}_moments.json
+→ 前端按群展示
+```
+
+**引擎必须改动：** 新建 `models/group.py`、`routers/group.py`、`services/group_service.py`
+
+### 2.5 文件中继：两种路径映射 + 安全策略 + FUSE 权限
+
+#### 映射路径
+
+**已实现（V2）：**
+```
+Agent: /mnt/desktop/C:/Users/xm/data.csv
+  → Engine vfs.py resolve_path()
+  → WS file_read_request { path: "/mnt/desktop/C:/Users/xm/data.csv" }
+  → Desktop file_bridge.resolve_desktop_path()
+  → C:\Users\xm\data.csv (canonicalize + symlink 防护 + 1MiB 上限)
+  → 读 → base64 → WS file_read_response { content }
+  → Engine vfs 透明返回给 Agent
+```
+
+**V3 新增（VFS 共享）：**
+```
+Desktop 文件管理器面板 → invoke('list_vfs_directory', { agent_hash, path })
+  → Engine GET /api/desktop/agents/{hash}/vfs?path=/workspace/exams/
+  → 列出文件树
+  → Desktop 显示
+  → 用户点文件 → invoke('read_vfs_file', { agent_hash, path })
+  → Engine 读 Agent VFS (COS 或本地) → 返回内容
+```
+
+#### Agent 文件编辑工具（两种）
+
+Agent 通过 VFS 工具操作文件时，提供两种写入模式：
+
+| 工具 | 行为 | 适用场景 |
 |------|------|---------|
-| 私聊 | Desktop | 通过现有 WS 通道发送 `chat_message`，接收 `chat_reply` / `chat_event` |
-| 群聊 | **Desktop 独占** | 并行调用多个 Agent 的 `chat_message`，聚合回复，展示时间线 |
-| 朋友圈 | **Desktop 独占** | 监听群内 Agent 产出事件，本地存储 timeline，按群过滤展示 |
-| 小程序 | FeClaw 引擎 | 复用 `apps_service.py`，Desktop 仅嵌入 iframe 展示 |
-| 搜一搜 | Desktop + 引擎 | Agent 内搜索走引擎向量库；全局搜索走 Desktop 本地索引 |
-| 消息引用 | Desktop + 引擎 | 前端生成 `[reference:xxx]` token；引擎解析 |
-| 文件传输助手 | **Desktop 独占** | 临时 HTTP server + 二维码 + 手机网页上传 |
-| 右键菜单 | **Desktop 独占** | Windows Registry 注册 + shell extension |
-| 快捷模板 | **Desktop 独占** | 本地 JSON 存储 + 输入框弹出面板 |
-| MCP 连接 | **Desktop 独占** | 本地 MCP Client → WS 中继 → 引擎工具调用 |
-| 全盘索引 | **Desktop 独占** | 后台进程 + 本地向量库（usearch/lancedb） |
+| **写文件（覆盖）** | 完整重写文件 | 生成新文件、完全替换内容 |
+| **写文件（替换）** | Agent 提供 `match_string` + `new_string`，系统搜索并替换 | 局部修改，保留文件其他部分 |
 
-### A.3 关键设计决策
+**替换写安全规则：** `match_string` 必须在文件中**唯一出现**。若匹配到多处，返回错误并列出所有匹配位置，由 Agent 选择更精确的匹配串。防止误替换。
 
-1. **群聊不在 Server 端做**。Server 只有 Agent 的 1:1 chat 能力。Desktop 负责并行调用多个 Agent、聚合、排序、展示。
-2. **朋友圈数据完全本地化**。Agent 产出事件通过现有 SSE/WS 流推送，Desktop 解析并存入本地 `moments.json`。
-3. **小程序复用已有系统**。FeClaw 引擎的 `apps_service.py` 已完整实现 App 注册、路由、沙箱执行，Desktop 只需展示 iframe。
-4. **右键菜单是 Windows 专属**，通过注册表 + COM shell extension 实现（远期可选 Rust 原生实现）。
+#### /mnt/desktop/ 安全日志
+
+Agent 对 `/mnt/desktop/` 下文件的每次读写操作必须附带**一句话描述修改意图**：
+
+```
+WS file_write_request {
+  path: "/mnt/desktop/C:/Users/xm/report.docx",
+  content: base64,
+  intent: "更新期中考试成绩统计表，添加新的柱状图"
+}
+```
+
+系统自动记录安全日志到 `~/.feclaw/security_logs/`：
+```json
+{
+  "timestamp": "2026-06-20T11:47:00Z",
+  "agent_hash": "a1b2c3",
+  "path": "/mnt/desktop/C:/Users/xm/report.docx",
+  "operation": "write",
+  "intent": "更新期中考试成绩统计表，添加新的柱状图",
+  "permission_mode": "balanced",
+  "approved": true
+}
+```
+
+#### FUSE 层权限执行（云模式核心优势）
+
+在运行于 SaaS 平台的云模式连接中，Agent 的 Bash 工具在服务器端 **bwrap 沙箱**中执行。对用户本地文件的影响通过 **FUSE 中继**完成。
+
+```
+bwrap sandbox (服务器)
+  ↓ Agent 执行 vfs.write("/mnt/desktop/...")
+  ↓ Engine interceptor 拦截
+  ↓ WS file_write_request → Desktop
+  ↓ Desktop consent 审批
+  ↓ 实际写入本地文件系统
+```
+
+FUSE 层天然能：
+- **监控所有文件操作** — 每个 read/write/delete 都经过 FUSE，没有绕过路径
+- **精细权限控制** — 在 FUSE 端应用权限规则（禁止删除、只读目录等）
+- **实时审计日志** — 每个操作记录 intent + 文件 hash + 时间戳
+- **操作可视化** — Desktop 可在文件管理器中用颜色标记 FUSE 文件的状态
+
+**设计价值：** FUSE + 中继 WS 构成一个**不可绕过的安全审计层**。Agent 无法直接访问用户文件系统，所有操作都经过这个层。
+
+#### 文件修改展示（diff UI）
+
+参考 Claude Code CLI 的 diff 展示方式——**可视化差异，而非 Git 式统一 diff**：
+
+```
+┌─ 修改前 ─────────────────────┐
+│ 期中考试成绩统计表初稿.docx   │
+│                              │
+│ 成绩分布：                    │
+│ 90以上：5人                  │  ← 红色背景：被删除的内容
+│ 80-89：12人                  │
+└──────────────────────────────┘
+
+┌─ 修改后 ─────────────────────┐
+│ 期中考试成绩统计表终稿.docx   │  ← 绿色背景：新增/修改的内容
+│                              │
+│ 成绩分布：                    │
+│ 90以上：8人（+3）            │
+│ 80-89：15人（+3）            │
+│ 新增柱状图展示各分数段变化    │
+└──────────────────────────────┘
+```
+
+前端实现：并排或上下对照显示，红绿高亮变更行（类似 GitHub PR File Changed 界面 + 文件差异对比）。
+
+不展示 Git unified diff（`@@ -1,5 +1,5 @@` 之类的对一般用户不可读）。
+```
+
+### 2.6 鉴权链路全景
+
+```
+                        FirstEntrancePlatform
+                        (OAuth/OIDC Provider)
+                               ▲
+                               │ ① 浏览器：用户登录
+                               │ ② Desktop 收到授权码
+                               │ ③ POST /token → JWT (RS256)
+                               │ ④ 用 JWT 连 FeClaw WS
+                               │
+                       ┌───────┴────────┐
+                       │ FeClaw-Desktop │
+                       └───────┬────────┘
+                               │ wss://... + Bearer JWT (header)
+                               ▼
+                        FeClaw Engine
+                        decode_jwt_token → 取 user_id
+                        → 校验 user_id 拥有 agent_hash → accept
+                               │
+                               ▼
+                        Desktop 连接建立
+                        → 所有 chat_message / file_* / command_exec 走这条 WS
+```
+
+**Desktop 不需要单独处理 Platform 协议**——`/.well-known/feclaw-desktop` 已经把 `auth.endpoint`（Platform 的 `/api/auth/login`）告诉 Desktop，Desktop 用它去 Platform 拿 JWT，**剩下的就是连 Engine 的 WS**。
 
 ---
 
-## B. 数据模型
+### 2.7 消息渠道模型与 Session Memory 隔离
 
-### B.1 Rust 数据模型
+群聊不是一个独立的 Entity，而是**一个新的消息渠道**，与现有渠道同级。
 
-#### B.1.1 群聊 (GroupChat)
+#### 消息渠道架构
 
-```rust
-// src-tauri/src/group.rs
-use serde::{Deserialize, Serialize};
-
-/// 一个群聊 = 多个 Agent 的集合
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Group {
-    /// 群 ID（UUID v4）
-    pub id: String,
-    /// 群名称
-    pub name: String,
-    /// 群成员 agent_hash 列表
-    pub members: Vec<String>,
-    /// 是否开启朋友圈
-    #[serde(default)]
-    pub moments_enabled: bool,
-    /// 创建时间 (Unix epoch seconds)
-    pub created_at: String,
-    /// 最后活跃时间
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_active_at: Option<String>,
-}
-
-/// 群聊中的一条消息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GroupMessage {
-    /// 消息 ID
-    pub id: String,
-    /// 所属群 ID
-    pub group_id: String,
-    /// 发送者：`"user"` 或 agent_hash
-    pub sender: String,
-    /// 发送者显示名（Agent name 或 "我"）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sender_name: Option<String>,
-    /// 消息内容
-    pub content: String,
-    /// 时间戳
-    pub timestamp: String,
-    /// @提及的 agent_hash 列表
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mentions: Vec<String>,
-    /// 引用的消息 ID
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reply_to: Option<String>,
-    /// 附件
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<Attachment>,
-}
-
-/// 消息附件
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Attachment {
-    pub kind: String,  // "image" | "file" | "reference"
-    pub path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size: Option<u64>,
-}
-
-/// 前端加载群聊时的快照
-#[derive(Debug, Clone, Serialize)]
-pub struct GroupChatSnapshot {
-    pub group: Group,
-    pub messages: Vec<GroupMessage>,
-    /// 该群的朋友圈动态数
-    pub moments_count: usize,
-}
+```
+消息渠道 (MessageChannel)
+├── web        — Web 聊天界面
+├── wechat     — 微信通道
+├── im    — IM 私聊（Desktop + Mobile 共享）
+├── im_group:<id> — IM 群聊（Desktop + Mobile 共享）
+└── (未来) mobile — 移动端 APP
 ```
 
-#### B.1.2 朋友圈 (Moments)
+#### Session Memory 存储策略
 
-```rust
-// src-tauri/src/moments.rs
-use serde::{Deserialize, Serialize};
+每个渠道写入**独立的 Session Memory .md 文件**，存放于 Agent 工作区内：
 
-/// 一条朋友圈动态
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Moment {
-    /// 动态 ID
-    pub id: String,
-    /// 所属群 ID
-    pub group_id: String,
-    /// 发布者 agent_hash（或 "user"）
-    pub author: String,
-    /// 发布者显示名
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub author_name: Option<String>,
-    /// 动态内容
-    pub content: String,
-    /// 动态类型
-    pub kind: MomentKind,
-    /// 相关数据 (JSON，用于链接跳转)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-    /// 时间戳
-    pub timestamp: String,
-    /// 用户是否手动发布
-    #[serde(default)]
-    pub is_manual: bool,
-}
-
-/// 动态类型
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MomentKind {
-    /// 任务完成
-    TaskCompleted,
-    /// 文件变更
-    FileChanged,
-    /// 分析报告
-    AnalysisReport,
-    /// 自定义消息
-    Custom,
-}
-
-/// 前端加载朋友圈时的快照
-#[derive(Debug, Clone, Serialize)]
-pub struct MomentsSnapshot {
-    pub group_id: String,
-    pub group_name: String,
-    pub moments: Vec<Moment>,
-}
+```
+agents/{hash}/workspace/
+├── memory/
+│   ├── session_web.md        ← Web 消息的记忆
+│   ├── session_wechat.md     ← 微信消息的记忆
+│   ├── session_im.md           ← IM 私聊（Desktop + Mobile 共享）
+│   └── session_im_group_xxx.md ← IM 群聊（Desktop + Mobile 共享）
 ```
 
-#### B.1.3 快捷模板 (Prompt Templates)
+**当前策略（默认）：** 渠道间上下文隔离。LLM 调用时只拼接当前渠道的 Session Memory。
 
-```rust
-// src-tauri/src/templates.rs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PromptTemplate {
-    pub id: String,
-    pub label: String,      // 按钮显示文本，如 "翻译成英文"
-    pub content: String,    // 完整的 Prompt 文本
-    pub category: String,   // "写作" | "翻译" | "代码" | "自定义"
-    #[serde(default)]
-    pub is_builtin: bool,
-}
-```
+**允许跨渠道读取（不拦截）：** 由于同一个 Agent 服务于所有渠道，Agent 完全可以通过文件读取工具查看其他渠道的 Session Memory。例如 Agent 发现工作区多了个文件，可以查看其他渠道的 Memory 来确认来源和用途。**系统不做拦截**——这是同一 Agent 的合理行为。
 
-#### B.1.4 搜索 (Search)
+**未来实验功能：** 跨渠道上下文主动拼接。用户说"接着群里的讨论"→ 系统在单聊消息后面拼接群聊最近 N 条消息，标注 `[渠道:群聊]`。不稳定，可测试效果。
 
-```rust
-// src-tauri/src/search.rs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchResult {
-    /// 来源：agent_hash、文件路径、或 "local"
-    pub source: String,
-    /// 显示标题
-    pub title: String,
-    /// 匹配片段
-    pub snippet: String,
-    /// 相关度分数
-    pub score: f32,
-    /// 数据来源类型
-    pub source_kind: SearchSourceKind,
-    /// 跳转目标
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-}
+#### 与群聊 Phase 4 的关系
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SearchSourceKind {
-    ChatMessage,
-    File,
-    Moment,
-    Reference,
-}
-```
-
-#### B.1.5 小程序 (MiniProgram)
-
-```rust
-// src-tauri/src/mini_program.rs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MiniProgramEntry {
-    pub app_id: String,
-    pub name: String,
-    pub description: String,
-    pub agent_hash: String,
-    /// 访问 URL（相对路径如 /apps/my-app/）
-    pub url: String,
-    /// 入口图标
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub icon: Option<String>,
-}
-```
-
-#### B.1.6 Config 扩展
-
-```rust
-// config.rs 新增字段
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    // ... 现有字段 ...
-
-    /// 快捷模板列表
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prompt_templates: Vec<PromptTemplate>,
-
-    /// 群聊列表（本地持久化）
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub groups: Vec<Group>,
-
-    /// 右键菜单/发送的默认行为
-    #[serde(default)]
-    pub right_click_default: RightClickDefault,
-
-    /// 文件索引目录列表
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub indexed_directories: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RightClickDefault {
-    #[default]
-    Send,     // 发送（云端副本，本地只读）
-    Reference, // 引用（可读写）
-}
-```
-
-#### B.1.7 文件索引 (FileIndex)
-
-```rust
-// src-tauri/src/file_index.rs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexedFile {
-    /// 绝对路径
-    pub path: String,
-    /// 文件名
-    pub name: String,
-    /// 文件大小
-    pub size: u64,
-    /// 最后修改时间
-    pub modified_at: String,
-    /// 内容哈希（用于增量更新检测）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_hash: Option<String>,
-    /// 已提取的文本摘要（前 500 字符）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text_snippet: Option<String>,
-}
-
-/// 索引元数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexMetadata {
-    /// 索引版本
-    pub version: u32,
-    /// 已索文件数
-    pub file_count: u32,
-    /// 最后全量索引完成时间
-    pub last_full_index: Option<String>,
-    /// 被跳过的文件数（二进制、过大等）
-    pub skipped_count: u32,
-}
-```
-
-### B.2 Python 模型扩展（FeClaw 引擎）
+群聊 Engine 侧的 `GroupMessage` 模型已包含 `sender_type` 和 `sender_hash`。关键改动在 ChatService：每条消息必须携带 `channel` 字段。
 
 ```python
-# 新增：群聊消息事件 (在 desktop_ws.py 的 handle_desktop_message 中)
-# Desktop → Engine: 多 Agent 群聊时，Desktop 挨个向 Agent 发 chat_message
-# 无需服务端模型变更——Engine 只看到「某个 Agent 收到了一条 chat_message」
-
-# 新增：Moments 发布事件（Engine → Desktop）
-# 当 Agent 完成重要操作时，Engine 可发送 moments_event
-# 格式：{ "type": "moments_event", "agent_hash": "...", "kind": "...", "content": "...", "data": {...} }
+# ChatService._build_messages() 中
+# 按 channel 隔离：
+context = session.get_history(channel=channel)
 ```
 
-### B.3 本地文件存储布局
+#### 权限与隔离
 
+群设置中 `context_isolation: bool = True`（默认隔离）。设为 False 启用实验性共享。
+
+在 Desktop 聊天窗口右侧小侧栏中切换。每级权限作用于**单个 Agent**。
+
+| 等级 | 模式 | 操作限制 | 适用场景 |
+|:----:|------|----------|----------|
+| 🚫 L0 | **禁止** | 纯聊天，无工具调用 | 公开演示 Agent |
+| 🟡 L1 | **严格** | 任何读写执行均需点审批 | 不确定信任的 Agent |
+| 🟢 L2 | **平衡** ⭐ | 选定工作目录内放行（除删除）；该目录后台版本控制可回滚；其他操作须询问 | **默认推荐** |
+| 🔵 L3 | **宽松** | 平衡 + 任意位置可读取 | 高度信任的 Agent |
+| 🔴 L4 | **完全授权** | 放行所有操作，30min 超时自动过期 | 临时密集操作 |
+
+**最后一道防线（不可关闭）：**
+- 每条 `subprocess` 命令执行前经独立 LLM 审计
+- 极高风险操作（`rm -rf`、Python 代码实现等价删除等）弹出红色警示框，明确说明潜在影响
+- 用户可选择拦截或放行此单次操作
+
+**存储：** `~/.feclaw/permissions/{agent_hash}.json`
+```json
+{
+  "agent_hash": "a1b2c3",
+  "mode": "balanced",
+  "trusted_directory": "C:/Users/lizidaren/Documents/feclaw-work",
+  "version_control": true,
+  "full_access_expires": null
+}
 ```
-~/.feclaw/
-├── config.toml              # 主配置（含 groups, prompt_templates）
-├── settings.json            # 桌面设置
-├── ui-settings.json         # UI 键值设置
-├── local-credentials        # 本地认证凭据
-├── trusted-commands.json    # 已信任命令
-├── chat_history.json        # 私聊历史（已有）
-├── groups/                  # 群聊数据目录
-│   ├── {group_id}.json      # 群聊消息
-│   └── {group_id}_moments.json  # 群朋友圈
-├── templates.json           # 快捷模板
-├── file_index/              # 文件索引
-│   ├── index_meta.json      # 索引元数据
-│   └── vectors.db           # 本地向量库 (usearch/lancedb)
-└── uploads/                 # 扫码上传临时文件
-    └── {session_id}/
+
+### 2.8 Agent 消息类型（7 种）
+
+Agent 可向聊天窗口推送多种消息类型，由 Engine 侧 chat_service 根据响应内容判断：
+
+```json
+{
+  "type": "chat_message",
+  "agent_hash": "a1b2c3",
+  "message_type": "text" | "image" | "file" | "consent_card" | "moments_post" | "mini_program" | "question_box",
+  "payload": { ... }
+}
+```
+
+| 消息类型 | `message_type` | Desktop 渲染方式 | 引擎触发条件 |
+|----------|---------------|-----------------|--------------|
+| 文本 | `text` | 流式输出 | 标准聊天回复/文字 | 自带 |
+| 图片 | `image` | 图片卡片 | Agent 生成/处理的图片 | 自带的 Base64/URL |
+| 文件 | `file` | 文件卡片（可下载） | Agent 在云端编辑完成 → 发回 | 复用 file_bridge |
+| 权限询问 | `consent_card` | 卡片 +「允许/拒绝」按钮 | Agent 请求访问文件/执行命令 | 复用 consent.rs |
+| 群广场动态 | `moments_post` | 摘要卡片 +「去广场看」| Agent 群广场发布内容的通知 | Phase 5 |
+| 小程序入口 | `mini_program` | App 图标 + 名称 | Agent 推荐打开某个小程序 | Phase 6 |
+| 问题框 | `question_box` | ABCD 选项 / 输入框 | Agent 需要用户选择指导下一步 | 独立的 question_box 卡片 |
+
+---
+
+### 2.9 Desktop SQLite 数据结构
+
+Desktop 使用 `~/.feclaw/feclaw.db` 管理本地数据。Rust 侧用 `rusqlite` 访问。
+
+#### IM 聊天缓存
+
+```sql
+CREATE TABLE chat_messages (
+    id TEXT PRIMARY KEY,          -- UUID
+    channel TEXT NOT NULL,        -- "im" | "im_group:<id>"
+    agent_hash TEXT,              -- NULL 表示用户自己发的
+    role TEXT NOT NULL,           -- "user" | "assistant" | "system"
+    content TEXT NOT NULL,
+    message_type TEXT DEFAULT 'text',
+    -- 以上字段与 Engine GroupMessage 一致
+    
+    -- Desktop 本地字段:
+    created_at INTEGER NOT NULL,  -- Unix timestamp ms
+    synced INTEGER DEFAULT 0,    -- 0=还没同步给Engine, 1=已同步
+    is_deleted INTEGER DEFAULT 0  -- 软删除（用户撤回消息）
+);
+
+CREATE INDEX idx_chat_messages_channel ON chat_messages(channel, created_at);
+
+-- 同步状态
+CREATE TABLE sync_state (
+    channel TEXT PRIMARY KEY,
+    last_synced_at INTEGER NOT NULL,  -- 最后同步的时间戳
+    last_message_id TEXT              -- 最后同步的消息ID
+);
+```
+
+#### 群聊缓存
+
+```sql
+CREATE TABLE group_messages (
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL,
+    sender_type TEXT NOT NULL,
+    sender_hash TEXT,
+    content TEXT NOT NULL,
+    message_type TEXT DEFAULT 'text',
+    created_at INTEGER NOT NULL,
+    synced INTEGER DEFAULT 1  -- 群聊由 Engine 主导，Desktop 只消费
+);
+
+CREATE INDEX idx_group_messages_group ON group_messages(group_id, created_at);
+```
+
+#### 权限配置
+
+```sql
+CREATE TABLE permission_configs (
+    agent_hash TEXT PRIMARY KEY,
+    mode TEXT NOT NULL DEFAULT 'balanced',      -- disabled|strict|balanced|relaxed|full
+    trusted_directory TEXT,
+    version_control INTEGER DEFAULT 0,
+    full_access_expires INTEGER,               -- Unix timestamp or NULL
+    updated_at INTEGER NOT NULL
+);
+```
+
+#### 快捷模板
+
+```sql
+CREATE TABLE prompt_templates (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    icon TEXT DEFAULT '😄',
+    sort_order INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+```
+
+#### 安全日志
+
+```sql
+CREATE TABLE security_logs (
+    id TEXT PRIMARY KEY,
+    agent_hash TEXT NOT NULL,
+    path TEXT NOT NULL,
+    operation TEXT NOT NULL,  -- "read" | "write" | "overwrite" | "replace" | "delete"
+    intent TEXT,              -- Agent 提供的描述
+    match_string TEXT,        -- 替换写时的匹配串
+    permission_mode TEXT NOT NULL,
+    approved INTEGER NOT NULL, -- 0=拒绝 1=批准 2=待审批
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_security_logs_agent ON security_logs(agent_hash, created_at);
+```
+
+#### 设置
+
+```sql
+CREATE TABLE settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+-- 预置: theme (light|dark|system), window_x/y/w/h, last_active_chat, ...
 ```
 
 ---
 
-## C. 通信协议
+## 3. V3 阶段路线图
 
-### C.1 WebSocket 消息类型全览
+> **本节是 roadmap，不重复实现细节。** 每个阶段标注：
+> - 主要交付物
+> - 涉及的关键文件
+> - 引擎侧是否需要改
+> - 估计工时（人日）
+### Phase 0a — 三栏 UI 骨架 + SQLite 初始化 ✅ 第一步
 
-#### C.1.1 现有消息类型（不变）
+**目标：** 空的三栏框架能显示，创建 `feclaw.db`，旧的聊天记录能加载进来，切换聊天保留输入草稿。
 
+**三栏布局预览：**
 ```
-Engine → Desktop:
-  command_exec_request     - 命令执行请求 (L1-L5 风险)
-  file_read_request        - 读文件请求
-  file_write_request       - 写文件请求
-  file_delete_request      - 删文件请求
-  notification             - 托盘通知
-  chat_reply               - Agent 回复
-  chat_event               - 流式事件 (thinking / tool / tool_result / message / done)
-  file_operation_request   - 文件操作授权请求
-  pong                     - 心跳响应
-
-Desktop → Engine:
-  command_exec_response    - 命令执行结果
-  file_read_response       - 读结果
-  file_write_response      - 写结果
-  file_delete_response     - 删结果
-  consent_response         - 用户决策
-  chat_message             - 聊天消息
-  disconnect               - Desktop 关闭
-  ping                     - 心跳
+┌──────┬──────────────┬─────────────────────────────┐
+│ Tab  │   聊天列表    │         聊天窗口              │
+│ (左) │    (中)      │          (右)                │
+│      │              │                             │
+│ 💬   │ 按最后活跃   │ 流式输出 + 富文本输入框        │
+│ 聊天 │ 时间排序      │  [消息草稿自动保留]           │
+│      │ 群/单聊混排   │                             │
+│ 🙋   │ 头像/备注/    │                             │
+│ 我的 │ 最新消息/红点  │                             │
+└──────┴──────────────┴─────────────────────────────┘
 ```
 
-#### C.1.2 V3 新增消息类型
+**关键交付：**
+- `src-tauri/src/chat/index.html` 重写为三栏布局
+- `src-tauri/src/chat/chat.ts` + `src-tauri/src/chat/store.ts`（状态管理）
+- `src-tauri/src/db.rs`（新建）— SQLite 初始化 + 建 6 张表
+- `src-tauri/src/chat.rs` 新增命令：`list_agents` / `get_chat_history_for_agent(agent_hash)`
+- V2 兼容：检测 `chat_history.json`，有则一次性导入 `chat_messages` 表
+- **消息草稿：** 切换聊天时当前输入框内容保存到 `settings` 表（`key=draft:<channel>`），切回来恢复
+- 引擎端：新增 `GET /api/desktop/agents`（云模式）
+- 新增命令：`init_db` / `import_chat_history` / `list_agents` / `save_draft` / `load_draft`
 
-```
-Engine → Desktop (新增):
-  moments_event            - Agent 产出事件（触发朋友圈动态）
-  mini_program_list        - 某 Agent 的小程序列表
-  agent_status_change      - Agent 状态变更（在线/离线/忙碌）
+**完成条件：** 三栏可见 + 旧消息能看 + 切换聊天保留输入内容
 
-Desktop → Engine (新增):
-  group_chat_message       - 群聊消息（携带 group_id + mentions）
-  mini_program_launch      - 打开小程序
-  search_request           - 语义搜索请求
-  mcp_tool_request         - MCP 工具调用请求（Desktop 中继）
-  mcp_tool_response        - MCP 工具调用结果
-```
+**前置：** V2 文件桥接完成
 
-#### C.1.3 新增消息 JSON Schema
-
-```jsonc
-// === moments_event (Engine → Desktop) ===
-{
-  "type": "moments_event",
-  "agent_hash": "a1b2",
-  "agent_name": "数学老师",
-  "group_id": "uuid-of-group",        // 关联的群（可选，如无则为全局）
-  "kind": "task_completed",           // task_completed | file_changed | analysis_report | custom
-  "content": "批改了 3 份试卷，正确率 72%",
-  "data": {                           // 可选：结构化数据
-    "vfs_path": "/workspace/exams/batch_001/",
-    "metrics": { "correct_rate": 0.72, "weak_points": ["诱导公式"] }
-  },
-  "timestamp": "1750000000"
-}
-
-// === group_chat_message (Desktop → Engine) ===
-{
-  "type": "group_chat_message",
-  "id": "msg-uuid",
-  "group_id": "uuid-of-group",
-  "sender": "user",
-  "content": "帮我分析这张试卷",
-  "mentions": ["a1b2"],               // @的 agent hash 列表；空 = 发给所有群成员
-  "reply_to": "prev-msg-uuid",        // 可选：引用的消息 ID
-  "attachments": [
-    { "kind": "image", "path": "/mnt/desktop/exam_photo.png", "name": "试卷照片.png" }
-  ],
-  "timestamp": "1750000000"
-}
-
-// === mini_program_list (Engine → Desktop) ===
-{
-  "type": "mini_program_list",
-  "agent_hash": "a1b2",
-  "apps": [
-    {
-      "app_id": "vocab-drill",
-      "name": "单词本",
-      "description": "交互式英语单词练习",
-      "icon": "📖",
-      "url": "/apps/vocab-drill/"
-    }
-  ]
-}
-
-// === search_request (Desktop → Engine) ===
-{
-  "type": "search_request",
-  "id": "search-uuid",
-  "query": "三角函数 诱导公式",
-  "agent_hash": "a1b2",               // 限定搜索范围（可选，空 = 全局）
-  "include_local": true,              // 是否包含本地文件索引
-  "top_k": 10
-}
-
-// === search_response (Engine → Desktop) ===
-{
-  "type": "search_response",
-  "id": "search-uuid",
-  "results": [
-    {
-      "source": "agent/a1b2",
-      "title": "2026-06-15 数学作业批改",
-      "snippet": "...三角函数诱导公式...",
-      "score": 0.92,
-      "source_kind": "file",
-      "target": "/workspace/exams/batch_001/report.md"
-    }
-  ]
-}
-
-// === mcp_tool_request (Engine → Desktop) ===
-{
-  "type": "mcp_tool_request",
-  "id": "mcp-uuid",
-  "tool_name": "sqlite_query",
-  "arguments": { "query": "SELECT * FROM users" },
-  "agent_hash": "a1b2"
-}
-
-// === mcp_tool_response (Desktop → Engine) ===
-{
-  "type": "mcp_tool_response",
-  "id": "mcp-uuid",
-  "status": "ok",                     // "ok" | "error"
-  "payload": {
-    "result": "..."                   // 或 { "error": "..." }
-  }
-}
-```
-
-### C.2 群聊通信流程
-
-```
-用户发送群聊消息
-        │
-        ▼
-┌────────────────┐
-│  Desktop 前端  │  1. 用户点击发送
-│  输入框        │  2. 生成本地 GroupMessage（sender="user"）
-└───────┬────────┘  3. 持久化到 groups/{group_id}.json
-        │
-        ▼
-┌────────────────┐
-│  Rust group.rs │  4. 遍历群成员 agent_hash 列表
-│  broadcast()   │  5. 为每个 Agent 构造独立的 chat_message
-└───────┬────────┘     - copy mentions: 只保留 @该Agent 的
-        │              - copy attachments: 全部传递
-        │              - 标记 group_id 用于回传关联
-        │
-        ▼
-┌──────────────────────────────────────────────────┐
-│  并行 WS 发送                                    │
-│                                                  │
-│  ┌─ ws.send → agent_a1b2 → Engine → Agent 回复   │
-│  ├─ ws.send → agent_c3d4 → Engine → Agent 回复   │
-│  └─ ws.send → agent_e5f6 → Engine → Agent 回复   │
-│                                                  │
-│  每个 Agent 回复的 chat_reply 携带 group_id      │
-│  Desktop 接收后：                                │
-│    1. 创建 GroupMessage（sender=agent_hash）     │
-│    2. 持久化                                     │
-│    3. 通过 Tauri event 推送到前端                │
-└──────────────────────────────────────────────────┘
-        │
-        ▼
-┌────────────────┐
-│  前端更新 UI   │  所有群成员回复按时间顺序展示
-│  群聊窗口      │  @提及的消息高亮
-└────────────────┘
-```
-
-### C.3 朋友圈事件流
-
-```
-Agent 在 Engine 中完成操作
-        │
-        ▼
-┌────────────────┐
-│  Engine 判断   │  操作是否需要创建 Moments 事件
-│  agent_executor │  - TaskCompleted: Agent 执行了工具调用
-└───────┬────────┘  - FileChanged: VFS 文件创建/修改
-        │           - AnalysisReport: Agent 输出了分析结论
-        │
-        ▼
-┌────────────────┐
-│  Desktop WS     │  Engine → Desktop 发送 moments_event
-│  接收           │  包含 agent_hash、content、data 等
-└───────┬────────┘
-        │
-        ▼
-┌────────────────┐
-│  Rust moments.rs│  1. 查找该 agent 所属的群
-│  handle_event() │  2. 创建 Moment 实例
-└───────┬────────┘  3. 持久化到 groups/{group_id}_moments.json
-        │           4. 通过 Tauri event 推送到前端
-        ▼
-┌────────────────┐
-│  Frontend       │  朋友圈面板更新
-│  MomentsPanel   │  仅展示该群的动态
-└────────────────┘
-```
-
-### C.4 云端模式 vs 本地模式协议区别
-
-| 方面 | 本地模式 | 云模式 |
-|------|---------|--------|
-| WS 端点 | `ws://127.0.0.1:{port}/ws/desktop/{hash}` | `wss://feclaw.lizidaren.cn/ws/desktop/{hash}` |
-| 认证方式 | 本地 JWT (local-credentials) | 云端 JWT (cloud_token) |
-| Agent 发现 | 扫描 ~/.feclaw/agent_*.json | `POST /api/agents/list` REST |
-| 文件路径 | `/mnt/desktop/...` 直接映射 | `/mnt/desktop/...` 经 WS 中继 |
-| 搜索 | 引擎向量库 + 本地向量库 | 引擎向量库 + 本地向量库 |
-| 群聊 | Desktop 本地聚合 | Desktop 本地聚合（无区别） |
-| 朋友圈 | Desktop 本地存储 | Desktop 本地存储（无区别） |
-
-**关键原则：群聊和朋友圈逻辑完全相同，不受模式影响。** 只有 Agent 连接方式（本地进程 vs 远程 WS）和文件操作路径不同。
+**工时：** 3 天
 
 ---
 
-## D. 前端 UI
+### Phase 0b — 创建流程 + 文件引用卡片 ✅ 第二步
 
-### D.1 窗口架构
+**目标：** 在聊了，能建 Agent 了，能引用文件了。
 
-Tauri 2 多窗口架构，与现有 `chat`、`settings`、`welcome` 窗口共存：
+**关键交付：**
+- `src-tauri/src/create.rs`（新建）：`create_agent` / `create_group_placeholder`
+  - 创建 Agent 时选类型（classic/im）→ 引擎 `POST /api/desktop/agents`
+- 文件引用交互：点击 📎 → 选「本地文件」或「云文件」
+  - 本地 → 选「引用（可读写）」或「发送（只读副本）」→ 文件选择框 → 卡片嵌入输入框
+  - 云 → VFS 浏览器 → 选中文件 → 卡片嵌入输入框
+  - 卡片支持删除、可在卡片后继续打字
+- `src-tauri/src/chat/components/create-dialog.ts`
+- `src-tauri/src/chat/components/input-box.ts`
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  main 窗口（隐藏，仅用于 app state）                                  │
-│  ├─ welcome 窗口（首次启动，按需聚焦）                                │
-│  ├─ chat 窗口（主界面，Phase 0 改造为左侧栏 + 右侧聊天）              │
-│  ├─ settings 窗口（已有，扩展 tab）                                   │
-│  ├─ file-manager 窗口（新建，三 dot 菜单触发）                        │
-│  ├─ moments 窗口（新建，朋友圈面板）                                  │
-│  ├─ mini-program 窗口（新建，小程序 iframe）                          │
-│  └─ qr-upload 窗口（新建，扫码上传弹窗）                              │
-└──────────────────────────────────────────────────────────────────────┘
-```
+**完成条件：** 能创建 Agent + 文件以卡片嵌入输入框
 
-### D.2 chat 窗口组件树（Phase 0 改造）
-
-```
-chat/index.html
-└── <body class="app-shell">
-    ├── <aside id="left-sidebar">
-    │   ├── <div id="user-info">           <!-- 用户头像 + 状态 -->
-    │   ├── <nav id="sidebar-nav">
-    │   │   ├── <button data-tab="private">  💬 私聊  </button>
-    │   │   ├── <button data-tab="groups">   👥 群聊  </button>
-    │   │   ├── <button data-tab="search">   🔍 搜一搜</button>
-    │   │   └── <button data-tab="moments">  📱 朋友圈</button>
-    │   │
-    │   ├── <div id="tab-private" class="tab-content">
-    │   │   └── <agent-list>               <!-- Agent 联系人列表 -->
-    │   │       ├── <agent-item data-hash="a1b2">
-    │   │       │   ├── .avatar
-    │   │       │   ├── .name
-    │   │       │   ├── .last-message       <!-- 最后一条消息预览 -->
-    │   │       │   └── .unread-badge
-    │   │       └── ...
-    │   │
-    │   ├── <div id="tab-groups" class="tab-content" hidden>
-    │   │   ├── <button id="create-group"> + 新建群聊 </button>
-    │   │   └── <group-list>
-    │   │       └── <group-item> ... </group-item>
-    │   │
-    │   ├── <div id="tab-search" class="tab-content" hidden>
-    │   │   └── <search-box>               <!-- ⌘K 搜索框 -->
-    │   │       ├── <input>
-    │   │       └── <search-results>
-    │   │
-    │   └── <div id="tab-moments" class="tab-content" hidden>
-    │       └── <group-moments-list>
-    │           └── <group-moments-item>
-    │
-    └── <main id="right-panel">
-        ├── <header id="chat-header">
-        │   ├── <span class="chat-title">   <!-- Agent 名 或 群名 -->
-        │   ├── <button id="three-dot-menu"> ⋮ </button>
-        │   └── <button id="phone-upload">  📱 </button>
-        │
-        ├── <div id="message-list">         <!-- 消息流 -->
-        │   ├── <message-bubble class="user"> ... </message-bubble>
-        │   ├── <message-bubble class="agent" data-agent="a1b2"> ... </message-bubble>
-        │   ├── <message-bubble class="thinking"> ... </message-bubble>  <!-- 流式输出中 -->
-        │   ├── <message-bubble class="tool-call"> ... </message-bubble>
-        │   └── <message-bubble class="consent-card"> ... </message-bubble>
-        │
-        ├── <div id="input-area">
-        │   ├── <div id="template-bar">     <!-- 快捷模板 -->
-        │   │   ├── <button> 翻译成英文 </button>
-        │   │   ├── <button> 总结摘要 </button>
-        │   │   └── ...
-        │   ├── <div id="rich-input" contenteditable="true">
-        │   │   <!-- 富文本输入：支持粘贴图片、@提及 -->
-        │   ├── <button id="send-btn"> 发送 </button>
-        │   └── <div id="attachment-preview"> <!-- 待发送附件预览 -->
-        │
-        └── <div id="three-dot-panel" class="dropdown-menu" hidden>
-            ├── <button data-action="file-manager"> 📂 文件管理器 </button>
-            ├── <button data-action="agent-config">  ⚙️ Agent 配置  </button>
-            ├── <button data-action="mini-programs"> 🏪 小程序列表 </button>
-            ├── <button data-action="moments-config">📱 朋友圈设置 </button>
-            └── <hr> <button data-action="clear-chat"> 清空对话 </button>
-    </main>
-```
-
-### D.3 富文本输入实现
-
-```html
-<!-- #rich-input 实现方案 -->
-<div id="input-container" class="rich-input-wrapper">
-  <!-- contenteditable div 作为核心输入区 -->
-  <div id="rich-input"
-       contenteditable="true"
-       placeholder="输入消息... 支持 Ctrl+V 粘贴截图"
-       role="textbox"
-       aria-multiline="true">
-  </div>
-  <!-- 隐藏的 file input 用于粘贴图片 -->
-  <input type="file" id="paste-file-input" accept="image/*" hidden>
-</div>
-```
-
-```typescript
-// chat.ts 中的粘贴处理
-const richInput = $('#rich-input') as HTMLDivElement;
-
-richInput.addEventListener('paste', (e: ClipboardEvent) => {
-  const items = e.clipboardData?.items;
-  if (!items) return;
-
-  for (const item of items) {
-    if (item.type.startsWith('image/')) {
-      e.preventDefault();
-      const blob = item.getAsFile();
-      if (blob) handlePastedImage(blob);
-      return;
-    }
-  }
-  // 纯文本粘贴 → 正常处理
-});
-
-async function handlePastedImage(blob: File) {
-  // 1. 转为 base64 用于预览
-  const reader = new FileReader();
-  reader.onload = () => {
-    // 2. 插入缩略图到输入区
-    const img = document.createElement('img');
-    img.src = reader.result as string;
-    img.classList.add('pasted-image-preview');
-    richInput.appendChild(img);
-  };
-  reader.readAsDataURL(blob);
-
-  // 3. 保存到临时文件
-  const path = await invoke('save_temp_image', { imageBase64: await blobToBase64(blob) });
-  // 4. 添加到待发送附件列表
-  pendingAttachments.push({ kind: 'image', path, name: 'screenshot.png' });
-}
-```
-
-### D.4 三 dot 菜单结构
-
-```
-┌────────────────────────┐
-│ ⋮                      │
-├────────────────────────┤
-│ 📂 文件管理器          │ → 打开 file-manager 窗口，展示当前 Agent 的 VFS
-│ ⚙️ Agent 配置          │ → 内联面板或 settings 窗口的 Agent tab
-│ 🏪 小程序列表          │ → 打开 mini-program 列表面板
-│ 📱 朋友圈设置          │ → 切换群朋友圈开关 / 选择触发类型
-│ ────────────────────── │
-│ 🗑 清空对话            │ → 清除 chat_history.json
-│ 📋 复制对话摘要        │ → 全选 → clipboard
-└────────────────────────┘
-```
-
-### D.5 导航/路由
-
-```
-左侧栏 Tab          右侧主区域内容
-──────────────────────────────────────────
-💬 私聊 (默认)  →  当前选中 Agent 的 1:1 聊天窗口
-👥 群聊         →  群列表（点击群进入群聊窗口）
-🔍 搜一搜       →  ⌘K 搜索框 + 结果列表（可点击跳转到聊天）
-📱 朋友圈       →  按群分组的朋友圈动态流（可展开/折叠）
-```
-
-切换逻辑（纯前端，无需 Tauri 命令）：
-- 所有数据已在加载时获取（`load_agents`, `load_groups`, `load_moments`）
-- Tab 切换仅改变 CSS `display` / `hidden` 属性
-- 选中不同 Agent 时调用 `invoke('get_chat_history_for_agent', { agentHash })`
-
-### D.6 文件管理器面板
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ 📂 文件管理器 — 数学老师 (a1b2)                      [× 关闭] │
-├──────────────────────────────────────────────────────────────┤
-│ 路径: /workspace/                                  [刷新]    │
-├────────────┬─────────────────────────────────────────────────┤
-│ 📁 exams/  │                                                   │
-│ 📁 notes/  │  ┌─────────────────────────────────────┐       │
-│ 📁 apps/   │  │  选中文件详情                        │       │
-│ 📄 README  │  │  名称: report.md                    │       │
-│            │  │  大小: 2.4 KB                       │       │
-│            │  │  修改时间: 2026-06-20               │       │
-│            │  │                                      │       │
-│            │  │  [📥 下载] [📤 发送给 Agent] [🗑 删除] │       │
-│            │  └─────────────────────────────────────┘       │
-└────────────┴─────────────────────────────────────────────────┘
-```
-
-### D.7 群聊创建对话框
-
-```
-┌───────────────────────────────────────────┐
-│  创建群聊                          [× 关闭] │
-├───────────────────────────────────────────┤
-│  群名称：[学习小组________________]        │
-│                                           │
-│  选择成员：                                │
-│  ☑ 数学老师 (a1b2)                        │
-│  ☑ 英语老师 (c3d4)                        │
-│  ☐ 语文老师 (e5f6)                        │
-│  ☐ 编程助手 (a7b8)                        │
-│                                           │
-│  ☐ 开启朋友圈                             │
-│                                           │
-│  [取消]            [创建]                   │
-└───────────────────────────────────────────┘
-```
-
-### D.8 朋友圈面板
-
-```
-┌────────────────────────────────────────────────────────┐
-│ 📱 群朋友圈                                           │
-├────────────────────────────────────────────────────────┤
-│                                                        │
-│ ┌─ 学习群 ────────────────────────────────────────┐   │
-│ │                                                  │   │
-│ │ ✏️ 数学老师  刚刚批改了 3 份试卷                  │   │
-│ │   正确率：72% | 薄弱项：诱导公式                   │   │
-│ │   [查看详情 → 跳转文件管理器]                     │   │
-│ │   ─────────────────────────────────────          │   │
-│ │ 📝 英语老师  完成了作文批改                       │   │
-│ │   评分：21/25                                     │   │
-│ │   [查看批改详情]                                  │   │
-│ │                                                  │   │
-│ └──────────────────────────────────────────────────┘   │
-│                                                        │
-│ ┌─ 开发群 (暂无动态) ──────────────────────────┐      │
-│ └──────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────┘
-```
+**工时：** 2 天
 
 ---
 
-## E. 前端集成 (Tauri Commands)
+### Phase 0c — 小侧栏 + API 对接 ✅ 第三步
 
-### E.1 现有命令（不变或少量修改）
+**目标：** 三 dot 菜单能展开小侧栏，所有 API 走通。
 
-| 命令 | 所属模块 | 修改类型 |
-|------|---------|---------|
-| `load_settings` | settings.rs | 不需要修改 |
-| `save_settings` | settings.rs | 不需要修改 |
-| `open_settings_window` | settings.rs | 不需要修改 |
-| `test_cloud_connection` | settings.rs | 不需要修改 |
-| `get_cloud_session` | settings.rs | 不需要修改 |
-| `cloud_login` | settings.rs | 不需要修改 |
-| `cloud_disconnect` | settings.rs | 不需要修改 |
-| `set_theme` | settings.rs | 不需要修改 |
-| `get_theme` | settings.rs | 不需要修改 |
-| `get_app_version` | settings.rs | 不需要修改 |
-| `file_read` | file_ops.rs | **修改**：接受不带 `/mnt/desktop/` 前缀的路径 |
-| `file_write` | file_ops.rs | 不需要修改 |
-| `file_delete` | file_ops.rs | 不需要修改 |
-| `check_first_launch` | welcome.rs | 不需要修改 |
-| `save_welcome_config` | welcome.rs | 不需要修改 |
-| `discover_well_known` | welcome.rs | 不需要修改 |
-| `open_welcome_window` | welcome.rs | 不需要修改 |
-| `get_chat_history` | chat.rs | **修改**：接受 `agent_hash` 参数 |
-| `append_chat_message` | chat.rs | **修改**：接受 `agent_hash` 参数 |
-| `clear_chat_history` | chat.rs | **修改**：接受 `agent_hash` 参数 |
-| `send_chat_message` | chat.rs | **修改**：接受 `agent_hash` + `group_id` |
-| `open_chat_window` | chat.rs | 不需要修改 |
-| `get_connection_status` | chat.rs | 不需要修改 |
-| `get_chat_history_path` | chat.rs | 不需要修改 |
-| `send_consent_response` | chat.rs | 不需要修改 |
+**关键交付：**
+- `src-tauri/src/side_panel.rs`（新建）：info 查询、alias 修改、pin/dnd toggle
+- `src-tauri/src/chat/components/side-panel.ts`
+- 侧栏展示：头像、备注、置顶、免打扰、权限模式选择
+- 引擎对接：`GET /api/desktop/agents/{hash}` 获取 Agent 信息
+- 新增命令：`get_agent_panel_info` / `update_agent_alias` / `toggle_pin` / `toggle_dnd`
 
-### E.2 Phase 0-2 新增命令
+**完成条件：** 小侧栏可展示和操作
 
-```rust
-// ============ chat.rs 新增 ============
-
-/// 获取当前用户的 Agent 列表（从 engine 或本地缓存）
-#[tauri::command]
-async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentInfo>, String>;
-
-/// 获取特定 Agent 的聊天历史
-#[tauri::command]
-async fn get_chat_history_for_agent(
-    agent_hash: String,
-) -> Result<ChatHistory, String>;
-
-/// 获取所有快捷模板
-#[tauri::command]
-async fn get_prompt_templates() -> Result<Vec<PromptTemplate>, String>;
-
-/// 保存快捷模板
-#[tauri::command]
-async fn save_prompt_templates(
-    templates: Vec<PromptTemplate>,
-) -> Result<(), String>;
-
-/// 保存剪贴板中的图片到临时目录，返回路径
-#[tauri::command]
-async fn save_temp_image(image_base64: String) -> Result<String, String>;
-
-
-// ============ group.rs (新建) ============
-
-/// 创建群聊
-#[tauri::command]
-async fn create_group(name: String, members: Vec<String>) -> Result<Group, String>;
-
-/// 获取所有群聊
-#[tauri::command]
-async fn list_groups() -> Result<Vec<Group>, String>;
-
-/// 获取群聊消息
-#[tauri::command]
-async fn get_group_messages(group_id: String) -> Result<Vec<GroupMessage>, String>;
-
-/// 发送群聊消息（并行广播到所有群成员 Agent）
-#[tauri::command]
-async fn send_group_message(
-    group_id: String,
-    content: String,
-    mentions: Vec<String>,
-    attachments: Vec<Attachment>,
-    state: State<'_, AppState>,
-) -> Result<String, String>;
-
-/// 删除群聊
-#[tauri::command]
-async fn delete_group(group_id: String) -> Result<(), String>;
-
-/// 更新群设置（名称、成员、朋友圈开关）
-#[tauri::command]
-async fn update_group(group: Group) -> Result<(), String>;
-
-
-// ============ moments.rs (新建) ============
-
-/// 获取某群的朋友圈动态
-#[tauri::command]
-async fn get_group_moments(group_id: String) -> Result<Vec<Moment>, String>;
-
-/// 获取所有已开启朋友圈的群的动态
-#[tauri::command]
-async fn get_all_moments() -> Result<Vec<MomentsSnapshot>, String>;
-
-/// 用户手动发布朋友圈动态
-#[tauri::command]
-async fn post_moment(
-    group_id: String,
-    content: String,
-) -> Result<Moment, String>;
-
-
-// ============ search.rs (新建) ============
-
-/// 全局语义搜索
-#[tauri::command]
-async fn global_search(
-    query: String,
-    top_k: Option<usize>,
-) -> Result<Vec<SearchResult>, String>;
-
-
-// ============ mini_program.rs (新建) ============
-
-/// 获取某 Agent 的小程序列表
-#[tauri::command]
-async fn list_mini_programs(
-    agent_hash: String,
-) -> Result<Vec<MiniProgramEntry>, String>;
-
-/// 打开小程序窗口
-#[tauri::command]
-async fn open_mini_program(
-    agent_hash: String,
-    app_id: String,
-    app: AppHandle,
-) -> Result<(), String>;
-
-
-// ============ qr_upload.rs (新建) ============
-
-/// 启动临时 HTTP server 并返回二维码数据 URL
-#[tauri::command]
-async fn start_qr_upload_server() -> Result<QrUploadSession, String>;
-
-/// 停止临时 HTTP server
-#[tauri::command]
-async fn stop_qr_upload_server(session_id: String) -> Result<(), String>;
-
-/// 检查是否有新上传的文件
-#[tauri::command]
-async fn check_uploaded_files(session_id: String) -> Result<Vec<UploadedFile>, String>;
-
-
-// ============ VFS 命令（现有 file_ops.rs 扩展）============
-
-/// 列出 VFS 目录
-#[tauri::command]
-async fn list_vfs_directory(
-    agent_hash: String,
-    path: String,
-) -> Result<Vec<FileEntryInfo>, String>;
-
-/// 读取 VFS 文件内容
-#[tauri::command]
-async fn read_vfs_file(
-    agent_hash: String,
-    path: String,
-) -> Result<String, String>;
-
-
-// ============ mcp.rs (新建) ============
-
-/// 列出已配置的 MCP Server
-#[tauri::command]
-async fn list_mcp_servers() -> Result<Vec<McpServerConfig>, String>;
-
-/// 启动 MCP Server
-#[tauri::command]
-async fn start_mcp_server(name: String) -> Result<(), String>;
-
-/// 停止 MCP Server
-#[tauri::command]
-async fn stop_mcp_server(name: String) -> Result<(), String>;
-```
-
-### E.3 invoke_handler 注册
-
-```rust
-// lib.rs run() 函数内，invoke_handler 扩展为：
-. invoke_handler(tauri::generate_handler![
-    // 已有 settings
-    settings::load_settings,
-    settings::save_settings,
-    settings::open_settings_window,
-    settings::test_cloud_connection,
-    settings::get_cloud_session,
-    settings::cloud_login,
-    settings::cloud_disconnect,
-    settings::set_theme,
-    settings::get_theme,
-    settings::get_app_version,
-    // 已有 file_ops
-    file_ops::file_read,
-    file_ops::file_write,
-    file_ops::file_delete,
-    // 已有 welcome
-    welcome::check_first_launch,
-    welcome::save_welcome_config,
-    welcome::discover_well_known,
-    welcome::open_welcome_window,
-    // 聊天（扩展）
-    chat::get_chat_history,
-    chat::get_chat_history_for_agent,
-    chat::append_chat_message,
-    chat::clear_chat_history,
-    chat::send_chat_message,
-    chat::open_chat_window,
-    chat::get_connection_status,
-    chat::get_chat_history_path,
-    chat::send_consent_response,
-    chat::list_agents,
-    chat::get_prompt_templates,
-    chat::save_prompt_templates,
-    chat::save_temp_image,
-    // 群聊（新建）
-    group::create_group,
-    group::list_groups,
-    group::get_group_messages,
-    group::send_group_message,
-    group::delete_group,
-    group::update_group,
-    // 朋友圈（新建）
-    moments::get_group_moments,
-    moments::get_all_moments,
-    moments::post_moment,
-    // 搜索（新建）
-    search::global_search,
-    // 小程序（新建）
-    mini_program::list_mini_programs,
-    mini_program::open_mini_program,
-    // 扫码上传（新建）
-    qr_upload::start_qr_upload_server,
-    qr_upload::stop_qr_upload_server,
-    qr_upload::check_uploaded_files,
-    // VFS（新建 / 扩展）
-    file_ops::list_vfs_directory,
-    file_ops::read_vfs_file,
-    // MCP（新建）
-    mcp::list_mcp_servers,
-    mcp::start_mcp_server,
-    mcp::stop_mcp_server,
-])
-```
-
-### E.4 聊天历史格式变更
-
-现有 `chat_history.json` 是全局单文件。V3 需要按 `agent_hash` 分文件：
-
-```
-# 现有（V2）:
-~/.feclaw/chat_history.json
-
-# V3 改为:
-~/.feclaw/chats/
-├── a1b2.json      # 数学老师的聊天记录
-├── c3d4.json      # 英语老师的聊天记录
-└── e5f6.json      # 编程助手的聊天记录
-```
-
-`ChatMessage` 结构不变，只是文件路径从 `chat_history.json` 变为 `chats/{agent_hash}.json`。
+**工时：** 2 天
 
 ---
 
-## F. 后端集成 (FeClaw 引擎改动)
+### Phase 1 — 截图粘贴 + 快捷模板（IM 模式起步）
 
-### F.1 不做改动的部分
+**目标：** 富文本输入框（contenteditable + Ctrl+V 粘贴截图），底部快捷模板按钮栏。
 
-以下引擎能力**不需要修改**，Desktop 直接复用：
+**关键交付：**
+- 粘贴处理：`paste` 事件 → 检测 `image/*` MIME → `invoke('save_temp_image', { base64 })` → 插入缩略图到输入框 → 加入待发送附件列表
+- 模板栏：内置 6 个（总结 / 翻译 / 检查语法 / 改写 / 解释代码 / 优化代码）+ 自定义 CRUD
+- 新增命令：`save_temp_image` / `get_prompt_templates` / `save_prompt_templates`
 
-- `ChatService.chat()` — Agent 1:1 对话核心。群聊时 Desktop 并行调用多个 Agent 的 chat。
-- `apps_service.py` — 小程序注册、路由、静态/代码/AI 三种 handler。Desktop 通过 iframe 嵌入。
-- `virtual_filesystem.py` — VFS 命令系统。Desktop 文件管理器面板显示 VFS 目录树。
-- `vector_search_service.py` — 向量搜索。Desktop 通过 `search_request` WS 消息调用。
-- `llm_service.py` — LLM 提供者。无改动。
-- `ShareReference` 模型 — `[reference:xxx]` 引用解析。Desktop 聊天直接使用。
-- `auth.py` / JWT — 认证体系。Desktop 已集成。
 
-### F.2 需要新增 / 修改
+**工时：** 2–3 天
 
-#### F.2.1 desktop_ws.py — 新增消息类型支持
+---
 
+### Phase 2 — 三 dot 菜单 + VFS 文件管理器 + 小侧栏
+
+**目标：** 聊天窗口右上角 `⋮` → 右侧展开小侧栏，包含完整的 Agent 管理功能。
+
+**小侧栏完整内容：**
+```
+┌── Agent 设置 ──────────────────────┐
+│                                     │
+│  [头像]                              │
+│  备注名（显示名，可编辑）             │
+│                                     │
+│  📌 置顶聊天       [开/关]          │
+│  🔕 免打扰         [开/关]          │
+│                                     │
+│  📂 VFS 文件编辑器                   │
+│  ├── 浏览目录结构                    │
+│  ├── 编辑非二进制文件                 │
+│  ├── 上传/下载                       │
+│  └── 新建文件夹                      │
+│                                     │
+│  ⚙️ 配置管理                         │
+│  └── 同网页版 {hash}.feclaw/         │
+│      lizidaren.cn/settings           │
+│                                     │
+│  🛡️ 权限模式                         │
+│  └── 当前：平衡 (L2) ▼              │
+│                                     │
+│  🏪 小程序列表                       │
+│  └── 3 个可用 App                    │
+│                                     │
+│  📱 群广场设置（仅群聊）             │
+│  └── [开/关]                         │
+└─────────────────────────────────────┘
+```
+
+**关键交付：**
+- `src-tauri/src/file_manager.rs` + `src-tauri/src/file_manager/index.html`（VFS 编辑器）
+- `src-tauri/src/side_panel.rs`（新建）— 小侧栏状态管理 + Agent 属性变更命令
+  - `get_agent_panel_info(agent_hash)` — 获取所有侧栏展示数据
+  - `update_agent_alias(agent_hash, alias)` — 修改备注名
+  - `toggle_agent_pin(agent_hash)` — 置顶
+  - `toggle_agent_dnd(agent_hash)` — 免打扰
+  - `get_agent_permission_mode(agent_hash)` / `set_agent_permission_mode(agent_hash, mode)`
+  - `update_agent_config(agent_hash, config)` — 引擎配置代理
+- 引擎端：`GET /api/desktop/agents/{hash}/vfs`、`GET /api/desktop/agents/{hash}/apps`、`GET /api/desktop/agents/{hash}/config`
+- 复用 `virtual_filesystem.py` 已有逻辑
+
+**工时：** 5–6 天
+
+---
+
+### Phase 3 — Windows 右键菜单（📎 引用 / 📤 发送）
+
+**目标：** 资源管理器右键 → 「FeClaw 引用」/「FeClaw 发送」→ Desktop 收到文件路径 → 加入当前聊天待发送列表。
+
+**关键交付：**
+- `src-tauri/src/right_click.rs` 注册表操作（HKCU）
+- `main.rs` 解析 `--right-click reference/send <path>` 参数
+- 设置中加开关（默认关，让用户显式启用）
+- 安全：复用 `file_bridge::resolve_desktop_path` 的路径遍历防护
+
+**依赖：** `winreg = "0.52"`
+
+
+**工时：** 3–4 天
+
+---
+
+### Phase 4 — 群聊引擎侧（核心改动：群上云）
+
+**目标：** Engine 侧新增 Group 模型层 + API + WS 端点。群数据由服务器管理，Desktop 是消费方。
+
+**引擎侧新增文件：**
+- `models/group.py` — Group + GroupMember + GroupMoments 模型
+- `services/group_service.py` — 群聊核心逻辑（创建/路由/上下文管理）
+- `routers/group.py` — REST API + WS 端点
+
+**引擎侧 API 端点：**
+```
+POST   /api/groups/create               — 创建群
+POST   /api/groups/{id}/send            — 发送群消息（用户触发）
+POST   /api/groups/{id}/join            — 拉 Agent 入群
+POST   /api/groups/{id}/leave           — 踢出 Agent
+PATCH  /api/groups/{id}/settings        — 更新群设置（改名/公告/权限/广场开关）
+DELETE /api/groups/{id}                 — 解散群
+GET    /api/groups/{id}/messages        — 获取历史消息
+GET    /api/desktop/groups              — Desktop 列出用户所有群
+WS     /ws/desktop/groups/{group_id}    — 群消息实时推送
+```
+
+**典型消息路由（备课场景）：**
+```
+用户"我想学三角函数" → POST /api/groups/{id}/send
+  → group_service.send_message() 分发消息给群内每个 Agent
+    → 并行调用 3 次 chat_service.chat()（各 Agent 独立思考）
+      Agent A (老师): 生成教案 + 知识点拆解
+      Agent B (好学生): 提挑战性问题
+      Agent C (学困生): 指出易错点
+  → 聚合结果 → WS 推送给 Desktop
+  → Desktop 按时间线渲染群聊窗口
+```
+
+**引擎侧数据 model：**
 ```python
-# routers/desktop_ws.py 的 handle_desktop_message() 新增分支
+class Group(Base):
+    id: str (UUID)
+    name: str
+    announcement: str (群公告)
+    announcement_updated_at: datetime
+    owner_user_id: int
+    settings: JSON (allow_agent_edit_name, allow_agent_edit_announce, 
+                    moments_enabled, unified_permission_mode)
+    # unified_permission_mode: str — 群统一权限级别 ("disabled"|"strict"|"balanced"|"relaxed"|"full")
+    # 设置为 non-null 时覆盖群内各 Agent 的独立权限配置
+    context_isolation: bool = True
+    created_at / updated_at
 
-def handle_desktop_message(data: dict):
-    msg_type = data.get("type")
-    agent_hash = data.get("agent_hash")
-    user_id = data.get("user_id")
+class GroupMember(Base):
+    group_id: str → Group.id
+    agent_hash: str → AgentProfile.hash
+    role: str ("owner" | "member")
 
-    if msg_type == "consent_response":
-        relay.resolve_consent(data["id"], data.get("decision"))
-    elif msg_type == "pong":
-        pass
-    elif msg_type in ("file_read_response", "file_write_response", "file_delete_response"):
-        relay.resolve_response(data["id"], data.get("payload", {}))
-
-    # === V3 新增 ===
-    elif msg_type == "search_request":
-        # Desktop 请求语义搜索
-        asyncio.create_task(handle_search_request(data, agent_hash))
-    elif msg_type == "mini_program_launch":
-        # Desktop 请求打开小程序（服务端验证 App 存在 + 返回入口 URL）
-        asyncio.create_task(handle_mini_program_launch(data, agent_hash))
-    elif msg_type == "mcp_tool_response":
-        # Desktop 返回 MCP 工具执行结果
-        relay.resolve_response(data["id"], data["payload"])
-    elif msg_type == "group_chat_message":
-        # 群聊消息：Desktop 已处理分发，Engine 仅转发给目标 Agent
-        # （在群聊流程中，Desktop 对每个 Agent 单独发 chat_message，
-        #  此消息类型实际不经过此 handler，而是在 chat WS 上直接发送）
-        pass
+class GroupMessage(Base):
+    id: str (UUID)
+    group_id: str → Group.id
+    sender_type: str ("user" | "agent")
+    sender_hash: str (agent_hash 或 None)
+    content: str
+    message_type: str ("text" | "image" | "file" | "consent_card" | "question_box")
+    mentions: list[str] (@提及的 agent_hash 列表)
+    created_at
 ```
 
-#### F.2.2 desktop_relay.py — 新增搜索 + MCP 请求
+**上下文隔离：** group_service 在构建每条消息的上下文时，只注入该群的历史消息，不混入单聊记录。
 
+**Desktop 侧改动：**
+- `src-tauri/src/group.rs` — HTTP 客户端调用 Engine Group API（不是本地数据管理）
+- `ws.rs` 扩展 — 接收群聊 WS 消息类型 `group_message` / `group_event`
+- 前端渲染 — 群聊窗口独立 Tab，消息按 sender 分色显示
+
+**工时：** 引擎 4–5 天 + Desktop 2–3 天
+
+---
+
+### Phase 5 — 群广场（Engine 侧事件管理）
+
+**目标：** 群广场跟随群上云。Agent 完成任务 → 写入 `GroupMoments` 表 → WS 推送给 Desktop。
+
+**引擎侧新增：**
+- `models/group.py` 中 GroupMoments 表（或独立文件）
 ```python
-# services/desktop_relay.py 新增方法
-
-class DesktopRelay:
-    # ... 现有 pending, request_consent, request_file_* ...
-
-    async def request_mcp_tool(
-        self, tool_name: str, arguments: dict, agent_hash: str
-    ) -> dict:
-        """请求 Desktop 执行 MCP 工具调用"""
-        if not self.is_desktop_connected():
-            return {"error": "Desktop not connected", "status": "denied"}
-
-        request_id = str(uuid.uuid4())
-        future = asyncio.get_event_loop().create_future()
-        self.pending[request_id] = future
-
-        await send_to_desktop({
-            "type": "mcp_tool_request",
-            "id": request_id,
-            "tool_name": tool_name,
-            "arguments": arguments,
-            "agent_hash": agent_hash,
-            "timestamp": datetime.utcnow().isoformat(),
-        })
-
-        try:
-            result = await asyncio.wait_for(future, timeout=60)
-            return result
-        except asyncio.TimeoutError:
-            self.pending.pop(request_id, None)
-            return {"error": "MCP tool execution timeout", "status": "timeout"}
+class GroupMoments(Base):
+    id: str (UUID)
+    group_id: str → Group.id
+    agent_hash: str
+    kind: str ("task_done" | "file_changed" | "analysis" | "manual")
+    title: str
+    content: str
+    data: JSON (附加链接/详情)
+    created_at: datetime
 ```
-
-#### F.2.3 main.py — 新增 Agent 列表 API
-
-```python
-# main.py 新增 REST 端点
-
-@app.get("/api/desktop/agents")
-async def list_agents_for_desktop(
-    current_user = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    返回当前用户的所有 Agent 列表，供 Desktop 构建侧边栏。
-    注意：此端点仅在 DESKTOP_ENABLED=true 时注册。
-    """
-    agents = db.query(AgentProfile).filter(
-        AgentProfile.user_id == current_user.id
-    ).all()
-
-    return [
-        {
-            "hash": a.hash,
-            "name": a.name,
-            "description": a.description,
-            "status": a.status,
-            "is_default": a.is_default,
-            "created_at": a.created_at.isoformat() if a.created_at else None,
-        }
-        for a in agents
-    ]
-
-@app.get("/api/desktop/agents/{agent_hash}/vfs")
-async def list_agent_vfs(
-    agent_hash: str,
-    path: str = "/",
-    current_user = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """列出 Agent VFS 目录（Desktop 文件管理器用）"""
-    # 验证所有权
-    agent = db.query(AgentProfile).filter(
-        AgentProfile.hash == agent_hash,
-        AgentProfile.user_id == current_user.id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    from services.virtual_filesystem import VirtualFileSystem
-    vfs = VirtualFileSystem(agent_hash=agent_hash)
-    result = await vfs.list_dir(path)
-    return result
-
-
-@app.get("/api/desktop/agents/{agent_hash}/apps")
-async def list_agent_apps(
-    agent_hash: str,
-    current_user = Depends(get_current_user),
-):
-    """列出 Agent 的小程序（Desktop 三 dot 菜单用）"""
-    # 验证所有权...
-    from services.apps_service import list_registered_apps
-    apps = list_registered_apps(agent_hash)
-    return [{"app_id": aid, **cfg} for aid, cfg in apps.items()]
-
-
-@app.get("/api/desktop/agents/{agent_hash}/chat_history")
-async def get_agent_chat_history(
-    agent_hash: str,
-    limit: int = 100,
-    before: str = None,  # ISO timestamp for pagination
-    current_user = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    返回 Agent 的聊天历史（从数据库 ChatHistory 表）。
-    Desktop 可用此 API 恢复本地未存储的历史。
-    """
-    # 验证所有权...
-    from models.database import ChatHistory
-    query = db.query(ChatHistory).filter(
-        ChatHistory.agent_hash == agent_hash,
-        ChatHistory.user_id == current_user.id,
-    ).order_by(ChatHistory.created_at.desc()).limit(limit)
-
-    if before:
-        query = query.filter(ChatHistory.created_at < before)
-
-    messages = query.all()
-    return [
-        {
-            "id": m.id,
-            "role": m.role,
-            "content": m.content,
-            "timestamp": m.created_at.isoformat() if m.created_at else None,
-            "agent_hash": m.agent_hash,
-        }
-        for m in reversed(messages)  # 返回时间正序
-    ]
-```
-
-### F.3 不需要新增 REST 端点的情况
-
-以下功能完全由 Desktop 本地处理，不需要新端点：
-- 群聊创建/管理 → Desktop 本地 `groups.json`
-- 朋友圈聚合 → Desktop 本地 `moments.json`
-- 快捷模板 → Desktop 本地 `templates.json`
-- 右键菜单 → Windows 注册表
-- 扫码上传 → Desktop 临时 HTTP server
-- 文件全盘索引 → Desktop 后台进程
-
-### F.4 Auth 改进
-
-#### F.4.1 JWT Token 刷新
-
-Desktop 已通过 `ws.rs` 中的 `last_close_code()` 检测 4001/4002 并触发 `ShowCloudLogin`。改进点：
-
-```rust
-// engine.rs cloud_loop 内，在 token 即将过期时主动刷新
-let token_exp = Self::decode_jwt_exp(&token);  // 新增
-if let Some(exp) = token_exp {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    if exp < now + 3600 {  // 1小时内过期
-        // 尝试刷新 token
-        if let Ok(new_token) = Self::refresh_cloud_token(&shared_config).await {
-            // 用新 token 重连
-        }
-    }
-}
-```
-
-#### F.4.2 QR 码扫码登录（Phase 11）
-
-远期可实现类似微信 Web 版的扫码登录流程：
-1. Desktop 生成一个临时 session token
-2. Display 二维码（img + session_id）
-3. 轮询 `GET /api/auth/qr-check?session_id=xxx`
-4. 用户在 FeClaw 控制台确认 → Server 绑定 JWT → Desktop 收到 token
-
----
-
-## G. 系统集成
-
-### G.1 Windows 右键菜单实现方案
-
-#### G.1.1 技术方案
-
-Windows 右键菜单有两种实现路径：
-
-**路径 A：注册表静态注册（Phase 3 MVP）**
-
-```rust
-// src-tauri/src/right_click.rs
-use winreg::enums::*;
-use winreg::RegKey;
-
-/// 注册右键菜单到 Windows Registry
-pub fn register_context_menu(exe_path: &str) -> Result<()> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-
-    // 所有文件 (*.*) 的右键菜单
-    let all_files = hkcu.create_subkey(
-        r"Software\Classes\*\shell\FeClaw.Reference"
-    )?;
-    all_files.0.set_value("", "📎 FeClaw 引用")?;
-    all_files.0.set_value("Icon", &format!("{exe_path},0"))?;
-
-    let cmd_ref = all_files.0.create_subkey("command")?;
-    cmd_ref.0.set_value("", &format!(
-        r#""{exe_path}" --right-click reference "%1""#,
-    ))?;
-
-    let all_files = hkcu.create_subkey(
-        r"Software\Classes\*\shell\FeClaw.Send"
-    )?;
-    all_files.0.set_value("", "📤 FeClaw 发送")?;
-    all_files.0.set_value("Icon", &format!("{exe_path},0"))?;
-
-    let cmd_send = all_files.0.create_subkey("command")?;
-    cmd_send.0.set_value("", &format!(
-        r#""{exe_path}" --right-click send "%1""#,
-    ))?;
-
-    Ok(())
-}
-
-/// 从 Windows Registry 移除右键菜单
-pub fn unregister_context_menu() -> Result<()> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    // 删除整个子键树
-    hkcu.delete_subkey_all(r"Software\Classes\*\shell\FeClaw.Reference")?;
-    hkcu.delete_subkey_all(r"Software\Classes\*\shell\FeClaw.Send")?;
-    Ok(())
-}
-```
-
-**路径 B：COM Shell Extension（远期优化）**
-- 原生 C++ DLL，通过 `IShellExtInit` + `IContextMenu` 接口
-- 优点：可以动态显示/隐藏菜单项、显示图标、支持多文件选择
-- 缺点：复杂度高，需要 C++/winapi 开发
-
-#### G.1.2 右键菜单行为
-
-```rust
-// main.rs 或 lib.rs 中处理 --right-click 参数
-fn parse_args() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() >= 3 && args[1] == "--right-click" {
-        let action = &args[2];  // "reference" | "send"
-        let file_path = &args[3];  // 文件的完整路径
-
-        // 1. 确保 Desktop 主进程已运行（通过 Named Pipe 或 TCP 发送）
-        // 2. 将操作加入当前活跃 Agent 的待发送队列
-        // 3. 如果主窗口未打开，弹出系统通知
-    }
-}
-```
-
-#### G.1.3 文件关联
-
-```rust
-/// 可选：将 .md / .txt 关联到 FeClaw Desktop
-pub fn register_file_associations() -> Result<()> {
-    let exe = std::env::current_exe()?;
-    let exe_str = exe.to_string_lossy();
-
-    // .feclaw 自定义文件（引出 Agent 对话）
-    let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
-    let prog_id = hkcu.create_subkey(r"Software\Classes\FeClaw.Document")?;
-    prog_id.0.set_value("", "FeClaw Document")?;
-
-    let cmd = prog_id.0.create_subkey(r"shell\open\command")?;
-    cmd.0.set_value("", &format!(r#""{exe_str}" --open "%1""#))?;
-
-    let ext = hkcu.create_subkey(r"Software\Classes\.feclaw")?;
-    ext.0.set_value("", "FeClaw.Document")?;
-
-    Ok(())
-}
-```
-
-### G.2 扫码上传 (文件传输助手替代方案)
-
-#### G.2.1 技术架构
-
-```
-┌──────────────┐     ┌──────────────────┐     ┌──────────────┐
-│  Desktop App  │     │  Temporary HTTP   │     │  Mobile Phone │
-│  (Rust)      │     │  Server (Rust)    │     │  (Browser)   │
-│              │     │                   │     │              │
-│  1. 生成 QR码 │────→│  localhost:19888  │     │              │
-│     (data URL)│     │                   │     │              │
-│              │     │  2. 手机扫码       │←────│ 扫描二维码    │
-│              │     │  3. 打开网页       │────→│ 拍照 / 选照片 │
-│              │     │  4. POST /upload   │←────│ 提交图片      │
-│              │     │  5. 存入临时目录   │     │              │
-│  6. 轮询检查  │←────│  GET /status       │     │              │
-│  7. 拿到文件  │     │                   │     │              │
-└──────────────┘     └──────────────────┘     └──────────────┘
-```
-
-#### G.2.2 Rust 实现概要
-
-```rust
-// src-tauri/src/qr_upload.rs
-
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use warp::Filter;
-use qrcode::QrCode;
-use image::Luma;
-use base64::Engine;
-
-pub struct QrUploadSession {
-    pub id: String,
-    pub url: String,
-    pub qr_data_url: String,   // Base64 PNG for <img src="...">
-    pub port: u16,
-    pub uploaded_files: Arc<Mutex<Vec<UploadedFile>>>,
-}
-
-pub struct UploadedFile {
-    pub name: String,
-    pub path: PathBuf,
-    pub size: u64,
-    pub mime_type: String,
-}
-
-pub async fn start_server() -> Result<QrUploadSession, String> {
-    // 1. 找一个空闲端口
-    let port = Config::find_free_port(19888)
-        .ok_or("no free port for QR upload server")?;
-
-    // 2. 生成 session ID 和 URL
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let url = format!("http://192.168.1.100:{port}/upload/{session_id}");
-    //   ^^^ 需要获取本机局域网 IP，用 local-ip-address crate
-
-    // 3. 生成二维码 PNG
-    let qr = QrCode::new(&url)
-        .map_err(|e| format!("qr code: {e}"))?;
-    let image = qr.render::<Luma<u8>>()
-        .min_dimensions(300, 300)
-        .build();
-    let mut png_bytes = Vec::new();
-    image.write_to(&mut Cursor::new(&mut png_bytes),
-        image::ImageFormat::Png)
-        .map_err(|e| format!("encode png: {e}"))?;
-    let qr_data_url = format!(
-        "data:image/png;base64,{}",
-        BASE64_STANDARD.encode(&png_bytes)
-    );
-
-    // 4. 启动 HTTP server 后台任务
-    let files = Arc::new(Mutex::new(Vec::new()));
-    let files_clone = files.clone();
-
-    tokio::spawn(async move {
-        // 上传页面 HTML
-        let upload_page = warp::path("upload")
-            .and(warp::path::param::<String>())
-            .and(warp::get())
-            .map(|sid: String| {
-                warp::reply::html(format!(r#"
-                <!DOCTYPE html><html><head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width,initial-scale=1">
-                <title>FeClaw 文件上传</title>
-                </head><body>
-                <h2>FeClaw Desktop 文件上传</h2>
-                <input type="file" id="f" accept="image/*" capture="environment">
-                <button onclick="upload()">上传</button>
-                <p id="status"></p>
-                <script>
-                async function upload() {{
-                    const f = document.getElementById('f').files[0];
-                    if (!f) return;
-                    const form = new FormData();
-                    form.append('file', f);
-                    const r = await fetch('/upload/{sid}',
-                        {{method:'POST', body:form}});
-                    const t = await r.text();
-                    document.getElementById('status').textContent = t;
-                }}
-                </script></body></html>
-                "#)))
-            });
-
-        // 文件接收端点
-        let upload = warp::path("upload")
-            .and(warp::path::param::<String>())
-            .and(warp::post())
-            .and(warp::multipart::form().max_length(50 * 1024 * 1024))
-            .and_then(move |sid: String, form: warp::multipart::FormData| {
-                let files = files_clone.clone();
-                async move {
-                    // 解析 multipart 并保存到 ~/.feclaw/uploads/{sid}/
-                    let dir = Config::config_dir()
-                        .join("uploads")
-                        .join(&sid);
-                    std::fs::create_dir_all(&dir).ok();
-
-                    // ... multipart 解析逻辑 ...
-
-                    Ok::<_, warp::Rejection>(
-                        warp::reply::html("✅ 上传成功！可以关闭此页面。")
-                    )
-                }
-            });
-
-        warp::serve(upload_page.or(upload))
-            .run(([127, 0, 0, 1], port))
-            .await;
-    });
-
-    Ok(QrUploadSession {
-        id: session_id, url, qr_data_url, port,
-        uploaded_files: files,
-    })
-}
-```
-
-**依赖添加：**
-```toml
-# Cargo.toml 新增：
-qrcode = "0.14"
-image = "0.25"
-warp = "0.3"                 # 轻量异步 HTTP 框架
-# 或使用 axum 0.7 替代 warp（更符合现有 tokio 生态）
-```
-
-### G.3 系统托盘扩展
-
-```rust
-// tray.rs 扩展菜单项：
-fn build_tray_menu(app: &AppHandle) -> Menu {
-    // ... 现有项 ...
-
-    // V3 新增：
-    let file_index_status = MenuItem::with_id(app, "idx_status",
-        "索引: 未启动", true, None::<&str>)?;  // 动态更新
-    let sep3 = PredefinedMenuItem::separator(app)?;
-    let settings_item = MenuItem::with_id(app, "settings",
-        "设置...", true, None::<&str>)?;
-    let right_click_item = CheckMenuItem::with_id(app, "right_click",
-        "右键菜单", true, true, None::<&str>)?;
-
-    // menu 包含：
-    // ├─ 状态: Connected
-    // ├─ 重新连接
-    // ├─ 搜索... (Ctrl+K)
-    // ├─ ─────────
-    // ├─ ☑ 右键菜单
-    // ├─ 索引: 1234 文件
-    // ├─ 模式: ☑ 本地 / ☐ 云端
-    // ├─ ─────────
-    // ├─ 设置...
-    // ├─ ─────────
-    // └─ 退出
-}
-```
-
-### G.4 文件全盘索引后台任务
-
-```rust
-// src-tauri/src/file_index.rs
-
-use std::path::PathBuf;
-use tokio::sync::mpsc;
-use tokio::time::{interval, Duration};
-
-pub struct FileIndexer {
-    directories: Vec<PathBuf>,
-    status_tx: mpsc::Sender<IndexerStatus>,
-    cancel: tokio::sync::watch::Sender<bool>,
-}
-
-pub enum IndexerStatus {
-    Idle,
-    Scanning { current: PathBuf, files_done: u32 },
-    Indexing { file: PathBuf, progress: f32 },
-    Done { total_files: u32 },
-}
-
-impl FileIndexer {
-    pub async fn run(&self) {
-        let mut tick = interval(Duration::from_secs(5));
-        // 低优先级后台任务
-        tokio::select! {
-            _ = self.full_index() => {}
-            _ = self.cancel.subscribe() => {}
-            _ = tick.tick() => {
-                // 增量更新：检查文件变更
-                self.incremental_update().await;
-            }
-        }
-    }
-
-    async fn full_index(&self) -> Result<()> {
-        for dir in &self.directories {
-            self.index_directory(dir).await?;
-        }
-        Ok(())
-    }
-
-    async fn index_directory(&self, dir: &Path) -> Result<()> {
-        // 递归扫描，使用 WalkDir crate
-        // 解析支持的文件格式：
-        //   PDF  → pdf-extract / lopdf
-        //   DOCX → docx-rs
-        //   TXT  → 直接读取
-        //   MD   → 直接读取
-        //   代码 → 直接读取（.rs/.py/.js/.ts/.go...）
-        // 使用 vectorscan (hyperscan) 或直接存文本片段
-        // 向量化使用 ort (ONNX runtime) 加载轻量 embedding 模型
-        unimplemented!()
-    }
-}
-```
-
-**依赖添加：**
-```toml
-# Cargo.toml 新增（全盘索引，Phase 10）：
-walkdir = "2"
-lopdf = "0.32"               # PDF 解析
-docx-rs = "0.4"              # DOCX 解析
-ort = "2"                    # ONNX Runtime (embedding 推理)
-# 或直接用 HTTP 调 FeClaw 的 embed 接口
-```
-
-### G.5 MCP 协议集成
-
-```rust
-// src-tauri/src/mcp.rs
-
-/// MCP Server 配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpServerConfig {
-    pub name: String,
-    pub command: String,        // "npx" / "python" / "uvx"
-    pub args: Vec<String>,      // ["-y", "@modelcontextprotocol/server-filesystem"]
-    pub env: HashMap<String, String>,
-    pub enabled: bool,
-}
-
-/// MCP Client 管理器
-pub struct McpManager {
-    servers: Vec<McpServerConfig>,
-    processes: HashMap<String, tokio::process::Child>,
-    tools_cache: HashMap<String, Vec<McpTool>>,
-}
-
-impl McpManager {
-    pub async fn start_server(&mut self, name: &str) -> Result<()> {
-        // 1. 根据配置 spawn 子进程
-        // 2. 通过 stdin/stdout JSON-RPC 通信
-        // 3. 发送 initialize 请求
-        // 4. 获取 tools/list
-        // 5. 缓存工具列表
-        unimplemented!()
-    }
-
-    pub async fn call_tool(
-        &self,
-        server: &str,
-        tool: &str,
-        args: serde_json::Value
-    ) -> Result<serde_json::Value> {
-        // 1. 构造 JSON-RPC tools/call 请求
-        // 2. 发送到子进程 stdin
-        // 3. 读取 stdout 响应
-        // 4. 返回结果
-        unimplemented!()
-    }
-}
-```
-
----
-
-## H. 实施阶段
-
-### 阶段总览
-
-```
-Phase 0  ──→  Phase 1  ──→  Phase 2  ──→  Phase 3
-(UI重构)      (体验增强)    (文件管理)     (右键菜单)
-    │              │              │              │
-    └──────────────┴──────────────┴──────┬───────┘
-                                         │
-                                    Phase 4 ──→ Phase 5 ──→ Phase 6
-                                    (群聊)       (朋友圈)    (小程序)
-                                         │
-                                    Phase 7 ──→ Phase 8 ──→ Phase 9
-                                    (搜索)       (扫码上传)   (MCP)
-                                         │
-                                    Phase 10 ──→ Phase 11
-                                    (全盘索引)   (多模态PC)
-```
-
----
-
-### Phase 0 — 基础聊天 UI 重构 + 私聊
-
-**目标：** 将现有的单 Agent 聊天窗口改造为「左侧 Agent 列表 + 右侧聊天窗口」的微信式布局。
-
-**复杂度：** 中
-
-**前置依赖：** 无（基于现有 master 分支）
-
-**修改文件：**
-
-| 文件 | 操作 | 改动说明 |
-|------|------|---------|
-| `src/chat/index.html` | **重写** | 从单聊天区域改为左侧栏 + 右侧聊天两栏布局 |
-| `src/chat/chat.css` | **重写** | 新布局样式，Agent 列表样式，消息气泡样式 |
-| `src/chat/chat.ts` | **重写** | 新增 Agent 列表渲染、选中切换、Tab 导航 |
-| `src-tauri/src/chat.rs` | **修改** | 新增 `list_agents`、`get_chat_history_for_agent` 命令；聊天历史按 agent_hash 分文件 |
-| `src-tauri/src/lib.rs` | **修改** | 注册新命令 |
-| `src-tauri/src/ws_types.rs` | **扩展** | 新增 `chat_message` 的 `agent_hash` 字段 |
-
-**实现要点：**
-
-1. **Agent 列表获取：** 云模式调用 `GET /api/desktop/agents`，本地模式扫描 `~/.feclaw/agents/*.json`。
-2. **聊天历史分离：** `chat_history.json` → `chats/{agent_hash}.json`。
-3. **消息发送带上 agent_hash：** `send_chat_message` 增加 `agent_hash` 参数，构造 `chat_message` 时携带。
-4. **流式回复关联 agent_hash：** `chat_reply` / `chat_event` 已携带 `agent` 字段，前端按此路由到正确的聊天窗口。
-5. **搜索栏（⌘K）：** 在左侧栏放置搜索框（Phase 7 才接通后端，Phase 0 可以仅 UI 占位）。
-
-**测试方式：**
-- 手动验证：启动 Desktop，确认 Agent 列表正确加载
-- 单元测试：`chat.rs` 的 `list_agents` 命令解析
-- 集成测试：通过模拟 `chat_reply` JSON 验证前端路由到正确的 Agent Tab
-
----
-
-### Phase 1 — 截图粘贴 + 快捷模板
-
-**目标：** 支持 Ctrl+V 粘贴截图到聊天输入框，一键发送 Prompt 模板。
-
-**复杂度：** 低
-
-**前置依赖：** Phase 0
-
-**修改文件：**
-
-| 文件 | 操作 | 改动说明 |
-|------|------|---------|
-| `src/chat/chat.ts` | **修改** | 新增粘贴事件处理、图片预览、快捷模板栏 |
-| `src/chat/chat.css` | **修改** | 图片预览样式、模板按钮栏样式 |
-| `src/chat/index.html` | **修改** | 新增 `#template-bar`、`#rich-input` contenteditable |
-| `src-tauri/src/chat.rs` | **新增命令** | `save_temp_image`、`get_prompt_templates`、`save_prompt_templates` |
-| `src-tauri/src/lib.rs` | **修改** | 注册新命令 |
-
-**实现要点：**
-
-1. **粘贴处理：** 监听 `paste` 事件 → 检测 `image/*` MIME → 保存到 `~/.feclaw/uploads/temp/` → 插入缩略图到输入区 → 添加到附件列表。
-2. **快捷模板：** 从 `templates.json` 加载 → 渲染为按钮 → 点击按钮填充 `#rich-input` 内容。
-3. **内置模板：**
-   - `总结要点` → "请用 3 个要点总结以下内容："
-   - `翻译成英文` → "Please translate the following to English:"
-   - `检查语法` → "请检查以下文本的语法错误并改正："
-   - `改写成文言文` → "请将以下内容改写成文言文："
-   - `解释代码` → "请解释以下代码的功能："
-   - `优化代码` → "请优化以下代码："
-
-**测试方式：**
-- 手动测试：粘贴截图、点击模板按钮
-- 快照测试：粘贴后的 DOM 状态
-
----
-
-### Phase 2 — 三 dot 菜单 + 文件管理器
-
-**目标：** Agent 右侧面板的 `⋮` 菜单，以及文件管理器窗口。
-
-**复杂度：** 中
-
-**前置依赖：** Phase 0（UI 框架存在），Phase 1（不强制但建议）
-
-**修改/新建文件：**
-
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `src/chat/index.html` | **修改** | 新增 `#three-dot-panel` 下拉菜单 DOM |
-| `src/chat/chat.ts` | **修改** | 三 dot 菜单点击处理、文件管理器窗口打开 |
-| `src/chat/chat.css` | **修改** | 下拉菜单样式 |
-| `src/file-manager/index.html` | **新建** | 文件管理器窗口 HTML |
-| `src/file-manager/file-manager.css` | **新建** | 文件管理器样式 |
-| `src/file-manager/file-manager.ts` | **新建** | 文件管理器逻辑 |
-| `src-tauri/src/file_ops.rs` | **扩展** | 新增 `list_vfs_directory`、`read_vfs_file` 命令 |
-| `src-tauri/src/lib.rs` | **修改** | 注册新命令 |
-
-**实现要点：**
-
-1. **三 dot 菜单：** 下拉菜单显示 4 个选项 + 分隔线 + 清空对话。
-2. **文件管理器：** 新建 Tauri WebviewWindow "file-manager"，通过 `open` crate 的类比打开。左侧文件树（调用 `list_vfs_directory`），右侧文件详情。
-3. **FeClaw 引擎端：** 新增 `GET /api/desktop/agents/{hash}/vfs?path=/` 端点（见 §F.2.3）。
-
-**测试方式：**
-- 手动测试：点击三 dot → 文件管理器 → 导航目录树 → 查看文件
-- 网络测试：mock `list_vfs_directory` 返回值验证前端渲染
-
----
-
-### Phase 3 — 右键引用/发送
-
-**目标：** 在 Windows 资源管理器中右键文件选择「📎 FeClaw 引用」或「📤 FeClaw 发送」。
-
-**复杂度：** 中
-
-**前置依赖：** Phase 0（Desktop 基础运行），`winreg` crate
-
-**修改/新建文件：**
-
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `src-tauri/src/right_click.rs` | **新建** | 右键注册/注销/命令处理 |
-| `src-tauri/src/main.rs` | **修改** | 解析 `--right-click` CLI 参数 |
-| `src-tauri/Cargo.toml` | **修改** | 添加 `winreg` 依赖 |
-| `src-tauri/src/lib.rs` | **修改** | 调用注册/注销、IPC 路由 |
-| `src/chat/chat.ts` | **修改** | 接收 IPC 消息，将文件添加到当前聊天 |
-
-**依赖添加：**
-```toml
-winreg = "0.52"  # Windows Registry API
-```
-
-**实现要点：**
-
-1. **注册时机：** 安装时或设置中手动开启（Settings → 常规 → ☑ 右键菜单）。
-2. **命令行中继：**
-   ```
-   FeClaw-Desktop.exe --right-click reference "C:\Users\小明\document.pdf"
-   ```
-   如果主进程已在运行，通过 Named Pipe 发送文件路径。
-   如果主进程未运行，先启动主进程，再中继。
-3. **行为区别：**
-   - **引用：** 构造消息 `"请分析文件：/mnt/desktop/C:/Users/小明/document.pdf"`。Agent 可通过 Desktop 中继读写该文件。
-   - **发送：** 先复制文件到 VFS `agents/{hash}/uploads/`，构造消息 `"我发了一个文件：/workspace/uploads/document.pdf"`。本地文件不变。
-
-**安全关注点：** 路径遍历检测（已在 `file_bridge.rs` 中实现）。
-
-**测试方式：**
-- 手动测试：右键文件 → 选择菜单 → 验证 Desktop 收到文件路径
-- 单元测试：`right_click.rs` 的注册表操作
-- 安全测试：尝试遍历路径（`../../etc/passwd`）
-
----
-
-### Phase 4 — 群聊功能
-
-**目标：** 用户创建群，拉多个 Agent，发一条消息所有 Agent 收到。
-
-**复杂度：** 高
-
-**前置依赖：** Phase 0（UI 框架 + Agent 列表）
-
-**新建/修改文件：**
-
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `src-tauri/src/group.rs` | **新建** | 群聊 Group/GroupMessage 结构 + 所有群聊命令 |
-| `src/chat/index.html` | **修改** | 左侧栏新增群聊 Tab |
-| `src/chat/chat.ts` | **修改** | 群聊 UI 逻辑、并行消息发送 |
-| `src/chat/chat.css` | **修改** | 群聊消息气泡（显示发送者 Agent 名称） |
-| `src-tauri/src/ws.rs` | **修改** | `chat_reply` 处理增加 `group_id` 路由 |
-| `src-tauri/src/lib.rs` | **修改** | 注册群聊命令 |
-
-**实现要点：**
-
-1. **群聊消息模型：** `GroupMessage` 包含 `group_id`、`sender`、`sender_name`、`mentions`、`reply_to`（见 §B.1.1）。
-2. **广播机制：**
-   ```rust
-   async fn send_group_message(group_id, content, mentions, attachments, state) {
-       let group = load_group(&group_id)?;
-       let recipients = if mentions.is_empty() {
-           &group.members  // 发给所有群成员
-       } else {
-           &mentions       // 只发给 @的 Agent
-       };
-
-       // 并行发送
-       let tasks: Vec<_> = recipients.iter().map(|agent_hash| {
-           let envelope = build_chat_message(content, agent_hash, &attachments);
-           let tx = state.ws_outgoing.clone();
-           tx.send(serde_json::to_string(&envelope).unwrap())
-       }).collect();
-       futures::future::join_all(tasks).await;
-
-       // 持久化本地
-       persist_group_message(&group_id, msg).await;
-   }
-   ```
-3. **消息排序：** 所有 Agent 回复通过 `chat_reply` / `chat_event` 回传，附带 `group_id`。Desktop 在收到回复时打时间戳，按时间排序推送到群聊窗口。
-4. **@提及处理：** 输入框支持 `@Agent名`，转换为 `mentions: [agent_hash]`。被 @的 Agent 在其 system prompt 中注入 "用户正在@你" 的提示。
-
-**测试方式：**
-- 手动测试：创建群 → 发送消息 → 验证所有 Agent 收到 → 验证回复按时间排列
-- 单元测试：`group.rs` 的 CRUD 命令
-- 集成测试：模拟 3 个 Agent 回复，验证消息排序
-
----
-
-### Phase 5 — 朋友圈（群内动态墙）
-
-**目标：** 群内 Agent 的产出自动展示为朋友圈动态。
-
-**复杂度：** 中
-
-**前置依赖：** Phase 4（群聊存在）
-
-**新建/修改文件：**
-
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `src-tauri/src/moments.rs` | **新建** | Moment 结构 + 朋友圈命令 |
-| `src/chat/index.html` | **修改** | 左侧栏朋友圈 Tab 内容 |
-| `src/chat/chat.ts` | **修改** | 朋友圈 UI 展示 |
-| `src/chat/chat.css` | **修改** | 朋友圈卡片样式 |
-| `src-tauri/src/ws.rs` | **修改** | 接收 `moments_event` 消息 |
-| `src-tauri/src/ws_types.rs` | **扩展** | 新增 `MomentsEvent` 反序列化 |
-| `/home/lch/Projects/FeClaw/routers/desktop_ws.py` | **修改** | 新增 `moments_event` 消息发送 |
-
-**实现要点：**
-
-1. **事件生成：** Agent 完成以下操作时，FeClaw 引擎发送 `moments_event`：
-   - `file_write` 完成 → `FileChanged` 事件
-   - Agent 执行完工具调用 → `TaskCompleted` 事件
-   - Agent 输出分析/报告 → `AnalysisReport` 事件（通过启发式检测消息长度和结构）
-
-2. **FeClaw 引擎端改动：**
-   ```python
-   # services/agent_executor.py 或 agent_tools_service.py
-   async def _emit_moments_event(agent_hash, kind, content, data=None):
-       if relay.is_desktop_connected():
-           await send_to_desktop({
-               "type": "moments_event",
-               "agent_hash": agent_hash,
-               "kind": kind,
-               "content": content,
-               "data": data or {},
-               "timestamp": datetime.utcnow().isoformat(),
-           })
-   ```
-
-3. **Desktop 端匹配 Agent 到群：** moments_module 加载所有 Group，反向查找 `members.contains(&agent_hash)`，只为该群的朋友圈写入。
-
-4. **安全：** 朋友圈只展示，不触发任何文件操作。Agent 发朋友圈不带有操作权限。
-
-**测试方式：**
-- 手动测试：在群聊中交互，切换到朋友圈 Tab 验证动态出现
-- 单元测试：`moments.rs` 的读取/写入
+- `services/group_service.py` 中 `post_moment(group_id, agent_hash, kind, title, content, data)` 方法
+- `services/agent_tools_service.py` 增加 `_check_post_moment()` 钩子
+  - Agent 完成写文件 → 自动发一条 `file_changed` 类型动态
+  - Agent 完成分析/批改 → 自动发 `analysis` 类型动态
+  - 涉及隐私操作 → 不自动发（默认禁止）
+- WS 推送：`/ws/desktop/groups/{group_id}` 接收 `moments_event` 类型
+
+**Desktop 侧改动：**
+- `src-tauri/src/moments.rs` — 3 个命令（均调 Engine API）
+  - `get_group_moments(group_id)` → GET /api/groups/{id}/moments
+  - `post_moment(group_id, title, content)` → POST 手动发布
+  - `set_moments_enabled(group_id, enabled)` → PATCH settings
+- 本地缓存：`~/.feclaw/groups/{group_id}_moments.json`（离线浏览）
+- 前端：聊天窗口顶部 Tab「💬 聊天」/「📱 群广场」切换
+
+**工时：** 引擎 3–4 天 + Desktop 2 天
 
 ---
 
 ### Phase 6 — 小程序入口
 
-**目标：** 展示 Agent 自部署的 App（单词本、画板等）。
+**目标：** Agent 三 dot → 「🏪 小程序」→ iframe 嵌入引擎的 `apps_service.py` 已注册的 App。
 
-**复杂度：** 低
+**关键交付：**
+- `src-tauri/src/mini_program.rs`：`MiniProgramEntry` 结构 + 2 个命令
+  - `list_mini_programs(agent_hash)` / `open_mini_program(agent_hash, app_id)`
+- 前端：Tauri WebviewWindow 加载引擎的小程序 URL
+  - 云模式：`https://{hash}.feclaw.lizidaren.cn/apps/{app_id}/`
+  - 本地模式：`http://127.0.0.1:{port}/apps/{app_id}/`
+- 引擎端：`GET /api/desktop/agents/{hash}/apps`（列 App 元信息）
 
-**前置依赖：** Phase 2（三 dot 菜单存在）
+**引擎侧：** **零改动**——完全复用 `apps_service.py`
 
-**新建/修改文件：**
 
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `src-tauri/src/mini_program.rs` | **新建** | MiniProgram 结构 + 命令 |
-| `src/mini-program/index.html` | **新建** | 小程序 iframe 窗口 |
-| `src/mini-program/mini-program.ts` | **新建** | 小程序列表 + 启动逻辑 |
-| `src/chat/chat.ts` | **修改** | 三 dot 菜单 → 小程序入口 |
-
-**实现要点：**
-
-1. **小程序列表从引擎获取：** `GET /api/desktop/agents/{hash}/apps`。
-2. **启动小程序：** `open_mini_program` 命令创建一个新的 WebviewWindow，URL 为引擎的小程序地址：
-   ```
-   https://{agent_hash}.feclaw.lizidaren.cn/apps/{app_id}/
-   ```
-   本地模式则为：
-   ```
-   http://127.0.0.1:{port}/apps/{app_id}/
-   ```
-3. **无引擎改动：** 完全复用 `apps_service.py` 已有功能。
-
-**测试方式：**
-- 手动测试：在引擎中注册一个 App → Desktop 打开小程序列表 → 点击启动
+**工时：** 2–3 天
 
 ---
 
-### Phase 7 — 搜一搜
+### Phase 7 — ⌘K 搜一搜
 
-**目标：** ⌘K 全局语义搜索，跨 Agent 聊天记录、文件、朋友圈。
+**目标：** 全平台向量语义搜索：Agent 内聊天记录 + VFS 文件 + 群广场动态 +（可选）本地文件全盘。
 
-**复杂度：** 中
+**关键交付：**
+- `src-tauri/src/search.rs`：`SearchResult` / `SearchSourceKind` + 聚合命令
+- `src-tauri/src/ws.rs`：发送 `search_request` / 接收 `search_response`
+- 引擎侧：`vector_search_service.py` 扩展支持跨 Agent 搜索
+- 前端：`#tab-search` Tab，⌘K / Ctrl+K 聚焦搜索框，结果可点击跳转到对应 Agent 聊天 / 群聊 / 文件管理器
 
-**前置依赖：** Phase 0（UI 框架）
 
-**新建/修改文件：**
-
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `src-tauri/src/search.rs` | **新建** | Search 命令（聚合多源结果） |
-| `src/chat/index.html` | **修改** | `#tab-search` 内 ⌘K 搜索框 |
-| `src/chat/chat.ts` | **修改** | 搜索 UI 交互 |
-| `src-tauri/src/ws.rs` | **修改** | 发送 `search_request`，接收 `search_response` |
-| `src-tauri/src/ws_types.rs` | **扩展** | 新增 SearchRequest / SearchResponse 类型 |
-| `/home/lch/Projects/FeClaw/routers/desktop_ws.py` | **修改** | 新增 `search_request` 处理 |
-
-**实现要点：**
-
-1. **搜索策略：**
-   - Agent 搜索：通过 WS 发送 `search_request` → Engine 调用 `VectorSearchService.search()`。
-   - 本地搜索：Desktop 自己遍历 `chat_history.json`、`groups/*.json`、文件名。
-   - 全盘搜索（Phase 10）：从本地向量库检索。
-
-2. **⌘K 快捷键：**
-   ```typescript
-   document.addEventListener('keydown', (e) => {
-     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-       e.preventDefault();
-       switchToSearchTab();
-       $('#search-input').focus();
-     }
-   });
-   ```
-
-3. **搜索结果可跳转：** 点击结果 → 如果 `source_kind == "file"` → 打开文件管理器并导航到目标文件；如果是 `chat_message` → 跳转到聊天窗口并滚动到对应消息。
-
-**测试方式：**
-- 手动测试：⌘K → 输入查询 → 验证结果
-- 模拟测试：mock `search_response` JSON 验证 UI 渲染
+**工时：** 4–5 天
 
 ---
 
-### Phase 8 — 扫码拍照上传
+### Phase 8 — 扫码拍照上传（COS 预签名 URL 方案）
 
-**目标：** 生成二维码 → 手机扫码 → 拍照/选择照片 → 上传到 Desktop。
+**目标：** 文件传输助手——聊天窗口底部 `📱` 按钮 → 二维码 → 手机扫码 → 拍照/选图 → 上传到 Desktop → 嵌入聊天输入框。
 
-**复杂度：** 中
-
-**前置依赖：** Phase 0（UI 框架）
-
-**新建/修改文件：**
-
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `src-tauri/src/qr_upload.rs` | **新建** | QR 生成 + 临时 HTTP server |
-| `src/qr-upload/index.html` | **新建** | 二维码弹窗 |
-| `src/chat/chat.ts` | **修改** | 📱 按钮 → 打开二维码弹窗 |
-| `src-tauri/Cargo.toml` | **修改** | 添加 `qrcode`, `image`, `axum`/`warp` 依赖 |
-| `src-tauri/src/lib.rs` | **修改** | 注册上传命令 |
-
-**依赖：**
-```toml
-qrcode = "0.14"
-image = "0.25"
-axum = "0.7"                # HTTP server
-tower = "0.4"
-local-ip-address = "0.6"    # 获取本机局域网 IP
+**技术方案（Vision v3.1 指定）：**
+```
+用户点 📱
+  → Desktop 请求 Engine POST /api/desktop/upload_session → 返回 COS 预签名 PUT URL + 临时 token
+  → Desktop 生成二维码（含 URL + token）
+  → 手机扫码 → 打开上传网页 → 拍照/选相册照片
+  → POST 到 COS 预签名 URL（直传，不走公网服务器带宽）
+  → Engine 收到 COS 通知（或 Webhook） → WS 通知 Desktop
+  → Desktop 通过预签名 URL 下载临时文件 → 嵌入聊天输入框作为图片卡片
+  → Engine 10min 后清理临时文件
 ```
 
-**实现要点：**
+**无需本地 HTTP server。** 即使在本地模式下，也可通过 FeClaw 引擎的 COS 配置签发预签名 URL。极端无 COS 场景回退本地 HTTP。
 
-1. **临时 HTTP Server：**
-   - 绑定 `0.0.0.0:{port}`，使手机可访问
-   - 提供两个路由：`GET /upload/:session_id`（拍照页面）、`POST /upload/:session_id`（接收文件）
-   - 上传完成后 `shutdown`。
+**关键交付：**
+- `src-tauri/src/qr_upload.rs`：QR 生成 + 上传会话管理
+- `src-tauri/src/qr_upload/index.html`：二维码弹窗
+- 引擎侧：`POST /api/desktop/upload_session` → 返回 COS presigned PUT URL + 临时 token
+- 引擎侧：`POST /api/desktop/upload_cleanup` → 10min 后清理
 
-2. **安全：**
-   - Session ID 是一次性随机 token（防止未授权上传）
-   - Session 5 分钟过期自毁
-   - 仅接受 `image/*` MIME 类型
-   - 最大 50MB 文件限制
+**依赖：** `qrcode = "0.14"` / `image = "0.25"`
 
-**测试方式：**
-- 手动测试：Desktop 生成 QR → 手机扫码 → 拍照上传 → Desktop 收到文件
+**工时：** 3–4 天
 
 ---
 
 ### Phase 9 — 本地 MCP 接入
 
-**目标：** Desktop 启动本地 MCP Server → Agent 可通过 Desktop 中继调用 MCP 工具。
+**目标：** Desktop 启动本地 MCP Server（stdio JSON-RPC）→ 注册其 tools 到 Agent → Agent 可通过 Desktop 中继调用本地工具（sqlite_query / filesystem 等）。
 
-**复杂度：** 高
+**关键交付：**
+- `src-tauri/src/mcp.rs`：`McpServerConfig` / `McpManager`（stdin/stdout JSON-RPC 通信）
+- 新增命令：`list_mcp_servers` / `start_mcp_server` / `stop_mcp_server`
+- 设置页加「MCP」Tab：CRUD Server 配置
+- 引擎侧：`services/desktop_relay.py::request_mcp_tool()` + `routers/desktop_ws.py` 新增 `mcp_tool_request/response` 处理
+- 安全：每次 MCP 工具调用弹窗确认（复用 `consent.rs::request_operation`，按 MCP tool name 映射风险等级）
 
-**前置依赖：** Phase 0（Desktop 基本运行）
+**引擎侧改动：**
+- `services/agent_tools_service.py` 增加 `mcp_*` 工具前缀
+- `routers/desktop_ws.py` 新增消息类型分发
 
-**新建/修改文件：**
 
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `src-tauri/src/mcp.rs` | **新建** | MCP Client 管理、JSON-RPC 通信 |
-| `src/settings/mcp-config.html` | **新建** | MCP Server 配置页面 |
-| `src-tauri/src/ws.rs` | **修改** | 接收 `mcp_tool_request`，发送 `mcp_tool_response` |
-| `src-tauri/src/ws_types.rs` | **扩展** | 新增 MCP 消息类型 |
-| `/home/lch/Projects/FeClaw/services/desktop_relay.py` | **修改** | 新增 `request_mcp_tool()` 方法 |
-| `/home/lch/Projects/FeClaw/routers/desktop_ws.py` | **修改** | 新增 `mcp_tool_response` 处理 |
-| `src-tauri/Cargo.toml` | **修改** | 添加 `serde_json`（已有） |
-
-**实现要点：**
-
-1. **MCP 进程管理：** 类似 `engine.rs` 的子进程管理，通过 stdin/stdout JSON-RPC 2.0 协议通信。
-2. **工具发现：** 启动时发送 `tools/list` 请求，缓存工具列表。
-3. **工具中继：**
-   ```
-   Agent 调用 MCP 工具
-     → Engine: relay.request_mcp_tool(tool_name, args)
-     → WS: mcp_tool_request → Desktop
-     → Rust McpManager: 转发到 MCP Server 子进程
-     → MCP Server 执行 → 返回结果
-     → WS: mcp_tool_response → Engine
-     → Engine 将结果返回给 Agent
-   ```
-4. **安全：** Desktop 弹窗确认每次 MCP 工具调用（与 `command_exec_request` 相同的同意机制）。
-
-**测试方式：**
-- 单元测试：McpManager 的 JSON-RPC 解析
-- 集成测试：启动 filesystem MCP Server → Agent 请求读取文件 → 验证结果
+**工时：** 8–10 天
 
 ---
 
 ### Phase 10 — 本地文件全盘索引
 
-**目标：** 后台低优先级扫描用户目录，向量化文档，支持全盘语义搜索。
+**目标：** 后台低优先级扫描用户指定目录 → 解析 PDF/DOCX/TXT/MD/代码 → 向量化 → 写入本地向量库 → 让 ⌘K 能搜到全盘内容。
 
-**复杂度：** 高
+**关键交付：**
+- `src-tauri/src/file_index.rs` + 子模块（walker / parser / embedder / store）
+- 托盘菜单加「索引: 1234 文件」状态显示
+- 设置页加「索引」Tab：选择要索引的目录、查看索引状态、删除索引
+- 嵌入模型：优先调用 FeClaw 引擎 `/api/embed`（若存在），否则 ONNX 本地跑 MiniLM
 
-**前置依赖：** Phase 7（搜索 UI）
+**依赖：** `walkdir = "2"` / `lopdf = "0.32"` / `docx-rs = "0.4"` / `usearch = "2"` 或 `lancedb` / `ort = "2"`
 
-**新建文件：**
 
-| 文件 | 操作 | 说明 |
+**工时：** 10–14 天
+
+---
+
+### Phase 11 — Agent IM 模式后台支持
+
+**目标：** 支持 IM 类型 Agent 的后台能力（Agent 类型已在 Phase 0 创建时选定）。
+
+**前置说明：** Agent 类型（经典/IM）在**创建时选定**（Phase 0 加号菜单）。**IM 模式不限制任何工具**，只改变行为风格。
+
+**IM 模式定义：**
+| 维度 | IM 模式行为 |
+|------|------------|
+| 回复长度 | 短句（1-3 句），不输出长段落 |
+| 长任务 | 启动 SubAgent 后台执行，前台立即回复"正在处理…" |
+| 工具集 | **全部可用，无限制** |
+| 打断能力 | 用户可随时发新消息中断当前 SubAgent 任务 |
+| Typing 指示器 | SubAgent 运行时显示"正在处理…" |
+
+**引擎侧改动：**
+- `models/database.py::AgentProfile` 新增字段：`agent_type: str = "classic"`（"classic" | "im"）
+- `services/chat_service.py` 根据 `agent_type` 选择不同 system prompt
+  - classic: 详尽回复，可长可短
+  - im: 短句优先，用 SubAgent 跑长任务，可打断
+- `services/agent_init_service.py` 读 `agent_type` 字段注入 prompt
+
+**Desktop 侧改动：**
+- 消息气泡加「typing…」指示器
+- IM 模式的 Agent 列表显示「在线」「处理中…」状态
+- 群聊约束：群内无视 Agent 类型，统一按群聊 session behavior
+
+**工时：** 引擎 2 天 + Desktop 1 天
+
+---
+
+### Phase 12 — 多模态操控 PC（远期探索）
+
+**目标：** Agent 可请求 Desktop 截图 → 多模态 LLM 分析 → 请求鼠标/键盘操作。
+
+**不实施，仅预留架构：**
+- 新增 WS 消息类型：`screen_capture_request/response` / `input_action_request/response`
+- 三级权限：旁观（仅截图）/ 指点（截图 + 标位置）/ 操控（截图 + 输入）
+- 安全：必须用户全程允许（任何操作前弹窗）
+
+
+**工时：** 不计入
+
+---
+
+## 4. 引擎侧改动清单（汇总）
+
+按 V3 阶段汇总 FeClaw 引擎侧需配合的改动：
+
+| 阶段 | 引擎侧改动 | 文件 |
+|:----:|-----------|------|
+| 0 | 新增 `GET /api/desktop/agents` | `main.py` |
+| 2 | 新增 `GET /api/desktop/agents/{hash}/vfs`、`/apps`、`/config` | `main.py` + `virtual_filesystem.py` + `apps_service.py` |
+| 4 | **大改：** 新增 Group/GroupMember/GroupMessage 模型、`routers/group.py`、`services/group_service.py`、WS `/ws/desktop/groups/{id}` | 新建 3+ 文件 |
+| 5 | 新增 GroupMoments 模型 + `group_service.post_moment()` + agent_tools 钩子 + WS 推送 `moments_event` | `group_service.py` + `agent_tools_service.py` |
+| 6 | 新增 `GET /api/desktop/agents/{hash}/apps` | `main.py` + `apps_service.py` |
+| 7 | 新增 `search_request` / `search_response` 处理 + `vector_search_service.py` 扩展 | `routers/desktop_ws.py` + `vector_search_service.py` |
+| 8 | 新增 `POST /api/desktop/upload_session`（COS 预签名） | `main.py` + COS SDK |
+| 9 | 新增 `mcp_tool_request/response` 处理 + `request_mcp_tool()` | `routers/desktop_ws.py` + `desktop_relay.py` + `agent_tools_service.py` |
+| 10 | 暴露 `POST /api/embed`（给 Desktop 调用） | `embedding_service.py` + `main.py` |
+| 11 | `AgentProfile.agent_type` 字段 + `ChatService` 读字段选 prompt | `models/database.py` + `chat_service.py` |
+
+**关键点：** Phase 4–5 是引擎侧最大的改动（群上云 + 群广场），其他阶段 Engine 改动相对独立。
+
+---
+
+## 5. 鉴权链路（OAuth + JWT + Platform）
+
+**完整链路（云模式）：**
+
+```
+┌──────────────────┐                                    ┌──────────────────────┐
+│ FeClaw-Desktop   │                                    │ FirstEntrancePlatform│
+│ (Tauri)          │                                    │ (OAuth/OIDC Provider)│
+└────────┬─────────┘                                    └──────────┬───────────┘
+         │                                                        │
+         │  ① 用户输入 Platform URL（设置 → 云端 Tab）              │
+         │  ② 探测 GET /.well-known/feclaw-desktop                │
+         │     ← { auth: { type: "platform",                      │
+         │               endpoint: "https://platform/.../login" }}│
+         │                                                        │
+         │  ③ 浏览器打开 Platform OAuth flow                       │
+         │     GET /authorize?response_type=code&client_id=...    │
+         │                                                        │
+         │  ④ 用户在 Platform 登录                                 │
+         │     ← 302 redirect with ?code=xxx                      │
+         │                                                        │
+         │  ⑤ POST /token { grant_type: authorization_code,        │
+         │                    code, client_id, client_secret }    │
+         │     ← { access_token: JWT, expires_in: 3600 }          │
+         │                                                        │
+         │  ⑥ 保存 JWT 到 ~/.feclaw/cloud-token                    │
+         │                                                        │
+         │  ⑦ wss://feclaw.lizidaren.cn/ws/desktop/{hash}         │
+         │     Header: Authorization: Bearer <JWT>                │
+         ▼                                                        ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ FeClaw Engine                                                            │
+│                                                                         │
+│  ⑧ decode_jwt_token(token) → 验签 (RS256 via JWKS) → 取 user_id          │
+│  ⑨ _user_owns_agent(user_id, agent_hash) → 校验 DB                        │
+│  ⑩ 通过 → accept WS → 后续 chat_message/file_*/command_exec 正常处理     │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**关键文件：**
+- Platform：`/home/lch/Projects/FirstEntrancePlatform/`
+  - `routers/oauth.py` — `/authorize` `/token` `/userinfo`
+  - `routers/wellknown.py` — `/.well-known/openid-configuration`、`/.well-known/jwks.json`
+  - `services/jwt_service.py` — RS256 签发
+  - `services/jwk_service.py` — JWKS 暴露
+- Engine：`/home/lch/Projects/FeClaw/`
+  - `routers/well_known.py` — `/.well-known/feclaw-desktop`（auth.endpoint 指 Platform）
+  - `routers/desktop_ws.py` — `WS /ws/desktop/{hash}` + `decode_jwt_token` 验签
+  - `services/agent_jwt_service.py` — JWT 工具
+  - `utils/auth.py::decode_jwt_token` — 引擎本地 JWT 验签（可独立，不一定调 Platform JWKS）
+- Desktop：`/home/lch/Projects/FeClaw-Desktop/`
+  - `settings.rs::cloud_login` — 走 Platform OAuth flow 拿 JWT
+  - `engine.rs::start_cloud` — 用 JWT 连 Engine WS
+  - `config.rs::ws_url()` — 根据 `Mode::Cloud` 拼 `wss://...` URL
+
+**设计决策：** Engine 端**不直接连 Platform JWKS**——Desktop 拿 JWT 时已验签，Engine 只验签本地签发的内部 JWT。这样 Engine 与 Platform 完全解耦，Platform 可以独立升级签名算法。
+
+---
+
+## 6. V2 → V3 衔接策略
+
+**V2 收尾（必须先完成）：**
+
+1. 阶段 0：补 `FileWriteResponse` 类型 + ws.rs 改造 + consent.rs `request_operation` + engine.rs `auth_failure` 监听
+2. 阶段 1：设置界面 camelCase 验证（`loginUrl` 等参数全部走 TS invoke 检查）
+3. 阶段 2：ws.rs handler 接入 file_bridge + 引擎 `/mnt/desktop/` 映射 + JWT header 鉴权
+4. 阶段 3：`auto-launch` 接入 + `--minimized` 参数
+5. 阶段 4：`.well-known/feclaw-desktop` 已就绪，补 `cloud_login` / `cloud_disconnect` 命令 + JWT 头鉴权
+
+**进入 V3 的准入：**
+- [ ] V2 五阶段全部 ✅
+- [ ] 云模式 + 本地模式都能跑通 chat_reply + file_read/write + command_exec
+- [ ] JWT 头鉴权 + 4xxx close code + `ShowCloudLogin` UI 引导全部生效
+- [ ] `chats/{agent_hash}.json` 数据迁移脚本可执行（V3 Phase 0 用）
+
+**V3 阶段间依赖：**
+
+```
+Phase 0 (三栏 + 私聊)
+    │
+    ├── Phase 1 (截图 + 模板) ── 可与 Phase 0 并行
+    │
+    ├── Phase 2 (VFS 文件管理器) ── 依赖 Phase 0
+    │
+    └── Phase 4 (群聊) ── 依赖 Phase 0
+            │
+            └── Phase 5 (群广场) ── 依赖 Phase 4
+                    │
+                    ├── Phase 6 (小程序) ── 独立
+                    │
+                    ├── Phase 7 (搜索) ── 可与 Phase 5 并行
+                    │
+                    ├── Phase 8 (扫码上传) ── 独立
+                    │
+                    └── Phase 9 (MCP) ── 依赖 Phase 0
+
+Phase 10 (全盘索引) ── 依赖 Phase 7
+Phase 11 (IM 模式) ── 独立
+```
+
+**并行建议：**
+- Phase 0 完成前：团队可先并行做 Phase 1（截图/模板）和 Phase 11（IM 模式）——这两块对前端依赖较弱
+- Phase 4 完成后：Phase 5、6、7、8 可并行推进（不同模块不同 owner）
+
+---
+
+## 7. 风险与缓解
+
+| 风险 | 等级 | 缓解 |
+|------|:----:|------|
+| **chat.rs 重写冲击 V2 改动** | 🔴 高 | V3 Phase 0 启动前必须 V2 全部合并；chat.rs 的 `agent_hash` 路由要一次到位 |
+| **群聊 chat_message 协议扩展破坏老 Engine** | 🟡 中 | `group_id` 字段为可选（`#[serde(default)]`），老 Engine 不解析也兼容 |
+| **群广场事件风暴** — Agent 频繁操作产生大量 moments | 🟡 中 | Desktop 端按 group_id 去重 + 按时间窗口聚合（默认 5 分钟）；用户可关闭群广场 |
+| **扫码上传 COS 预签名 URL 泄露** | 🟡 中 | URL 含 5 分钟过期时间 + 一次性 token；token 用完即焚 |
+| **MCP 工具注入** | 🔴 高 | 每个 MCP 工具调用弹窗确认（复用 ConsentManager）；默认禁用所有 MCP 工具；用户显式启用 |
+| **本地文件全盘索引泄露** | 🔴 高 | 仅索引用户显式选定的目录；数据本地；随时可删除；默认不启用 |
+| **跨阶段数据迁移** | 🟡 中 | `chat_history.json → chats/{hash}.json` 提供幂等迁移；失败可回滚 |
+| **OAuth refresh token 处理** | 🟡 中 | Platform JWT 1 小时过期，Desktop 检测 `exp - now < 5min` 自动用 refresh_token 续签 |
+| **Tauri 2 + 多 WebviewWindow 性能** | 🟢 低 | 单进程共享 Rust 状态；窗口间通信走 Tauri event 总线；实测控制 5 个以内窗口无明显卡顿 |
+| **Vision v3.1 文档与实现偏差** | 🟢 低 | future-plan.md 为唯一路线图；所有 PR description 标注 vision-0620 对齐
+
+---
+
+## 8. 决策点（实施前需确认）
+
+以下决策点影响多个 Phase 的实现方式，建议在启动 Phase 0 前逐项决策。
+
+### D1 群消息路由：并行 vs 串行（已决策 ✅）
+
+| 方案 | 优点 | 缺点 |
 |------|------|------|
-| `src-tauri/src/file_index.rs` | **新建** | 文件扫描、解析、索引核心逻辑 |
-| `src-tauri/src/file_index/` | **新建目录** | 子模块 |
-| `src-tauri/src/file_index/walker.rs` | **新建** | 目录遍历 |
-| `src-tauri/src/file_index/parser.rs` | **新建** | 文件解析（PDF/DOCX/TXT/MD/代码） |
-| `src-tauri/src/file_index/embedder.rs` | **新建** | 向量化（调用 FeClaw 引擎 embed 端点或本地 ONNX） |
-| `src-tauri/src/file_index/store.rs` | **新建** | 本地向量库（usearch 或 lance） |
-| `src-tauri/Cargo.toml` | **修改** | 添加 `walkdir`, `lopdf`, `docx-rs`, `usearch`/`lancedb` |
+| **并行** | 速度快，群聊「即时感」强 | 后回答的 Agent 看不到前面 Agent 的回答 |
+| **串行 🏆** | 上下文连贯，每个 Agent 能看到前面 Agent 的输出 | 慢（N 个 Agent = N 倍等待时间） |
 
-**实现要点：**
+**决策：先串行。** 稳定后考虑引入"主持人"Agent（见 D8）进行更复杂的群讨论编排。
 
-1. **扫描策略：** 低优先级（`tokio::task::spawn_blocking` + `thread::sleep` 节流），每 5 秒索引一个文件。
-2. **支持格式：** PDF, DOCX, TXT, MD, .rs, .py, .js, .ts, .go, .java, .cpp, .html, .css。
-3. **向量化方案：** 通过 HTTP 调用 FeClaw 引擎的 `/api/embed` 端点（如果有），或使用 ONNX 运行 MiniLM 等轻量模型。
-4. **增量更新：** 记录文件哈希，只重新索引变更的文件。
+### D2 LLM 审计防线（已决策 ✅）
 
-**测试方式：**
-- 手动测试：索引一个小目录，验证搜索返回正确结果
+**先不实现。** L0-L3 权限模式已提供足够安全基线。LLM 审计作为 P2 功能后续加入。
 
----
+**未来实现方案（已定）：**
+- **模型：** DeepSeek V4 Flash（快速，性价比高）
+- **审计方式：** 分析 subprocess 命令的目的、潜在风险，给出综合评分
+- **审计模型权限：** 受限制的只读工具调用（可读文件以确认 Python 代码的实际内容）
+- **高危操作：** 标记为可疑/高危 → 强制弹窗确认
+  - 与免打扰联动：**有免打扰 → 窗口内确认卡片；无免打扰 → 置顶系统弹窗**
+- **审计模型掉线：** 明示用户"审计模型离线"，建议切换至受限权限模式手动审批
+- **群聊统一权限：** 群设置内统一配置权限级别，群内 Agent 统一执行。审批弹窗同上（免打扰联动）
 
-### Phase 11 — 多模态操控 PC（远期探索）
+### D3 平衡模式版本控制（已决策 ✅）
 
-**目标：** Agent 可请求 Desktop 截图 → 分析 → 请求鼠标/键盘操作。
-
-**复杂度：** 极高
-
-**前置依赖：** Phase 9（MCP 接入）
-
-**说明：** 这是远期探索功能，不在 V3 核心范围内。仅在 `vision.md` 中提及，实施计划不详述，但预留架构扩展点：
-- `screen_capture_request` / `screen_capture_response` WS 消息类型
-- `input_action_request` / `input_action_response` WS 消息类型
-- 三级安全权限（旁观/指点/操控）
-
----
-
-### 文件创建/修改总览
-
-| 阶段 | Rust 新建 | Rust 修改 | HTML 新建 | HTML 修改 | Python 修改 |
-|:----:|-----------|-----------|-----------|-----------|-------------|
-| 0 | 0 | 3 | 0 | 3 | 0 |
-| 1 | 0 | 2 | 0 | 2 | 0 |
-| 2 | 0 | 2 | 3 | 2 | 1 |
-| 3 | 1 | 2 | 0 | 1 | 0 |
-| 4 | 1 | 3 | 0 | 2 | 0 |
-| 5 | 1 | 2 | 0 | 2 | 2 |
-| 6 | 1 | 1 | 2 | 0 | 0 |
-| 7 | 1 | 2 | 0 | 1 | 1 |
-| 8 | 1 | 1 | 1 | 1 | 0 |
-| 9 | 1 | 2 | 1 | 0 | 2 |
-| 10 | 4 | 0 | 0 | 0 | 0 |
-| 11 | — | — | — | — | — |
-
-**Rust 新增模块：** `group.rs`, `moments.rs`, `mini_program.rs`, `search.rs`, `right_click.rs`, `qr_upload.rs`, `mcp.rs`, `file_index.rs` + 3 子模块。
-
-**Rust 修改模块：** `chat.rs`, `ws.rs`, `ws_types.rs`, `lib.rs`, `config.rs`, `main.rs`, `tray.rs`, `file_ops.rs`, `Cargo.toml`。
-
-**Python 修改模块：** `desktop_ws.py`, `desktop_relay.py`, `main.py`, `agent_executor.py`。
-
----
-
-## I. 风险与缓解
-
-### I.1 安全风险
-
-| 风险 | 等级 | 缓解措施 |
-|------|:----:|---------|
-| **MCP 工具注入** — Agent 可能通过 MCP 中继调用危险工具 | 🔴 高 | 每个 MCP 工具调用弹窗确认（复用 ConsentManager）；可配置工具白名单；默认禁用所有 MCP 工具 |
-| **右键菜单路径遍历** — 恶意文件名可能绕过路径检查 | 🔴 高 | 复用 `file_bridge::resolve_desktop_path` 的路径遍历防护；只能传绝对路径或 `~/Desktop/` 下的相对路径 |
-| **剪贴板数据泄露** — 粘贴敏感图片到 Agent | 🟡 中 | 粘贴前显示预览缩略图，用户确认后发送；不在 Desktop 本地缓存明文图片超过 1 小时 |
-| **群聊消息跨 Agent 泄露** — 非 @的 Agent 也应看到上下文 | 🟡 中 | Desktop 群聊设计为「所有成员都能看到所有消息」；如需要私聊，直接 1:1 chat |
-| **临时 HTTP server 暴露** — 扫码上传的 HTTP server 无认证 | 🟡 中 | 一次性 session token；5 分钟过期；只接受图片类型；绑定本机（`0.0.0.0` 仅限局域网共享场景）；可配置仅 127.0.0.1 + QR 用 ngrok |
-| **全盘索引隐私** — 索引用户所有文件 | 🔴 高 | 仅索引用户显式指定的目录；本地索引，数据不出 Desktop；可随时删除索引数据；默认不启用 |
-
-### I.2 Windows 特定边界情况
-
-| 情况 | 影响 | 处理 |
-|------|------|------|
-| **路径大小写** — Windows NTFS 大小写不敏感 | `resolve_desktop_path` 比对 | 使用 `.to_lowercase()` 比对 |
-| **驱动器字母不存在** — `D:\data` 但只有 C 盘 | `file_bridge` 报错 | 返回明确错误信息，不静默失败 |
-| **UNC 路径** — `\\server\share\file` | 不支持 | 明确拒绝并记录日志（已有 N-16 注释） |
-| **注册表权限** — 右键菜单注册需要 HKCU 写入 | 安装时可能被 UAC 阻止 | 提供设置中的「注册/注销」按钮；注册失败时提示用户手动操作 |
-| **防火墙** — 扫码上传 HTTP server 可能被 Windows 防火墙拦截 | 手机无法连接 | QR 弹窗中显示提示：「请确保 Windows 防火墙允许此连接」 |
-
-### I.3 与 V2 开发的并行冲突
-
-当前 V2 正在开发中（`v2-plan.md` 中的 Phase 0-4）。V3 开发需要注意以下冲突：
-
-| V2 文件 | V3 改动 | 冲突风险 |
-|---------|---------|:--------:|
-| `chat.rs` | **重写** — 从单 Agent 改为多 Agent 模式 | 🔴 高 |
-| `ws.rs` | **扩展** — 新增消息类型处理 | 🟡 中 |
-| `ws_types.rs` | **扩展** — 新增 V3 消息类型 | 🟡 中 |
-| `lib.rs` | **扩展** — 注册新命令 | 🟡 中 |
-| `config.rs` | **扩展** — 新增字段 | 🟢 低 |
-| `tray.rs` | **扩展** — 新增菜单项 | 🟢 低 |
-| `file_bridge.rs` | 不变 | 🟢 无 |
-| `engine.rs` | 不变 | 🟢 无 |
-| `consent.rs` | 不变 | 🟢 无 |
-
-**建议合并策略：**
-1. **先完成 V2 Phase 0-4**（依赖 + 设置 + 文件中继 + 自启 + 云模式），确保基础稳定。
-2. **V3 Phase 0 在 V2 稳定后开始**，以 `chat.rs` 的大重构为核心。
-3. **V3 新增模块**（`group.rs`, `moments.rs` 等）可在 V2 开发期间并行设计，因为它们与 V2 代码无交集。
-
-### I.4 性能风险
-
-| 风险 | 缓解 |
+| 方案 | 说明 |
 |------|------|
-| **群聊并发 WS 连接数** — 每个 Agent 一个 WS，群越大连接越多 | 单 WS 连接 + `agent_hash` 路由（Desktop 已有设计）；不需要多连接 |
-| **`chat_history.json` 文件过大** — 长期使用后可能达到数 MB | 按 agent 分文件；每次读取限制最近 500 条消息；长期考虑 SQLite 迁移 |
-| **全盘索引 CPU 占用** — 扫描大目录时影响系统性能 | 低优先级线程 + 节流（每 5 秒一个文件）；文件系统变更监听做增量更新 |
-| **前端内存** — 多个聊天窗口同时展示大量消息 | 虚拟滚动（`content-visibility: auto`）；分页加载历史消息 |
+| **参考 Claude Code CLI 方式 🏆** | 按操作记录变更（如"文件 A 第 10 行替换为 B"），每个变更独立可逆。用户编辑其他位置不影响回滚 |
+| git (libgit2) | 需要每个目录 init，.git 可见，回滚粒度粗 |
+| 自定义快照 | 需要自己写 diff 引擎 |
 
-### I.5 架构风险
+**决策：参考 Claude Code CLI 的变更追踪方式。** 每次文件修改记录 `{file, old_snippet, new_snippet, timestamp, agent_hash}`，回滚时只 revert 具体片段。作为 L2 平衡模式的进阶特性，Phase 2 后实施。
 
-| 风险 | 缓解 |
-|------|------|
-| **Server 端群聊概念缺失** — Desktop 独自聚合，Server 不理解群聊上下文 | 每个 Agent 的 system prompt 中注入群名 + 成员列表，Agent 可以感知群聊上下文 |
-| **朋友圈事件生成不可靠** — 无法准确检测所有「Agent 产出」 | 提供用户手动发布入口；Agent 可通过 remark 命令 `![moments]消息内容` 主动发布 |
-| **小程序嵌入 iframe 跨域** — Tauri WebView 加载远程 URL | 使用 `tauri://localhost` scheme；先确保引擎配置 CORS 正确 |
-| **二维码上传 HTTP 端口冲突** — 默认端口已被占用 | 自动端口探测（复用 `find_free_port`） |
+### D4 上下文隔离策略（已决策 ✅）
+
+**决策：群聊作为独立消息渠道，与渠道模型一致。**
+
+群聊 = 一个独立的 `MessageChannel`，与 Web / WeChat / IM 私聊同级。每个渠道有独立的 Session Memory，**不默认共享上下文**。
+
+```
+Agent A（唯一身份）
+  ├── Session Memory (web)
+  ├── Session Memory (wechat)
+  ├── Session Memory (im)
+  └── Session Memory (im_group:xxx)
+         ↑ 各自独立，不默认共享 ↑
+```
+
+- Agent 可以在单聊中通过工具主动读取群聊 Session Memory（默认关闭权限）
+- 未来实验功能：跨渠道上下文拼接，标注 `[渠道:群聊]`，用户可开启/关闭
+
+### D5 本地模式群聊（已决策 ✅）
+
+**决策：本地模式禁用群聊。** 仅有 SaaS 官方平台提供群聊功能。Desktop 上群聊 Tab 灰显，提示"群聊需要连接官方平台"。
+
+### D6 IM 模式行为定义（已决策 ✅）
+
+**修正理解：IM 模式不是限制工具，而是改变 Agent 的响应风格。**
+
+| | 经典模式 | IM 模式 |
+|---|---------|---------|
+| **回复长度** | 详尽，完整段落 | 短句，1-3 句 |
+| **长任务** | 前台等待 | **SubAgent 后台执行**，前台可中途打断 |
+| **工具集** | 全部可用 | **全部可用，不限制** |
+| **用户交互** | 等待完整输出 | 实时短句 + 后台进度指示 |
+| **打断能力** | 弱（消息发了就发了） | **强**（用户可随时说"这个不做了，换个方向"） |
+
+IM 模式的本质是把 Agent 从"AI 助手"变成"可以随时打断的下属"。
+
+### D7 文件写入展示与同步（已决策 ✅）
+
+**决策：diff 预览，参考 Claude Code CLI 界面。不展示 Git 统一 diff。**
+
+Agent 写完文件 → Desktop 展示**可视化差异**（并排/上下对照，红删绿增）→ 用户确认 → 写回本地。
+
+**两种文件编辑工具：**
+| 工具 | 行为 | 安全约束 |
+|------|------|---------|
+| **覆盖写** | 完整重写文件 | 无额外约束 |
+| **替换写** | Agent 提供 `match_string` + `new_string`，系统搜索替换 | `match_string` 必须在文件中唯一出现 |
+
+**安全日志：** 每次 `/mnt/desktop/` 操作记录 `{timestamp, agent_hash, path, operation, intent, permission_mode, approved}`。
+
+### D8 群聊主持人 Agent（远期规划）
+
+**概念：** 每个群内置一个「主持人」Agent，负责：
+
+- 决定何时让哪个 Agent 发言
+- 总结群聊进展
+- 分配任务给特定 Agent
+- 保持群聊不跑题
+
+**现状：** 串行路由已够用。主持人角色可纳入中远期规划（Phase 4 稳定后）。
+
+**实现方式：** 在 Group 模型中新增 `moderator_agent_hash` 字段。主持人收到消息后先思考「谁适合回答」，再路由给对应 Agent。
+
+### T0 实施前决策（架构待定）
+
+以下三个在启动 Phase 0 前需要决定。
+
+#### T0.1 Phase 0 粒度（已决策 ✅）
+
+**决策：拆为 P0a / P0b / P0c 三步，每步 2-3 天。**
+
+| 子阶段 | 内容 | 工时 |
+|:------:|------|:----:|
+| P0a | 三栏 UI 骨架 + SQLite 建表 + 聊天历史导入 + 消息草稿 | 3d |
+| P0b | 左下角 ➕ 创建 Agent/群聊 + 文件引用卡片 | 2d |
+| P0c | 小侧栏 + API 对接 | 2d |
+
+#### T0.2 前端技术栈（已决策 ✅）
+
+**决策：纯 HTML + 模块化 JS。** 不引入 Vue/Svelte。
+
+理由：零构建步骤、当前代码直接复用、WSL 上构建不折腾。通过模块化 (`components/`、`store.ts`) 管理复杂度即可。
+
+#### T0.3 V2 收尾优先级（待决策 ❓）
+
+#### T0.3 V2 收尾优先级
+
+5 项待办中，哪项最先做？推荐顺序：
+1. camelCase 验证（已基本完工）
+2. 云模式 JWT 鉴权（关键前置）
+3. 文件桥接 ws.rs 接入
+4. Cargo 补全
+5. 开机自启
+
+**待定：** V2 全部收完才开 V3，还是 camelCase 验证完就并行启动 Phase 0？
 
 ---
 
-## 附录：关键文件清单
+### 附录：IM 功能对标检查
 
-### A. V3 新增 Rust 源文件清单
+对照微信/Telegram/Slack 等典型 IM 软件，确认 FeClaw-Desktop V3 覆盖情况：
 
-```
-src-tauri/src/
-├── group.rs              # Phase 4 — 群聊模型 + 命令
-├── moments.rs            # Phase 5 — 朋友圈模型 + 命令
-├── mini_program.rs       # Phase 6 — 小程序模型 + 命令
-├── search.rs             # Phase 7 — 搜索聚合
-├── right_click.rs        # Phase 3 — 右键菜单
-├── qr_upload.rs          # Phase 8 — 扫码上传
-├── mcp.rs                # Phase 9 — MCP Client
-└── file_index/
-    ├── mod.rs            # Phase 10 — 文件索引入口
-    ├── walker.rs         # Phase 10 — 目录遍历
-    ├── parser.rs         # Phase 10 — 文件解析
-    ├── embedder.rs       # Phase 10 — 向量化
-    └── store.rs          # Phase 10 — 向量存储
-```
+| 功能 | 微信 | Telegram | Slack | FeClaw | 说明 |
+|------|:---:|:--------:|:-----:|:------:|------|
+| 私聊 | ✅ | ✅ | ✅ | ✅ Phase 0 | |
+| 群聊 | ✅ | ✅ | ✅ | ✅ Phase 4 | |
+| 文件传输 | ✅ | ✅ | ✅ | ✅ Phase 3+8 | 扫码上传 + 右键引用 |
+| 图片/截图 | ✅ | ✅ | ✅ | ✅ Phase 1 | |
+| 消息引用 | ✅ | ✅ | ✅ | ✅ Phase 0 | |
+| @提及 | ✅ | ✅ | ✅ | ✅ Phase 4 | |
+| 消息历史 | ✅ | ✅ | ✅ | ✅ Phase 0 | SQLite 本地缓存 |
+| 置顶聊天 | ✅ | ✅ | ✅ | ✅ Phase 2 | 小侧栏 |
+| 免打扰 | ✅ | ✅ | ✅ | ✅ Phase 2 | 小侧栏 |
+| 搜聊天记录 | ✅ | ✅ | ✅ | ✅ Phase 7 | 向量搜索，比所有 IM 都强 |
+| 快捷回复/模板 | ❌ | ✅ | ✅ | ✅ Phase 1 | 对标 Telegram/Slack |
+| 消息撤回 | ✅ | ✅ | ❌ | ⬜ **待加** | 撤回后软删 + 标记 `(已撤回)` |
+| 表情回应 | ✅ | ✅ | ✅ | ⬜ **待加** | `👍❤️😂😮😢😡` 六连 |
+| 已读回执 | ⚠️ 群 | ✅ | ✅ | 🟡 Phase 11 | IM 模式的一部分 |
+| 输入中…指示器 | ✅ | ✅ | ✅ | 🟡 Phase 11 | IM 模式 |
+| 在线状态 | ✅ | ✅ | ✅ | 🟡 Phase 11 | IM 模式 |
+| 消息草稿 | ❌ | ✅ | ✅ | ⬜ **待加** | 切换聊天不丢输入内容 |
+| 多设备支持 | ✅ | ✅ | ✅ | 🟢 架构已支持 | IM 渠道，Desktop+Mobile 共享 |
+| 聊天记录导出 | ✅ | ✅ | ✅ | ⬜ 低优先级 | 后续加 |
+| 聊天背景 | ✅ | ✅ | ❌ | ⬜ 低优先级 | Agent 颜色主题 |
 
-### B. V3 新增前端文件清单
+**待加的高优功能：**
 
-```
-src/
-├── file-manager/
-│   ├── index.html        # Phase 2
-│   ├── file-manager.css  # Phase 2
-│   └── file-manager.ts   # Phase 2
-├── mini-program/
-│   ├── index.html        # Phase 6
-│   └── mini-program.ts   # Phase 6
-├── qr-upload/
-│   └── index.html        # Phase 8
-└── settings/
-    └── mcp-config.html   # Phase 9
-```
+1. **消息撤回（高）** — 用户长按自己发的消息 → 「撤回」→ 软删除，显示 `(已撤回)`
+2. **表情回应（高）** — 长按消息 → 六连表情选择。Agent 也可发回应（系统根据内容决定）
+3. **消息草稿（中）** — 输入框打字后切换聊天，内容保留不丢失
 
-### C. V3 需要修改的前端文件清单
-
-```
-src/chat/
-├── index.html            # Phase 0,1,2,4,5,7 — 渐进改造
-├── chat.css              # Phase 0,1,2,4,5,7 — 渐进扩展
-└── chat.ts               # Phase 0,1,2,4,5,7,8 — 渐进扩展
-```
+建议 Phase 1-2 之间补上撤回和回应（各 1 天工时）。草稿在 Phase 0 就做（即写即用）。
 
 ---
 
-> **本计划基于 vision.md v3、design.md v1、v2-plan.md v3（二审修复版）以及完整的现有代码审计编写。**
->
-> 每个 Phase 的实现者只需阅读本文件和对应阶段的源码文件即可开始开发。
+## 9. 后续步骤
+
+**立即（本周）：**
+1. V2 收尾（补 FileWriteResponse + ws bridge 接入 + auth_failure，约 1-2 天）
+2. 启动 V3 Phase 0a（三栏 UI 骨架 + SQLite + 草稿）
+
+**短期（2 周内）：**
+3. Phase 0a → 0b → 0c 三迭代
+4. Phase 1（截图 + 模板）可与 Phase 0c 并行
+
+**中期（1 个月内）：**
+5. Phase 2（文件管理器）+ Phase 3（右键菜单）
+6. 启动 Phase 4（群聊引擎侧）——核心差异化功能
+
+**中期（3 个月内）：**
+6. 完成 Phase 4–7（群聊 + 群广场 + 小程序 + 搜索）——Vision v3.1 主功能全部上线
+
+**长期（6 个月+）：**
+7. Phase 8（扫码上传）+ Phase 9（MCP）+ Phase 10（全盘索引）+ Phase 11（IM 模式）
+8. Phase 12（多模态 PC 操控）——探索
