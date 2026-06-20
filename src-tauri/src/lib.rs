@@ -139,12 +139,12 @@ pub fn run() {
                 }
                 _ => false,
             };
-            if is_first {
-                if let Err(e) = welcome::open_welcome_window(handle.clone()).await {
-                    tracing::warn!("failed to open welcome window on first launch: {e}");
-                }
-            }
             tauri::async_runtime::spawn(async move {
+                if is_first {
+                    if let Err(e) = welcome::open_welcome_window(handle.clone()).await {
+                        tracing::warn!("failed to open welcome window on first launch: {e}");
+                    }
+                }
                 if let Err(e) = startup(handle).await {
                     tracing::error!("startup failed: {e:#}");
                     let err_msg = format!("{e:#}");
