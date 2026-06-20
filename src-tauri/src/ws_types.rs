@@ -175,6 +175,18 @@ pub enum WsRequest {
         #[serde(default)]
         data: Option<MomentEventPayload>,
     },
+    /// Phone completed QR upload (server → desktop).
+    #[serde(rename = "upload_complete")]
+    UploadComplete {
+        #[serde(rename = "session_id")]
+        session_id: String,
+        #[serde(rename = "presigned_get_url")]
+        presigned_get_url: String,
+        #[serde(rename = "file_name")]
+        file_name: Option<String>,
+        #[serde(rename = "mime_type")]
+        mime_type: Option<String>,
+    },
 }
 
 /// Payload inside a `moments_event` WS message.

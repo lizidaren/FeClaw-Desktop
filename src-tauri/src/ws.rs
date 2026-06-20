@@ -429,6 +429,21 @@ impl WsClient {
                     let _ = handle.emit("moments-event", payload);
                 }
             }
+            WsRequest::UploadComplete { session_id, presigned_get_url, file_name, mime_type } => {
+                tracing::info!(
+                    session_id = session_id.as_str(),
+                    "upload_complete received"
+                );
+                if let Some(ref handle) = self.app_handle {
+                    let payload = serde_json::json!({
+                        "session_id": session_id,
+                        "presigned_get_url": presigned_get_url,
+                        "file_name": file_name,
+                        "mime_type": mime_type,
+                    });
+                    let _ = handle.emit("upload-complete", payload);
+                }
+            }
             WsRequest::Pong => {}
         }
         Ok(())

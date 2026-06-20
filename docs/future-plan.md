@@ -1855,22 +1855,6 @@ Engine 侧：
 
 ---
 
-### Phase 10 — 本地文件全盘索引
-
-**目标：** 后台低优先级扫描用户指定目录 → 解析 PDF/DOCX/TXT/MD/代码 → 向量化 → 写入本地向量库 → 让 ⌘K 能搜到全盘内容。
-
-**关键交付：**
-- `src-tauri/src/file_index.rs` + 子模块（walker / parser / embedder / store）
-- 托盘菜单加「索引: 1234 文件」状态显示
-- 设置页加「索引」Tab：选择要索引的目录、查看索引状态、删除索引
-- 嵌入模型：优先调用 FeClaw 引擎 `/api/embed`（若存在），否则 ONNX 本地跑 MiniLM
-
-**依赖：** `walkdir = "2"` / `lopdf = "0.32"` / `docx-rs = "0.4"` / `usearch = "2"` 或 `lancedb` / `ort = "2"`
-
-
-**工时：** 10–14 天
-
----
 
 ### Phase 11 — Agent IM 模式后台支持
 
@@ -2252,3 +2236,148 @@ Agent 写完文件 → Desktop 展示**可视化差异**（并排/上下对照�
 **长期（6 个月+）：**
 7. Phase 8（扫码上传）+ Phase 9（MCP）+ Phase 10（全盘索引）+ Phase 11（IM 模式）
 8. Phase 12（多模态 PC 操控）——探索
+### Phase 10 — 本地文件全盘索引
+
+**目标：** 后台低优先级扫描本地目录 → 解析文本/PDF/DOCX → 向量化 → 存入本地向量库 → Alt+Space 可搜
+
+#### 架构概览
+
+```
+Windows 文件系统
+  ↓ walkdir 递归遍历
+Rust Walker
+  ↓ 解析文本内容
+Rust Parser（TXT → 直读，PDF/DOCX → 库解析）
+  ↓ 分块 + 向量化
+Desktop Embedder（Engine /api/embed 优先 → ONNX MiniLM 回退）
+  ↓ 存库
+Local Vector Store（SQLite vec0 或 NumpyVec）
+  ↑
+Alt+Space 搜索（Phase 7 search-overlay.ts 集成 local 源）
+```
+
+#### 分阶段实施
+
+**Phase 10.0 — 文本文件全文索引（~3 天）**
+
+| 组件 | 文件 | 说明 |
+|:-----|:-----|:------|
+| Walker | `src-tauri/src/file_index/walker.rs` | walkdir 递归遍历指定目录，返回文件列表 |
+| Parser | `src-tauri/src/file_index/parser.rs` | 读取 .txt/.md/.json/.py/.js/.html/.css/.ts/.rs 等纯文本文件 |
+| Embedder | `src-tauri/src/file_index/embedder.rs` | 调用 Engine `POST /api/embed`（已有 EmbeddingService）|
+| Chunker | `src-tauri/src/file_index/chunker.rs` | 按段落/句子切分文本 |
+| Store | `src-tauri/src/file_index/store.rs` | SQLite 本地存：(path, chunk_index, vectors_serialized, file_metadata) |
+| 索引命令 | `src-tauri/src/file_index.rs` | start_index / stop_index / index_status / add_directory / remove_directory |
+| 设置 UI | 设置页「索引」Tab | 添加/删除目录，查看进度，清除索引 |
+| Alt+Space 集成 | search-overlay.ts 已有 local 源占位 | 填充真正结果 |
+
+流程图：
+```
+用户设置索引目录
+  → Walker 遍历目录树，生成文件列表（跳过 .git/node_modules/ 等）
+  → Parser 读文件内容（只读文本文件，跳过二进制）
+  → Chunker 按 512 tokens 切分（保留段落边界）
+  → Embedder 批量调用 Engine /api/embed（每批 10 个 chunk）
+  → Store 写入本地 SQLite：(file_path, chunk_index, vector, content_snippet, modified_time)
+  → 索引入口更新计数
+```
+
+搜索流程：
+```
+Alt+Space → 输入 "三角函数"
+  → Engine 搜索 + Desktop 本地搜索（FTS5 全文搜索文件名+内容片段）
+  → FTS5 结果合并到 SearchResults.local.items[]
+  → 渲染时带 📁 图标 + 文件路径 + snippet 高亮
+  → 点击 → 系统默认打开该文件
+```
+
+**Phase 10.1 — PDF/DOCX 解析 + 离线嵌入（~5 天）**
+
+| 组件 | 新增 | 说明 |
+|:-----|:-----|:------|
+| PDF 解析 | `parser.rs` 扩展 + `lopdf` 库 | 提取 PDF 纯文本，分页 |
+| DOCX 解析 | `parser.rs` 扩展 + `docx-rs` 库 | 提取 Word 文档内容 |
+| 离线嵌入 | `embedder.rs` 扩展 + `ort` crate + MiniLM ONNX | 无网络时用 ONNX Runtime 本地跑 MiniLM-L6-v2 (~80MB) |
+| 重索引检查 | `walker.rs` 扩展 | 比较文件修改时间，只处理变化的文件 |
+
+离线嵌入方案：
+```rust
+// 优先走 Engine（快，复用已有 EmbeddingService）
+// Engine 不可用时 → ONNX 本地：
+let model = ort::Session::builder()?
+    .with_model_from_file("models/minilm.onnx")?;
+let embeddings = model.run(inputs)?;
+```
+
+**Phase 10.2 — 增量监控 + 图片描述索引（远期）**
+
+- `notify` crate 监听文件变化（创建/修改/删除时自动更新索引）
+- 图片 → VLM 生成描述 → 向量化（复用 image_describer.py）
+
+#### 存储格式
+
+Desktop SQLite 新增表：
+```sql
+CREATE TABLE file_index (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL UNIQUE,
+    file_name TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    extension TEXT NOT NULL,
+    content TEXT,                    -- 全文（FTS5 关键词搜索用）
+    modified_at INTEGER,            -- 文件修改时间（Unix 时间戳）
+    indexed_at INTEGER,             -- 索引时间
+    file_size INTEGER,
+    is_binary BOOLEAN DEFAULT 0,
+    status TEXT DEFAULT 'pending',  -- pending / indexing / indexed / error
+    error TEXT
+);
+
+-- 向量存储（使用 SQLite vec0 或序列化 JSON）
+CREATE VIRTUAL TABLE vec_index USING vec0(
+    id INTEGER PRIMARY KEY,
+    vector FLOAT[768]               -- MiniLM 输出 384 维，也可以用 768
+);
+
+-- FTS5 全文搜索
+CREATE VIRTUAL TABLE file_fts USING fts5(
+    file_name, content, directory,
+    content='file_index', content_rowid='id'
+);
+```
+
+#### 关键设计决策
+
+| Q | 决策 |
+|:-:|:----|
+| 默认索引目录 | Desktop + Documents + Downloads（用户可添加/排除）|
+| 排除目录 | .git node_modules .fehub .releases .versions venv __pycache__ target |
+| 索引时机 | 应用空闲时后台低优先级（非阻塞）|
+| 首次索引 | 用户添加目录后立即触发，持续扫描 |
+| 重索引 | 按文件修改时间增量更新（只处理变化文件）|
+| 存储位置 | Desktop 本地 SQLite（不涉及云，隐私安全）|
+| 搜索集成 | FTS5 全文搜索 → 结果 merge 到 Alt+Space 搜索的 local 源 |
+
+#### 文件改动清单
+
+| 文件 | 状态 | 说明 |
+|:-----|:----:|:------|
+| `src-tauri/src/file_index.rs` | 新增 | 模块入口 + 4 个 Tauri 命令 |
+| `src-tauri/src/file_index/walker.rs` | 新增 | 目录遍历 |
+| `src-tauri/src/file_index/parser.rs` | 新增 | 文件解析 |
+| `src-tauri/src/file_index/chunker.rs` | 新增 | 文本分块 |
+| `src-tauri/src/file_index/embedder.rs` | 新增 | 向量化（Engine/ONNX）|
+| `src-tauri/src/file_index/store.rs` | 新增 | SQLite 读写 |
+| `src-tauri/src/chat/components/settings-tab.ts` | 修改 | 新增「索引」Tab |
+| `src-tauri/src/chat/components/search-overlay.ts` | 修改 | 集成本地结果 |
+| `src-tauri/Cargo.toml` | 修改 | 新增依赖：walkdir, lopdf, docx-rs, ort, notify |
+
+#### 工时
+
+| 阶段 | 会话数 | 风险 |
+|:----:|:------:|:----:|
+| 10.0 — 纯文本索引 | ~2 | 🟢 Walker/Parser/Store 都是标准操作 |
+| 10.1 — PDF+DOCX + 离线 | ~3 | 🟡 PDF 解析 rust 库可能不够成熟 |
+| 10.2 — 增量监控 + 图片 | ~2 | 🟡 notify crate + VLM 描述 |
+| **总计** | **~7** | |
+

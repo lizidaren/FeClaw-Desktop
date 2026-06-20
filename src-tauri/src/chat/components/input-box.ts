@@ -1088,6 +1088,9 @@ function buildComposerToolbar(): void {
         </button>
       </div>
     </div>
+    <button type="button" class="btn-qr-upload" id="btn-qr-upload" title="扫码上传" aria-label="扫码上传">
+      📱
+    </button>
   `;
 
   // Insert before the textarea
@@ -1135,6 +1138,13 @@ function buildComposerToolbar(): void {
         // Trigger change event to show group members
         groupRadio?.dispatchEvent(new Event("change", { bubbles: true }));
       }, 50);
+    });
+  });
+
+  // QR Upload button (📱)
+  document.getElementById("btn-qr-upload")?.addEventListener("click", () => {
+    import("./qr-upload").then(({ openQrUploadDialog }) => {
+      openQrUploadDialog();
     });
   });
 

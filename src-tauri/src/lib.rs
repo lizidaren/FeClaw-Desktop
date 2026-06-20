@@ -30,6 +30,7 @@ mod group;
 mod local_setup;
 mod moments;
 mod right_click;
+mod qr_upload;
 mod search;
 mod settings;
 mod side_panel;
@@ -197,6 +198,9 @@ pub fn run() {
             moments::get_moments,
             moments::post_moment,
             moments::delete_moment,
+            qr_upload::create_upload_session,
+            qr_upload::generate_qr_code,
+            qr_upload::download_uploaded_file,
             fehub::list_my_publishes,
             fehub::open_miniapp,
             search::search_all,

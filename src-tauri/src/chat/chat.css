@@ -1931,3 +1931,172 @@ html, body {
   padding: 12px 16px;
   border-top: 1px solid var(--border-soft);
 }
+
+/* ---- Phase 8: QR Upload Dialog -------------------------------- */
+
+.qr-upload-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: qudFadeIn 0.15s ease-out;
+}
+
+@keyframes qudFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.qr-upload-dialog {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  width: 320px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  animation: qudSlideIn 0.15s ease-out;
+}
+
+@keyframes qudSlideIn {
+  from { opacity: 0; transform: scale(0.95) translateY(-8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.qud-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.qud-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.qud-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+
+.qud-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.qud-body {
+  padding: 24px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.qud-qr-container {
+  background: white;
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.qud-qr {
+  display: block;
+  width: 180px;
+  height: 180px;
+  image-rendering: pixelated;
+}
+
+.qud-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.qud-session {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+  font-family: monospace;
+  opacity: 0.7;
+}
+
+.qud-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.qud-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s;
+  border: 1px solid transparent;
+}
+
+.qud-btn-cancel {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+.qud-btn-cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.qud-btn-confirm {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.qud-btn-confirm:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+}
+
+/* QR upload button in composer toolbar */
+.btn-qr-upload {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+  margin-left: 4px;
+}
+
+.btn-qr-upload:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
