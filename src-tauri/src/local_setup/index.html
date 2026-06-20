@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FeClaw Desktop — 本地引擎配置</title>
+  <link rel="stylesheet" href="local_setup.css" />
+</head>
+<body data-theme="system">
+
+<main class="app">
+  <!-- Step indicator -->
+  <nav class="steps">
+    <span class="step active" data-step="1">1. 环境检查</span>
+    <span class="step-arrow">→</span>
+    <span class="step" data-step="2">2. 工作目录</span>
+    <span class="step-arrow">→</span>
+    <span class="step" data-step="3">3. 克隆与配置</span>
+    <span class="step-arrow">→</span>
+    <span class="step" data-step="4">4. 安装与启动</span>
+    <span class="step-arrow">→</span>
+    <span class="step" data-step="5">5. 连接引擎</span>
+  </nav>
+
+  <div class="content" id="content">
+
+    <!-- Step 1: Prerequisites -->
+    <section class="panel" id="step-1">
+      <h2>环境检查</h2>
+      <p class="desc">本地运行需要 Git 和 Python 3.11+</p>
+
+      <div class="checks">
+        <div class="check-row" id="check-git">
+          <span class="check-label">Git</span>
+          <span class="check-status" data-check="git">等待检测…</span>
+        </div>
+        <div class="check-row" id="check-python">
+          <span class="check-label">Python</span>
+          <span class="check-status" data-check="python">等待检测…</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <span class="status" id="status-1"></span>
+        <button class="btn btn-primary" id="btn-check-prereqs">开始检测</button>
+        <button class="btn btn-ghost hidden" id="btn-retry-prereqs">重新检测</button>
+      </div>
+    </section>
+
+    <!-- Step 2: Work Directory -->
+    <section class="panel hidden" id="step-2">
+      <h2>工作目录</h2>
+      <p class="desc">选择本地引擎的安装位置，默认为 <code>~/feclaw/</code></p>
+
+      <div class="field">
+        <label for="dest-path">安装路径</label>
+        <div class="input-group">
+          <input type="text" id="dest-path" class="input" placeholder="~/feclaw" />
+          <button class="btn btn-ghost" id="btn-browse-dir">选择目录</button>
+        </div>
+        <span class="hint">引擎将克隆到此目录下的 <code>FeClaw/</code> 子目录</span>
+      </div>
+
+      <div class="actions">
+        <span class="status" id="status-2"></span>
+        <button class="btn btn-ghost" id="btn-back-2">返回上一步</button>
+        <button class="btn btn-primary" id="btn-next-2">下一步</button>
+      </div>
+    </section>
+
+    <!-- Step 3: Clone & Configure -->
+    <section class="panel hidden" id="step-3">
+      <h2>克隆与配置</h2>
+      <p class="desc">从 GitHub 克隆 FeClaw 引擎仓库，并配置环境变量</p>
+
+      <div class="card" id="clone-card">
+        <h3>克隆仓库</h3>
+        <p id="clone-path"></p>
+        <button class="btn btn-primary" id="btn-clone">克隆 FeClaw 仓库</button>
+        <div class="progress hidden" id="clone-progress"></div>
+      </div>
+
+      <div class="card hidden" id="config-card">
+        <h3>引擎配置</h3>
+
+        <div class="field">
+          <label for="api-key">LLM API Key</label>
+          <input type="password" id="api-key" class="input" placeholder="sk-..." />
+          <span class="hint">支持 MiniMax、DeepSeek 等兼容 OpenAI 的 API</span>
+        </div>
+
+        <div class="field">
+          <label for="jwt-secret">JWT Secret</label>
+          <div class="input-group">
+            <input type="text" id="jwt-secret" class="input" placeholder="自动生成…" />
+            <button class="btn btn-ghost" id="btn-gen-jwt">自动生成</button>
+          </div>
+          <span class="hint">用于引擎签发 JWT 令牌</span>
+        </div>
+
+        <div class="field">
+          <label for="engine-port">端口号</label>
+          <input type="number" id="engine-port" class="input" value="8080" min="1024" max="65535" />
+          <span class="hint">默认 8080，如有冲突可更换</span>
+        </div>
+
+        <div class="field">
+          <label for="admin-password">管理员密码</label>
+          <input type="text" id="admin-password" class="input" placeholder="admin" value="admin" />
+          <span class="hint">引擎管理接口的登录密码，默认为 admin</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <span class="status" id="status-3"></span>
+        <button class="btn btn-ghost" id="btn-back-3">返回上一步</button>
+        <button class="btn btn-primary hidden" id="btn-next-3">下一步</button>
+      </div>
+    </section>
+
+    <!-- Step 4: Install & Start -->
+    <section class="panel hidden" id="step-4">
+      <h2>安装与启动</h2>
+      <p class="desc">安装 Python 依赖并启动引擎进程</p>
+
+      <div class="card">
+        <h3>安装依赖</h3>
+        <button class="btn btn-primary" id="btn-install">安装依赖</button>
+        <pre class="progress hidden" id="install-progress"></pre>
+      </div>
+
+      <div class="card">
+        <h3>启动引擎</h3>
+        <button class="btn btn-primary hidden" id="btn-start">启动引擎</button>
+        <div class="engine-info hidden" id="engine-info">
+          <div class="info-row">
+            <span class="info-label">管理员密码：</span>
+            <code id="admin-pw-display"></code>
+          </div>
+          <div class="info-row">
+            <span class="info-label">引擎地址：</span>
+            <code id="engine-url-display"></code>
+          </div>
+        </div>
+        <pre class="progress hidden" id="start-progress"></pre>
+      </div>
+
+      <div class="actions">
+        <span class="status" id="status-4"></span>
+        <button class="btn btn-ghost" id="btn-back-4">返回上一步</button>
+        <button class="btn btn-primary hidden" id="btn-next-4">下一步</button>
+      </div>
+    </section>
+
+    <!-- Step 5: Connect -->
+    <section class="panel hidden" id="step-5">
+      <h2>连接引擎</h2>
+      <p class="desc">验证引擎健康状态并建立连接</p>
+
+      <div class="card" id="success-card">
+        <div class="success-icon">✓</div>
+        <h3>引擎已就绪</h3>
+        <div class="info-rows" id="conn-info"></div>
+      </div>
+
+      <button class="btn btn-primary btn-lg" id="btn-connect">连接到本地引擎</button>
+
+      <div class="actions">
+        <span class="status" id="status-5"></span>
+        <button class="btn btn-ghost" id="btn-back-5">返回上一步</button>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<script type="module" src="local_setup.js"></script>
+</body>
+</html>

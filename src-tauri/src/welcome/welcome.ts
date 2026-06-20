@@ -101,13 +101,16 @@ async function pickLocal(): Promise<void> {
       args: { mode: "local" },
     });
     if (result.redirect_to_local_setup) {
-      setStatus("✓ 已选择本地模式", "success");
-      // Local setup page is delivered in P1.1; for now we just close
-      // the welcome window — the user can relaunch the local-setup
-      // wizard from Settings → 常规 → 本地引擎.
+      setStatus("✓ 已选择本地模式，正在打开配置向导…", "success");
+      // Open the local-setup wizard and close the welcome window.
+      try {
+        await invoke("open_local_setup_window");
+      } catch (e) {
+        console.error("open_local_setup_window failed:", e);
+      }
       setTimeout(() => {
         window.close();
-      }, 600);
+      }, 400);
     } else {
       setStatus("配置失败：未触发本地流程", "error");
     }

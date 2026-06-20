@@ -21,6 +21,7 @@ mod engine;
 mod executor;
 mod file_bridge;
 mod file_ops;
+mod local_setup;
 mod settings;
 mod tray;
 mod welcome;
@@ -113,6 +114,17 @@ pub fn run() {
             chat::get_connection_status,
             chat::get_chat_history_path,
             chat::send_consent_response,
+            local_setup::check_git_installed,
+            local_setup::check_python_version,
+            local_setup::clone_feclaw,
+            local_setup::generate_env_template,
+            local_setup::write_env_file,
+            local_setup::install_dependencies,
+            local_setup::start_feclaw,
+            local_setup::check_engine_health,
+            local_setup::save_local_engine_config,
+            local_setup::default_engine_dest,
+            local_setup::open_local_setup_window,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

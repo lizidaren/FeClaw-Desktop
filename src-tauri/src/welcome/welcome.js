@@ -70,10 +70,15 @@ async function pickLocal() {
       args: { mode: "local" }
     });
     if (result.redirect_to_local_setup) {
-      setStatus("\u2713 \u5DF2\u9009\u62E9\u672C\u5730\u6A21\u5F0F", "success");
+      setStatus("\u2713 \u5DF2\u9009\u62E9\u672C\u5730\u6A21\u5F0F\uFF0C\u6B63\u5728\u6253\u5F00\u914D\u7F6E\u5411\u5BFC\u2026", "success");
+      try {
+        await invoke("open_local_setup_window");
+      } catch (e) {
+        console.error("open_local_setup_window failed:", e);
+      }
       setTimeout(() => {
         window.close();
-      }, 600);
+      }, 400);
     } else {
       setStatus("\u914D\u7F6E\u5931\u8D25\uFF1A\u672A\u89E6\u53D1\u672C\u5730\u6D41\u7A0B", "error");
     }
