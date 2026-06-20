@@ -25,7 +25,7 @@ pub fn current_timestamp() -> String {
 }
 
 /// Inbound group message from the engine.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct GroupMessagePayload {
     pub id: String,
     #[serde(rename = "sender_type")]
@@ -52,7 +52,7 @@ pub struct GroupEventPayload {
 }
 
 /// Group info update payload.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct GroupUpdatedPayload {
     pub id: String,
     pub name: Option<String>,
@@ -190,7 +190,7 @@ pub enum WsRequest {
 }
 
 /// Payload inside a `moments_event` WS message.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct MomentEventPayload {
     pub id: String,
     #[serde(rename = "group_id")]

@@ -339,6 +339,7 @@ impl EngineManager {
                 consent.clone(),
                 executor.clone(),
                 cancel_token.clone(),
+                None,
             );
 
             let (close_code, result) = ws.run_once().await;

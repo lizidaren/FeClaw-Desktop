@@ -249,8 +249,9 @@ pub async fn get_permissions() -> Result<UserPermissions, String> {
         .map_err(|e| format!("获取权限失败：{e}"))?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("获取权限失败 ({}): {}", resp.status(), body));
+        return Err(format!("获取权限失败 ({}): {}", status, body));
     }
 
     let perms: UserPermissions = resp.json().await

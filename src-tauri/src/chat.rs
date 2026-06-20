@@ -17,6 +17,7 @@
 //! messages are pushed to the frontend by `WsClient::handle_message`
 //! which emits the `chat-event` Tauri event.
 
+use crate::config::Config;
 use crate::AppState;
 use tauri::Manager;
 use serde::{Deserialize, Serialize};

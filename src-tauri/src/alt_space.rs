@@ -7,7 +7,8 @@
 //! On Windows, also applies `SetWindowDisplayAffinity` with `WDA_MONITOR`
 //! so the overlay is hidden from screenshots and screen recordings.
 
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
+use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
 // ---------------------------------------------------------------------------
 // Shortcut registration state
@@ -118,6 +119,7 @@ mod privacy {
 // ---------------------------------------------------------------------------
 
 /// Build the Alt+Space shortcut: Alt + Space
+#[cfg(feature = "global-shortcut")]
 fn alt_space_shortcut() -> Shortcut {
     Shortcut::new(Some(Modifiers::ALT), Code::Space)
 }

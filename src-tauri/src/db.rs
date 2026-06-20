@@ -278,7 +278,8 @@ pub fn get_chat_history_by_agent(agent_hash: String) -> Result<Vec<DbChatMessage
         })?;
         let mut messages = Vec::new();
         for row in rows {
-            messages.push(row.map_err(|e| format!("读取消息行失败：{e}"))?);
+            let msg = row.map_err(|e| format!("读取消息行失败：{e}"))?;
+            messages.push(msg);
         }
         Ok(messages)
     })
@@ -478,7 +479,8 @@ pub fn get_prompt_templates() -> Result<Vec<PromptTemplate>, String> {
             })
         })?;
         for row in rows {
-            templates.push(row.map_err(|e| format!("read template row failed: {e}"))?);
+            let tmpl = row.map_err(|e| format!("read template row failed: {e}"))?;
+            templates.push(tmpl);
         }
         Ok(templates)
     })

@@ -70,8 +70,9 @@ pub async fn create_agent(
         .map_err(|e| format!("创建 Agent 失败：{e}"))?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("创建 Agent 失败 ({}): {}", resp.status(), body));
+        return Err(format!("创建 Agent 失败 ({}): {}", status, body));
     }
 
     let created: CreateAgentResponse = resp.json().await
@@ -122,8 +123,7 @@ pub struct PickedFile {
 #[tauri::command]
 pub fn pick_local_file(mode: String) -> Result<Option<PickedFile>, String> {
     let file = rfd::FileDialog::new()
-        .pick_file()
-        .ok();
+        .pick_file();
 
     match file {
         Some(path) => {
