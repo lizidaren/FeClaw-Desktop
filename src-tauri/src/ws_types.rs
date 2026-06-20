@@ -167,6 +167,35 @@ pub enum WsRequest {
         #[serde(default)]
         data: Option<GroupUpdatedPayload>,
     },
+    /// Inbound moment event (new moment posted).
+    #[serde(rename = "moments_event")]
+    MomentsEvent {
+        #[serde(rename = "group_id")]
+        group_id: String,
+        #[serde(default)]
+        data: Option<MomentEventPayload>,
+    },
+}
+
+/// Payload inside a `moments_event` WS message.
+#[derive(Debug, Deserialize)]
+pub struct MomentEventPayload {
+    pub id: String,
+    #[serde(rename = "group_id")]
+    pub group_id: String,
+    #[serde(rename = "group_name", default)]
+    pub group_name: Option<String>,
+    #[serde(rename = "agent_hash", default)]
+    pub agent_hash: Option<String>,
+    #[serde(rename = "agent_name", default)]
+    pub agent_name: Option<String>,
+    pub kind: String,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub attachments: Vec<serde_json::Value>,
+    #[serde(rename = "created_at")]
+    pub created_at: u64,
 }
 
 #[derive(Debug, Deserialize, Default)]

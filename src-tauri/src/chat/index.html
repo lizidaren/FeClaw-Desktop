@@ -15,6 +15,10 @@
         <span class="tab-icon" aria-hidden="true">💬</span>
         <span class="tab-label">聊天</span>
       </button>
+      <button class="tab-btn" data-tab="moments" title="广场">
+        <span class="tab-icon" aria-hidden="true">📱</span>
+        <span class="tab-label">广场</span>
+      </button>
       <button class="tab-btn" data-tab="profile" title="我的">
         <span class="tab-icon" aria-hidden="true">🙋</span>
         <span class="tab-label">我的</span>
@@ -36,6 +40,18 @@
         <div class="empty-list-hint" id="empty-list-hint">
           <span>暂无聊天</span>
           <small>从右侧选择一个 Agent 开始对话</small>
+        </div>
+      </div>
+
+      <!-- Moments Feed (shown when tab=moments) -->
+      <div class="moments-feed" id="moments-feed" style="display:none;">
+        <div class="moments-filter-bar">
+          <select class="moments-group-filter" id="moments-group-filter">
+            <option value="">全部群</option>
+          </select>
+        </div>
+        <div class="moments-list" id="moments-list" role="listbox" aria-label="动态列表">
+          <div class="moments-empty" id="moments-empty">暂无动态</div>
         </div>
       </div>
     </aside>
@@ -94,6 +110,9 @@
       <!-- per-agent permission list -->
     </div>
   </div>
+
+  <!-- Moments toast notification -->
+  <div class="moments-toast" id="moments-toast" style="opacity:0;">新动态</div>
 
   <script type="module" src="chat.js"></script>
 </body>

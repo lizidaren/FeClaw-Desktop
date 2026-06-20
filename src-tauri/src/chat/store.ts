@@ -10,7 +10,7 @@
 
 // ---- Types ----------------------------------------------------
 
-export type TabId = "chat" | "profile" | "settings";
+export type TabId = "chat" | "moments" | "profile" | "settings";
 
 export type AgentInfo = {
   hash: string;
@@ -85,6 +85,19 @@ export type GroupMessage = {
   timestamp?: string;
 };
 
+export type MomentInfo = {
+  id: string;
+  group_id: string;
+  group_name?: string;
+  agent_hash?: string;
+  agent_name?: string;
+  kind: string;
+  title: string;
+  content: string;
+  attachments: Attachment[];
+  created_at: number;
+};
+
 // ---- Store -----------------------------------------------------
 
 class Store {
@@ -117,6 +130,10 @@ class Store {
 
   // Group messages: map from group_id -> messages
   groupMessages: Map<string, GroupMessage[]> = new Map();
+
+  // Moments (群广场)
+  moments: MomentInfo[] = [];
+  momentsGroupFilter: string | null = null;
 
   // Callbacks for reactive updates
   private listeners: Set<(store: Store) => void> = new Set();
@@ -225,6 +242,28 @@ class Store {
       g.id === groupId ? { ...g, lastMessage: msg.content } : g
     );
     this.notify();
+  }
+
+  // ---- Moments methods ----
+
+  setMoments(moments: MomentInfo[]): void {
+    this.moments = moments;
+    this.notify();
+  }
+
+  addMoment(moment: MomentInfo): void {
+    this.moments = [moment, ...this.moments];
+    this.notify();
+  }
+
+  setMomentsGroupFilter(groupId: string | null): void {
+    this.momentsGroupFilter = groupId;
+    this.notify();
+  }
+
+  getMoments(): MomentInfo[] {
+    if (!this.momentsGroupFilter) return this.moments;
+    return this.moments.filter((m) => m.group_id === this.momentsGroupFilter);
   }
 
   subscribe(listener: (store: Store) => void): () => void {

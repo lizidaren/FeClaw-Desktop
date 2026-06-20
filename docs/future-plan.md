@@ -1476,16 +1476,102 @@ def create_post(title: str, content: str, attachments: list = None) -> dict:
 
 ---
 
-### Phase 7 — ⌘K 搜一搜
+### Phase 7 — 超级入口搜索（FirstEntrance — Alt+Space）
 
-**目标：** 全平台向量语义搜索：Agent 内聊天记录 + VFS 文件 + 群广场动态 +（可选）本地文件全盘。
+**核心理念：** FirstEntrance 字面意义——一个 Alt+Space 触达的超级搜索入口。AI 加持，万物可搜。
 
-**关键交付：**
-- `src-tauri/src/search.rs`：`SearchResult` / `SearchSourceKind` + 聚合命令
-- `src-tauri/src/ws.rs`：发送 `search_request` / 接收 `search_response`
-- 引擎侧：`vector_search_service.py` 扩展支持跨 Agent 搜索
-- 前端：`#tab-search` Tab，⌘K / Ctrl+K 聚焦搜索框，结果可点击跳转到对应 Agent 聊天 / 群聊 / 文件管理器
+**入口：** Alt+Space 全局快捷键 → 浮层搜索框（置顶显示，类似 PowerToys Run / macOS Spotlight）
+- 桌面任意位置可用，无需提前打开 FeClaw Desktop
+- 搜索框聚焦时直接输入，支持关键词（FTS5）和自然语言（向量语义）
+- Alt+Space / ESC 关闭
 
+**搜索范围（全量索引）：**
+
+| 来源 | 索引方式 | 数据位置 |
+|:----|:--------|:--------|
+| 💬 聊天记录 | 文本 FTS5 + 向量化 | Engine ChatHistory |
+| 📁 VFS 文件 | 已有 vfs_indexer.py 向量索引 | idx-{agent_hash}-kb |
+| 📱 群广场动态 | 文本 FTS5 | Engine GroupMoments |
+| 🏗️ FeHub README | 爬取各 repo 的 README.md → 向量化 | Engine 新索引 |
+| 🏪 FeClaw 小程序 | 扫描已注册小程序的 manifest + description | Engine apps_service |
+| 💻 本地文件（可选） | 用户选择：上云（COS 向量桶）/ 本地（SQLite vec） | 用户偏好控制 |
+
+**两种搜索模式：**
+
+| 模式 | 触发 | 结果展示 | 隐私 |
+|:----:|:----|:---------|:----|
+| 用户搜索 | Alt+Space / 主窗口搜索按钮 | 结果列表，点击跳转 | 用户主动搜，无限制 |
+| Agent 搜索 | Agent 调用 search_files(query) | 先展示给用户审批，通过后才给 Agent | 防止 Agent 看到用户不想共享的内容 |
+
+**搜索结果渲染：**
+```
+┌─────────────────────────────────────┐
+│ 🔍 三角函数                         │
+├─────────────────────────────────────┤
+│ 💬 聊天 (3)                         │
+│   李老师: "三角函数公式总结..."       │
+│   王学霸: "正弦函数图像如..."         │
+│                                     │
+│ 📁 文件 (2)                         │
+│   三角公式总结.md                    │
+│   正弦函数图像.pdf                   │
+│                                     │
+│ 📱 广场动态 (1)                     │
+│   李老师 · 完成了三角公式总结        │
+│                                     │
+│ 🏪 小程序 (1)                       │
+│   复习计划生成器 "自动生成复习计划"   │
+│                                     │
+│ 💻 本地文件 (1)                     │
+│   C:/Users/xxx/考试计划.docx         │
+└─────────────────────────────────────┘
+```
+
+**结果跳转：**
+| 来源类型 | 跳转目标 |
+|:---------|:---------|
+| 聊天消息 | 打开对应 Agent 聊天，定位到该消息 |
+| VFS 文件 | 打开 VFS 文件管理器，定位到该文件 |
+| 群广场动态 | 切换到 广场 Tab，展开对应卡片 |
+| 小程序 | 打开小程序运行页 |
+| 本地文件 | 本地查看（系统默认打开）|
+
+**技术实现：**
+
+Engine 侧（新增 GET /api/user/search 端点）：
+```
+GET /api/user/search?q=三角函数
+→ 并行搜索各数据源 → 合并排序 → 返回聚合结果
+```
+
+Desktop 侧：
+- src-tauri/src/search.rs（新建）— 搜索命令
+- src-tauri/src/alt_space.rs（新建）— 全局快捷键注册 + 浮层窗口
+- src-tauri/src/chat/components/search-overlay.ts（新建）— 搜索 UI
+- 关键词搜索：SQLite FTS5（聊天记录本地缓存）
+- 向量搜索：Engine /api/user/search 端点
+
+**图片搜索（远期）：**
+- VLM 为图片生成描述文本 → 存入向量索引
+- 搜"上次那张函数图"→ 找到对应图片
+- 依赖：services/image_describer.py（已有微信图片分析能力）
+
+**隐私策略：**
+- 本地文件索引：用户选择上云或本地
+- Agent 搜索审批流：Engine 返回结果前先发 Desktop 审批弹窗 → 用户确认 → 给 Agent
+- 聊天记录搜索仅限用户本人
+
+**前置依赖：** 无（Engine 索引已有，仅需加聚合端点）
+
+**决策记录：**
+| Q | 问题 | 决策 |
+|:--|:----|:-----|
+| Q1 | 快捷键绑定时机 | 首次登录官方云后绑定。退出登录时解绑。已登录断网时搜本地缓存 + 显示"部分内容搜索失败" |
+| Q2 | 结果排序 | 按相关性评分降序。本地记录用户搜索词+选取结果位置（用于未来 ML 优化）|
+| Q3 | 搜索框持久化 | 关闭时清空。AI搜索期望自然语言输入，非关键词匹配 |
+| Q4 | Agent 审批流交互 | 参照现有免打扰/非免打扰下的命令执行、文件读写审批机制（弹窗+超时处理）|
+
+**工时估计：** ~4 个 Claude Code 会话（Engine 聚合端点 ~1 + Desktop 搜索浮层 ~2 + 快捷键 ~0.5 + 审批流 ~0.5）
 
 **工时：** 4–5 天
 

@@ -11,11 +11,12 @@
 //
 // Compiled to chat.js with esbuild (see project docs).
 
-import { store, type AgentInfo, type ChatMessage, type ChatItem, type Attachment, type GroupInfo, type GroupMessage } from "./store";
+import { store, type AgentInfo, type ChatMessage, type ChatItem, type Attachment, type GroupInfo, type GroupMessage, type MomentInfo } from "./store";
 import { openCreateDialog } from "./components/create-dialog";
 import { openSidePanel } from "./components/side-panel";
 import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImageCards, clearImageCards } from "./components/input-box";
 import { openSendDialog, type PendingFile } from "./components/send-dialog";
+import { showMomentsFeed, hideMomentsFeed, addMomentCard, wireMomentsFeed, refreshMoments } from "./components/moments-feed";
 
 // ---- Tauri bridge ------------------------------------------------
 
@@ -432,6 +433,15 @@ async function selectGroup(groupId: string): Promise<void> {
     }
   }
 
+  // If coming from moments tab, switch to chat tab first
+  if (store.currentTab === "moments") {
+    hideMomentsFeed();
+    store.setTab("chat");
+    document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.tab === "chat");
+    });
+  }
+
   // Activate group chat
   store.setActiveGroup(groupId);
   renderChatList(store.chatItems);
@@ -638,13 +648,21 @@ async function sendMessage(): Promise<void> {
 
 // ---- Tab switching ----------------------------------------------
 
-function switchTab(tabId: "chat" | "profile" | "settings"): void {
+function switchTab(tabId: "chat" | "moments" | "profile" | "settings"): void {
   store.setTab(tabId);
   document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.tab === tabId);
   });
   if (tabId === "settings") {
     void invoke("open_settings_window").catch((e) => console.error("open_settings:", e));
+  } else if (tabId === "moments") {
+    hideActiveChat();
+    showMomentsFeed();
+  } else if (tabId === "chat") {
+    hideMomentsFeed();
+    if (store.activeAgentHash || store.activeGroupId) {
+      showActiveChat();
+    }
   }
 }
 
@@ -656,6 +674,15 @@ function showActiveChat(): void {
   if (!noChat || !activeChat) return;
   noChat.style.display = "none";
   activeChat.style.display = "flex";
+}
+
+function hideActiveChat(): void {
+  const noChat = $<HTMLDivElement>("no-chat-state");
+  const activeChat = $<HTMLDivElement>("active-chat");
+  if (!noChat || !activeChat) return;
+  noChat.style.display = "";
+  activeChat.style.display = "none";
+}
 
   // Update header
   if (store.activeGroupId) {
@@ -955,6 +982,36 @@ async function subscribeEvents(): Promise<void> {
   } catch (e) {
     console.error("listen group-updated:", e);
   }
+
+  // moments-event from WS (new moment pushed by engine)
+  try {
+    await listen<{ group_id: string; data?: { id: string; group_id: string; group_name?: string; agent_hash?: string; agent_name?: string; kind: string; title: string; content: string; attachments: unknown[]; created_at: number } }>("moments-event", (e) => {
+      const { group_id: _group_id, data } = e.payload;
+      if (!data) return;
+      // Convert to MomentInfo
+      const moment: MomentInfo = {
+        id: data.id,
+        group_id: data.group_id,
+        group_name: data.group_name,
+        agent_hash: data.agent_hash,
+        agent_name: data.agent_name,
+        kind: data.kind,
+        title: data.title,
+        content: data.content,
+        attachments: (data.attachments as Attachment[]) ?? [],
+        created_at: data.created_at,
+      };
+      // Add to store
+      store.addMoment(moment);
+      // If on moments tab, render immediately (store subscription handles it)
+      // Otherwise show toast
+      if (store.currentTab !== "moments") {
+        addMomentCard(moment);
+      }
+    });
+  } catch (e) {
+    console.error("listen moments-event:", e);
+  }
 }
 
 function renderEventPill(kind: string, label: string): void {
@@ -1035,15 +1092,26 @@ function wire(): void {
     });
   }
 
-  // ⋮ button → open side panel for the active agent
+  // ⋮ button → open side panel for the active agent, or group moments
   const chatMenu = $<HTMLButtonElement>("btn-chat-menu");
   if (chatMenu) {
     chatMenu.addEventListener("click", () => {
-      if (store.activeAgentHash) {
+      if (store.activeGroupId) {
+        // Group chat: navigate to group moments
+        store.setTab("moments");
+        document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.tab === "moments");
+        });
+        hideActiveChat();
+        showMomentsFeed(store.activeGroupId);
+      } else if (store.activeAgentHash) {
         void openSidePanel(store.activeAgentHash);
       }
     });
   }
+
+  // Wire moments feed
+  wireMomentsFeed();
 }
 
 document.addEventListener("DOMContentLoaded", () => {

@@ -26,6 +26,7 @@ mod file_manager;
 mod file_ops;
 mod group;
 mod local_setup;
+mod moments;
 mod right_click;
 mod settings;
 mod side_panel;
@@ -189,6 +190,9 @@ pub fn run() {
             group::remove_group_member,
             group::delete_group,
             chat::send_group_message,
+            moments::get_moments,
+            moments::post_moment,
+            moments::delete_moment,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

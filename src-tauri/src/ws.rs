@@ -416,6 +416,19 @@ impl WsClient {
                     let _ = handle.emit("group-updated", payload);
                 }
             }
+            WsRequest::MomentsEvent { group_id, data } => {
+                tracing::info!(
+                    group_id = group_id.as_str(),
+                    "moments_event received"
+                );
+                if let Some(ref handle) = self.app_handle {
+                    let payload = serde_json::json!({
+                        "group_id": group_id,
+                        "data": data,
+                    });
+                    let _ = handle.emit("moments-event", payload);
+                }
+            }
             WsRequest::Pong => {}
         }
         Ok(())
