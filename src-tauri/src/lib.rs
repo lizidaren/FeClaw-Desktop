@@ -37,7 +37,6 @@ use crate::ws::WsClient;
 use crate::ws_types::ConnectionStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::async_runtime;
 use tauri::Emitter;
 use tauri::Manager;
 use tokio::sync::mpsc;
@@ -141,7 +140,7 @@ pub fn run() {
                 _ => false,
             };
             if is_first {
-                if let Err(e) = welcome::open_welcome_window(handle.clone()) {
+                if let Err(e) = welcome::open_welcome_window(handle.clone()).await {
                     tracing::warn!("failed to open welcome window on first launch: {e}");
                 }
             }

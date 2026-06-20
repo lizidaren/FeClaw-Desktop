@@ -4,7 +4,6 @@
 //! enforces a configurable timeout, and truncates over-long output so a
 //! runaway command can't blow up our WebSocket frame.
 
-use anyhow::Result;
 use serde::Serialize;
 use std::path::Path;
 use std::process::Stdio;

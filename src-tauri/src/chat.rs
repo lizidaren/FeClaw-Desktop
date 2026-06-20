@@ -18,6 +18,7 @@
 //! which emits the `chat-event` Tauri event.
 
 use crate::AppState;
+use tauri::Manager;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::Emitter;
@@ -168,8 +169,13 @@ pub async fn send_chat_message(
         .map_err(|e| format!("序列化消息失败：{e}"))?;
 
     let tx = state.ws_outgoing.clone();
-    tx.send(json)
-        .map_err(|_| "WebSocket 已断开，消息仅保存到本地".to_string())?;
+    let tx_guard = tx.write().await;
+    if let Some(tx) = tx_guard.as_ref() {
+        tx.send(json)
+            .map_err(|_| "WebSocket 已断开，消息仅保存到本地".to_string())?;
+    } else {
+        return Err("WebSocket 发送端未初始化".to_string());
+    }
 
     Ok(id)
 }
@@ -285,8 +291,13 @@ pub async fn send_consent_response(
         .map_err(|e| format!("序列化同意响应失败：{e}"))?;
 
     let tx = state.ws_outgoing.clone();
-    tx.send(json)
-        .map_err(|_| "WebSocket 已断开，无法发送同意响应".to_string())?;
+    let tx_guard = tx.write().await;
+    if let Some(tx) = tx_guard.as_ref() {
+        tx.send(json)
+            .map_err(|_| "WebSocket 已断开，无法发送同意响应".to_string())?;
+    } else {
+        return Err("WebSocket 发送端未初始化".to_string());
+    }
     Ok(())
 }
 

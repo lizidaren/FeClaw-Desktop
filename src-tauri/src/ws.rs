@@ -16,7 +16,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use crate::chat::{self, ChatMessage};
 use crate::consent::{ConsentManager, Decision};
 use crate::executor::CommandExecutor;
 use crate::ws_types::{
@@ -31,10 +30,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::async_runtime;
-use tauri::Emitter;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -337,6 +334,29 @@ impl WsClient {
             }
             WsRequest::Notification { payload, .. } => {
                 self.show_native_notification(&payload);
+            }
+            WsRequest::ChatReply { id, text, agent, timestamp } => {
+                tracing::info!(
+                    agent = agent.as_deref(),
+                    id = id.as_str(),
+                    "chat_reply received (length={}) — handled by persist_and_emit in a later PR",
+                    text.len()
+                );
+            }
+            WsRequest::ChatEvent { id, kind, data, timestamp } => {
+                tracing::info!(
+                    id = id.as_str(),
+                    kind = kind.as_str(),
+                    "chat_event received — streaming events not yet wired on desktop"
+                );
+            }
+            WsRequest::FileOperationRequest { op_id, operation, path, level, reason, timestamp } => {
+                tracing::info!(
+                    op_id = op_id.as_str(),
+                    operation = operation.as_str(),
+                    path = path.as_str(),
+                    "file_operation_request received — consent prompts are P1.2"
+                );
             }
             WsRequest::Pong => {}
         }

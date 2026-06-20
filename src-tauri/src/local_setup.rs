@@ -217,7 +217,7 @@ pub async fn start_feclaw(dest: String, port: u16) -> Result<String, String> {
     let child = Command::new("bash")
         .arg("-c")
         .arg(format!(
-            "cd '{}' && nohup python3 -m uvicorn main:app --host 0.0.0.0 --port {port} > /tmp/feclaw-engine.log 2>&1 &",
+            "cd '{}' && nohup python3 -m uvicorn main:app --host 0.0.0.0 --port {} > /tmp/feclaw-engine.log 2>&1 &",
             feclaw_path.display(),
             port
         ))
