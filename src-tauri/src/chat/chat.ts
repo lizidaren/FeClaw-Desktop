@@ -15,6 +15,7 @@ import { store, type AgentInfo, type ChatMessage, type ChatItem, type Attachment
 import { openCreateDialog } from "./components/create-dialog";
 import { openSidePanel } from "./components/side-panel";
 import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImageCards, clearImageCards } from "./components/input-box";
+import { openSendDialog, type PendingFile } from "./components/send-dialog";
 
 // ---- Tauri bridge ------------------------------------------------
 
@@ -726,6 +727,19 @@ async function subscribeEvents(): Promise<void> {
     );
   } catch (e) {
     console.error("listen file-operation-request:", e);
+  }
+
+  // right-click-pending — emitted by lib.rs setup when the app was launched
+  // via a Windows shell right-click with "--right-click <mode> <path>"
+  try {
+    await listen<PendingFile>("right-click-pending", (e) => {
+      const pending = e.payload;
+      if (!pending) return;
+      console.log("right-click-pending:", pending);
+      void openSendDialog(pending);
+    });
+  } catch (e) {
+    console.error("listen right-click-pending:", e);
   }
 }
 

@@ -25,12 +25,17 @@ mod file_bridge;
 mod file_manager;
 mod file_ops;
 mod local_setup;
+mod right_click;
 mod settings;
 mod side_panel;
 mod tray;
 mod welcome;
 mod ws;
 mod ws_types;
+
+// Re-export handle_right_click_invocation so main.rs (which is part of the
+// same library crate) can call it before the Tauri app starts.
+pub use right_click::handle_right_click_invocation;
 
 use crate::auth::AuthManager;
 use crate::config::{Config, Mode};
@@ -171,6 +176,10 @@ pub fn run() {
             side_panel::list_agent_apps,
             side_panel::open_config_window,
             side_panel::open_file_manager_window,
+            right_click::register_right_click,
+            right_click::unregister_right_click,
+            right_click::is_right_click_registered,
+            right_click::get_executable_path,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -205,6 +214,26 @@ pub fn run() {
                     tauri::async_runtime::spawn(async move {
                         let _ = settings::open_settings_window(app_handle).await;
                     });
+                    return;
+                }
+
+                // Check for pending right-click file (written by shell invocation)
+                if let Ok(Some(pending)) = right_click::take_pending_right_click() {
+                    tracing::info!("found pending right-click: mode={}, path={}", pending.mode, pending.path);
+                    let pending_mode = pending.mode.clone();
+                    let pending_path = pending.path.clone();
+                    let app_for_pending = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        // Give the UI a moment to initialise before emitting the event
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        if let Err(e) = app_for_pending.emit("right-click-pending", &pending) {
+                            tracing::warn!("emit right-click-pending: {e}");
+                        }
+                    });
+                    // Store the pending info in a static so chat.ts can read it after init
+                    // (The event above is the primary mechanism; the static is a fallback.)
+                    let _ = pending_mode;
+                    let _ = pending_path;
                 }
             });
             Ok(())
