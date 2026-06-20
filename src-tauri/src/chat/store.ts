@@ -10,7 +10,7 @@
 
 // ---- Types ----------------------------------------------------
 
-export type TabId = "chat" | "moments" | "profile" | "settings";
+export type TabId = "chat" | "moments" | "profile" | "settings" | "fehub";
 
 export type AgentInfo = {
   hash: string;
@@ -98,6 +98,15 @@ export type MomentInfo = {
   created_at: number;
 };
 
+export type PublishInfo = {
+  id: string;
+  agent_hash: string;
+  app_name: string;
+  tag: string;
+  is_public: boolean;
+  created_at: number;
+};
+
 // ---- Store -----------------------------------------------------
 
 class Store {
@@ -134,6 +143,9 @@ class Store {
   // Moments (群广场)
   moments: MomentInfo[] = [];
   momentsGroupFilter: string | null = null;
+
+  // FeHub publishes
+  publishes: PublishInfo[] = [];
 
   // Callbacks for reactive updates
   private listeners: Set<(store: Store) => void> = new Set();
@@ -264,6 +276,11 @@ class Store {
   getMoments(): MomentInfo[] {
     if (!this.momentsGroupFilter) return this.moments;
     return this.moments.filter((m) => m.group_id === this.momentsGroupFilter);
+  }
+
+  setPublishes(publishes: PublishInfo[]): void {
+    this.publishes = publishes;
+    this.notify();
   }
 
   subscribe(listener: (store: Store) => void): () => void {

@@ -1588,3 +1588,346 @@ html, body {
   box-shadow: 0 0 0 2px var(--primary);
   transition: box-shadow 0.3s ease;
 }
+
+/* ---- Phase 6: FeHub Tab ------------------------------------------ */
+
+.fehub-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.fehub-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.fehub-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Empty state */
+.fehub-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+  text-align: center;
+  color: var(--text-muted);
+  gap: 8px;
+}
+
+.fehub-empty-icon {
+  font-size: 48px;
+  margin-bottom: 8px;
+  opacity: 0.5;
+}
+
+.fehub-empty h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fehub-empty p {
+  margin: 0;
+  font-size: 13px;
+  max-width: 220px;
+  line-height: 1.5;
+}
+
+/* Loading */
+.fehub-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Publish list */
+.fehub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Miniapp card */
+.fehub-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.fehub-card:hover {
+  border-color: var(--primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.fehub-card-icon {
+  font-size: 32px;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elev);
+  border-radius: 10px;
+}
+
+.fehub-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.fehub-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+
+.fehub-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.fehub-card-tag {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-soft);
+}
+
+.fehub-visibility-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.fehub-visibility-badge.public {
+  background: rgba(52, 211, 153, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.fehub-visibility-badge.private {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-muted);
+  border: 1px solid var(--border-soft);
+}
+
+.fehub-card-date {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.fehub-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* FeHub action buttons */
+.fehub-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.fehub-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.fehub-btn-open {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.fehub-btn-open:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+  color: white;
+}
+
+/* Footer */
+.fehub-footer {
+  padding: 8px 0;
+}
+
+/* Publish dialog */
+.fehub-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fehub-dialog {
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.fehub-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.fehub-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fehub-dialog-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fehub-dialog-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.fehub-dialog-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.fehub-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fehub-dialog-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.fehub-dialog-input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.fehub-dialog-input:focus {
+  border-color: var(--primary);
+}
+
+.fehub-dialog-visibility {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fehub-visibility-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.fehub-visibility-option:hover {
+  background: var(--bg-hover);
+  border-color: var(--primary);
+}
+
+.fehub-visibility-option input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.fehub-visibility-option small {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.fehub-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-soft);
+}

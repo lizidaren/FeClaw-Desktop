@@ -18,6 +18,7 @@ import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImage
 import { openSendDialog, type PendingFile } from "./components/send-dialog";
 import { showMomentsFeed, hideMomentsFeed, addMomentCard, wireMomentsFeed, refreshMoments } from "./components/moments-feed";
 import { setupSearchOverlay } from "./components/search-overlay";
+import { showFehubTab, hideFehubTab } from "./components/fehub-tab";
 
 // ---- Tauri bridge ------------------------------------------------
 
@@ -649,7 +650,7 @@ async function sendMessage(): Promise<void> {
 
 // ---- Tab switching ----------------------------------------------
 
-function switchTab(tabId: "chat" | "moments" | "profile" | "settings"): void {
+function switchTab(tabId: "chat" | "moments" | "profile" | "settings" | "fehub"): void {
   store.setTab(tabId);
   document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.tab === tabId);
@@ -658,9 +659,15 @@ function switchTab(tabId: "chat" | "moments" | "profile" | "settings"): void {
     void invoke("open_settings_window").catch((e) => console.error("open_settings:", e));
   } else if (tabId === "moments") {
     hideActiveChat();
+    hideFehubTab();
     showMomentsFeed();
+  } else if (tabId === "fehub") {
+    hideActiveChat();
+    hideMomentsFeed();
+    showFehubTab();
   } else if (tabId === "chat") {
     hideMomentsFeed();
+    hideFehubTab();
     if (store.activeAgentHash || store.activeGroupId) {
       showActiveChat();
     }
@@ -1104,7 +1111,7 @@ function wire(): void {
 
   // Tab bar
   document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
-    const tab = btn.dataset.tab as "chat" | "profile" | "settings";
+    const tab = btn.dataset.tab as "chat" | "profile" | "settings" | "moments" | "fehub";
     if (tab) {
       btn.addEventListener("click", () => switchTab(tab));
     }

@@ -1791,29 +1791,47 @@ Desktop 侧：
 
 **目标：** 文件传输助手——聊天窗口底部 `📱` 按钮 → 二维码 → 手机扫码 → 拍照/选图 → 上传到 Desktop → 嵌入聊天输入框。
 
-**技术方案（Vision v3.1 指定）：**
+**全流程：**
 ```
-用户点 📱
-  → Desktop 请求 Engine POST /api/desktop/upload_session → 返回 COS 预签名 PUT URL + 临时 token
-  → Desktop 生成二维码（含 URL + token）
-  → 手机扫码 → 打开上传网页 → 拍照/选相册照片
-  → POST 到 COS 预签名 URL（直传，不走公网服务器带宽）
-  → Engine 收到 COS 通知（或 Webhook） → WS 通知 Desktop
-  → Desktop 通过预签名 URL 下载临时文件 → 嵌入聊天输入框作为图片卡片
-  → Engine 10min 后清理临时文件
+Desktop 点 📱
+  1. Engine POST /api/desktop/upload_session
+     → 返回 { session_id, presigned_put_url, filename }
+  2. Desktop 生成二维码（含 session_id + presigned_put_url）
+
+手机扫码 → 打开上传网页
+  1. 拍照或从相册选图
+  2. form action 直传 COS presigned_put_url（不走服务器带宽）
+  3. fetch POST /api/desktop/upload_done
+     { session_id, filename: "photo.jpg" }
+
+Engine 收到 upload_done
+  4. WS push → Desktop: { type: "upload_complete", session_id, filename, presigned_get_url }
+
+Desktop 收到 WS
+  5. 下载图片到内存 → data:URL → 嵌入输入框作为图片卡片
 ```
 
-**无需本地 HTTP server。** 即使在本地模式下，也可通过 FeClaw 引擎的 COS 配置签发预签名 URL。极端无 COS 场景回退本地 HTTP。
+**关键设计决策：**
+| Q | 决策 |
+|:-:|:----|
+| 上传检测 | 手机传完 COS 后主动 POST upload_done → Engine → WS 通知 Desktop。**无需轮询、无需 COS 事件通知** |
+| 本地模式 | Desktop 本地开小 HTTP server 替代 COS presigned URL，流程一致 |
 
 **关键交付：**
+
+Desktop 侧：
 - `src-tauri/src/qr_upload.rs`：QR 生成 + 上传会话管理
-- `src-tauri/src/qr_upload/index.html`：二维码弹窗
-- 引擎侧：`POST /api/desktop/upload_session` → 返回 COS presigned PUT URL + 临时 token
-- 引擎侧：`POST /api/desktop/upload_cleanup` → 10min 后清理
+- `src-tauri/src/qr_upload/upload-ui.html`：弹窗展示二维码
+- 依赖：`qrcode` crate
 
-**依赖：** `qrcode = "0.14"` / `image = "0.25"`
+Engine 侧：
+- `POST /api/desktop/upload_session` → 签发 presigned PUT URL + session_id
+- `POST /api/desktop/upload_done` → 接收上传完成通知 → WS push
+- 上传网页（Engine 托管，纯静态 HTML+JS）
+- 10min 自动清理（Engine cron 删除 COS 临时文件）
 
-**工时：** 3–4 天
+**工时：** ~2 个 Claude Code 会话
+
 
 ---
 

@@ -19,6 +19,10 @@
         <span class="tab-icon" aria-hidden="true">📱</span>
         <span class="tab-label">广场</span>
       </button>
+      <button class="tab-btn" data-tab="fehub" title="FeHub">
+        <span class="tab-icon" aria-hidden="true">🏗️</span>
+        <span class="tab-label">FeHub</span>
+      </button>
       <button class="tab-btn" data-tab="profile" title="我的">
         <span class="tab-icon" aria-hidden="true">🙋</span>
         <span class="tab-label">我的</span>
@@ -53,6 +57,14 @@
         <div class="moments-list" id="moments-list" role="listbox" aria-label="动态列表">
           <div class="moments-empty" id="moments-empty">暂无动态</div>
         </div>
+      </div>
+
+      <!-- FeHub Panel (shown when tab=fehub) -->
+      <div class="fehub-panel" id="fehub-panel" style="display:none;">
+        <div class="fehub-header">
+          <h2 class="panel-title">🏗️ FeHub</h2>
+        </div>
+        <div class="fehub-content" id="fehub-content"></div>
       </div>
     </aside>
 

@@ -22,6 +22,7 @@ mod create;
 mod db;
 mod engine;
 mod executor;
+mod fehub;
 mod file_bridge;
 mod file_manager;
 mod file_ops;
@@ -196,6 +197,8 @@ pub fn run() {
             moments::get_moments,
             moments::post_moment,
             moments::delete_moment,
+            fehub::list_my_publishes,
+            fehub::open_miniapp,
             search::search_all,
             search::search_local_chat,
             alt_space::register_search_shortcut,
