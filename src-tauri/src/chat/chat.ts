@@ -14,7 +14,7 @@
 import { store, type AgentInfo, type ChatMessage, type ChatItem } from "./store";
 import { openCreateDialog } from "./components/create-dialog";
 import { openSidePanel } from "./components/side-panel";
-import { setupInputBox, getFileCards, clearFileCards } from "./components/input-box";
+import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImageCards, clearImageCards } from "./components/input-box";
 
 // ---- Tauri bridge ------------------------------------------------
 
@@ -230,12 +230,13 @@ async function sendMessage(): Promise<void> {
   const btn = $<HTMLButtonElement>("btn-send");
   if (!input || !btn) return;
   const text = input.value.trim();
-  if (!text && getFileCards().length === 0) return;
+  const imgCards = getImageCards();
+  if (!text && getFileCards().length === 0 && imgCards.length === 0) return;
   if (!store.activeAgentHash) return;
 
   btn.disabled = true;
 
-  // Build message text including file card info
+  // Build message text including file card info and image markers
   const cards = getFileCards();
   let fullText = text;
   if (cards.length > 0) {
@@ -245,46 +246,88 @@ async function sendMessage(): Promise<void> {
     }).join("\n");
     fullText = (fullText ? text + "\n" : "") + cardLines;
   }
+  // Append image markers
+  for (const img of imgCards) {
+    fullText += (fullText ? "\n" : "") + `[image:${img.temp_path}]`;
+  }
 
   input.value = "";
   autoResize();
   clearFileCards();
 
-  // Optimistic local echo
-  const id = `msg-${Date.now()}`;
-  const ts = Math.floor(Date.now() / 1000);
-  const msg: ChatMessage = {
-    id,
-    channel: `im:${store.activeAgentHash}`,
-    agent_hash: store.activeAgentHash,
-    role: "user",
-    content: text,
-    message_type: "text",
-    created_at: ts,
-    synced: false,
-    is_deleted: false,
-    timestamp: formatTime(ts),
-  };
-
-  // Insert into DB
-  try {
-    await invoke("insert_chat_message", {
-      id: msg.id,
-      channel: msg.channel,
-      agentHash: store.activeAgentHash,
-      role: msg.role,
-      content: msg.content,
-      messageType: msg.message_type ?? "text",
-      createdAt: ts * 1000, // ms
-    });
-  } catch (e) {
-    console.error("insert_chat_message failed:", e);
+  // Send image messages first (each as its own bubble)
+  for (const img of imgCards) {
+    const imgId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const imgTs = Math.floor(Date.now() / 1000);
+    const imgMsg: ChatMessage = {
+      id: imgId,
+      channel: `im:${store.activeAgentHash}`,
+      agent_hash: store.activeAgentHash,
+      role: "user",
+      content: img.data_url,
+      message_type: "image",
+      created_at: imgTs,
+      synced: false,
+      is_deleted: false,
+      timestamp: formatTime(imgTs),
+    };
+    try {
+      await invoke("insert_chat_message", {
+        id: imgMsg.id,
+        channel: imgMsg.channel,
+        agentHash: store.activeAgentHash,
+        role: imgMsg.role,
+        content: imgMsg.content,
+        messageType: "image",
+        createdAt: imgTs * 1000,
+      });
+    } catch (e) {
+      console.error("insert_chat_message (image) failed:", e);
+    }
+    store.appendMessage(imgMsg);
+    const list = $<HTMLDivElement>("messages");
+    if (list) renderMessageEl(list, imgMsg);
   }
-
-  store.appendMessage(msg);
-  const list = $<HTMLDivElement>("messages");
-  if (list) renderMessageEl(list, msg);
+  clearImageCards();
   scrollToBottom();
+
+  // Optimistic local echo for text message (only if there's text)
+  if (text) {
+    const id = `msg-${Date.now()}`;
+    const ts = Math.floor(Date.now() / 1000);
+    const msg: ChatMessage = {
+      id,
+      channel: `im:${store.activeAgentHash}`,
+      agent_hash: store.activeAgentHash,
+      role: "user",
+      content: text,
+      message_type: "text",
+      created_at: ts,
+      synced: false,
+      is_deleted: false,
+      timestamp: formatTime(ts),
+    };
+
+    // Insert into DB
+    try {
+      await invoke("insert_chat_message", {
+        id: msg.id,
+        channel: msg.channel,
+        agentHash: store.activeAgentHash,
+        role: msg.role,
+        content: msg.content,
+        messageType: msg.message_type ?? "text",
+        createdAt: ts * 1000, // ms
+      });
+    } catch (e) {
+      console.error("insert_chat_message failed:", e);
+    }
+
+    store.appendMessage(msg);
+    const list = $<HTMLDivElement>("messages");
+    if (list) renderMessageEl(list, msg);
+    scrollToBottom();
+  }
 
   // Send via WS
   try {
@@ -293,7 +336,7 @@ async function sendMessage(): Promise<void> {
     const errMsg = typeof e === "string" ? e : "发送失败";
     store.appendMessage({
       id: `err-${Date.now()}`,
-      channel: msg.channel,
+      channel: `im:${store.activeAgentHash}`,
       agent_hash: store.activeAgentHash,
       role: "assistant",
       content: `⚠ ${errMsg}`,
@@ -304,7 +347,7 @@ async function sendMessage(): Promise<void> {
     if (list2) {
       renderMessageEl(list2, {
         id: `err-${Date.now()}`,
-        channel: msg.channel,
+        channel: `im:${store.activeAgentHash}`,
         agent_hash: store.activeAgentHash,
         role: "assistant",
         content: `⚠ ${errMsg}`,
@@ -316,43 +359,6 @@ async function sendMessage(): Promise<void> {
     btn.disabled = false;
     input.focus();
   }
-}
-
-// ---- Image paste -------------------------------------------------
-
-async function handlePaste(e: ClipboardEvent): Promise<void> {
-  const items = e.clipboardData?.items;
-  if (!items) return;
-
-  for (const item of items) {
-    if (item.type.startsWith("image/")) {
-      e.preventDefault();
-      const file = item.getAsFile();
-      if (!file) continue;
-      await saveAndInsertImage(file);
-      return;
-    }
-  }
-}
-
-async function saveAndInsertImage(file: File): Promise<void> {
-  if (!store.activeAgentHash) return;
-  const reader = new FileReader();
-  reader.onload = async (ev) => {
-    const base64 = ev.target?.result as string;
-    if (!base64) return;
-    // In V3 Phase 0a, images go to Agent VFS images/
-    // For now, embed as data URL (Phase 2+ will handle VFS write)
-    const input = $<HTMLTextAreaElement>("input");
-    if (!input) return;
-    // Append image marker to input as placeholder
-    const marker = `[image:${file.name}]`;
-    input.value = (input.value || "") + marker;
-    autoResize();
-    // TODO: invoke('save_image_to_vfs', { agent_hash, base64, filename })
-    // This is deferred to Phase 2 (VFS file manager)
-  };
-  reader.readAsDataURL(file);
 }
 
 // ---- Tab switching ----------------------------------------------
@@ -568,8 +574,10 @@ function describeToolCall(data: unknown): string {
 // ---- Wire -------------------------------------------------------
 
 function wire(): void {
-  // Set up the extended input box (file cards, attachment button)
+  // Set up the extended input box (file cards, attachment button, image paste)
   setupInputBox();
+  // Load and render template bar after init
+  void setupTemplateBar();
 
   // Listen for agent-created events from create-dialog
   window.addEventListener("agent-created", ((e: CustomEvent<{ agentHash: string }>) => {
@@ -600,8 +608,6 @@ function wire(): void {
     input.addEventListener("input", () => {
       store.setDraft(input.value);
     });
-    // Paste image
-    input.addEventListener("paste", handlePaste);
   }
 
   if (send) {

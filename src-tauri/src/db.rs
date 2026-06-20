@@ -317,3 +317,199 @@ pub fn delete_chat_message(id: String) -> Result<(), String> {
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// Screenshot / pasted image
+// ---------------------------------------------------------------------------
+
+/// Info returned after saving a temp image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TempImageInfo {
+    pub temp_path: String,
+    pub name: String,
+    pub size_bytes: u64,
+}
+
+/// Save a base64-encoded image to `~/.feclaw/temp/uploads/` and return its path.
+#[tauri::command]
+pub fn save_temp_image(base64_data: String) -> Result<TempImageInfo, String> {
+    // Strip data URL prefix if present (e.g. "data:image/png;base64,")
+    let data = if base64_data.contains(',') {
+        base64_data.split(',').nth(1).unwrap_or(&base64_data)
+    } else {
+        &base64_data
+    };
+
+    let decoded = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        data.trim(),
+    )
+    .map_err(|e| format!("base64 decode failed: {e}"))?;
+
+    let size_bytes = decoded.len() as u64;
+
+    // Determine extension from magic bytes
+    let extension = if decoded.len() >= 3 {
+        match &decoded[0..3] {
+            [0x89, 0x50, 0x4E] => "png",
+            [0xFF, 0xD8, 0xFF] => "jpg",
+            [0x47, 0x49, 0x46] => "gif",
+            [0x52, 0x49, 0x46, 0x46] => "webp",
+            _ => "png",
+        }
+    } else {
+        "png"
+    };
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let name = format!("img_{}.{}", timestamp, extension);
+
+    let upload_dir = Config::config_dir().join("temp").join("uploads");
+    std::fs::create_dir_all(&upload_dir)
+        .map_err(|e| format!("create temp dir failed: {e}"))?;
+
+    let path = upload_dir.join(&name);
+    std::fs::write(&path, &decoded)
+        .map_err(|e| format!("write image file failed: {e}"))?;
+
+    Ok(TempImageInfo {
+        temp_path: path.to_string_lossy().to_string(),
+        name,
+        size_bytes,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Prompt templates
+// ---------------------------------------------------------------------------
+
+/// A prompt template (built-in or custom).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptTemplate {
+    pub id: String,
+    pub name: String,
+    /// The prefix text inserted into the input when the template is selected.
+    pub prefix: String,
+    pub category: String, // "builtin" | "custom"
+    pub created_at: u64,
+}
+
+/// Input for saving a custom template.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptTemplateInput {
+    pub id: String,
+    pub name: String,
+    pub prefix: String,
+}
+
+/// Built-in templates (always present, not stored in SQLite).
+fn builtin_templates() -> Vec<PromptTemplate> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    vec![
+        PromptTemplate {
+            id: "builtin_summary".into(),
+            name: "总结".into(),
+            prefix: "请总结以下内容：\n\n".into(),
+            category: "builtin".into(),
+            created_at: now,
+        },
+        PromptTemplate {
+            id: "builtin_translate".into(),
+            name: "翻译".into(),
+            prefix: "请将以下内容翻译成英文：\n\n".into(),
+            category: "builtin".into(),
+            created_at: now,
+        },
+        PromptTemplate {
+            id: "builtin_check_grammar".into(),
+            name: "检查语法".into(),
+            prefix: "请检查以下内容的语法：\n\n".into(),
+            category: "builtin".into(),
+            created_at: now,
+        },
+        PromptTemplate {
+            id: "builtin_rewrite".into(),
+            name: "改写".into(),
+            prefix: "请改写以下内容：\n\n".into(),
+            category: "builtin".into(),
+            created_at: now,
+        },
+        PromptTemplate {
+            id: "builtin_explain_code".into(),
+            name: "解释代码".into(),
+            prefix: "请解释以下代码：\n\n".into(),
+            category: "builtin".into(),
+            created_at: now,
+        },
+        PromptTemplate {
+            id: "builtin_optimize_code".into(),
+            name: "优化代码".into(),
+            prefix: "请优化以下代码：\n\n".into(),
+            category: "builtin".into(),
+            created_at: now,
+        },
+    ]
+}
+
+/// Get all prompt templates (built-in + custom).
+#[tauri::command]
+pub fn get_prompt_templates() -> Result<Vec<PromptTemplate>, String> {
+    let mut templates = builtin_templates();
+
+    with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, content, created_at FROM prompt_templates ORDER BY sort_order ASC, created_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PromptTemplate {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                prefix: row.get(2)?,
+                category: "custom".into(),
+                created_at: row.get::<_, i64>(3)? as u64,
+            })
+        })?;
+        for row in rows {
+            templates.push(row.map_err(|e| format!("read template row failed: {e}"))?);
+        }
+        Ok(templates)
+    })
+}
+
+/// Save (create or update) a custom prompt template.
+#[tauri::command]
+pub fn save_prompt_template(input: PromptTemplateInput) -> Result<(), String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    with_conn(|conn| {
+        conn.execute(
+            "INSERT OR REPLACE INTO prompt_templates (id, name, content, sort_order, created_at)
+             VALUES (?1, ?2, ?3, 100, ?4)",
+            params![input.id, input.name, input.prefix, now],
+        )?;
+        Ok(())
+    })
+}
+
+/// Delete a custom prompt template by id (built-in templates cannot be deleted).
+#[tauri::command]
+pub fn delete_prompt_template(id: String) -> Result<(), String> {
+    if id.starts_with("builtin_") {
+        return Err("Cannot delete built-in templates".into());
+    }
+    with_conn(|conn| {
+        conn.execute("DELETE FROM prompt_templates WHERE id = ?1", params![id])?;
+        Ok(())
+    })
+}
