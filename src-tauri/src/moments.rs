@@ -4,7 +4,7 @@
 //! and delete moment posts.
 
 use crate::config::Config;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -24,22 +24,22 @@ struct Credentials {
 }
 
 /// Read the JWT from the local-credentials file.
-fn load_token() -> Result<String> {
+fn load_token() -> Result<String, String> {
     let path = credentials_path();
-    let content = fs::read_to_string(&path)?;
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let creds: Credentials =
-        serde_json::from_str(&content).map_err(|e| anyhow!("parse credentials: {e}"))?;
+        serde_json::from_str(&content).map_err(|e| format!("parse credentials: {e}"))?;
     creds
         .token
-        .ok_or_else(|| anyhow!("no token in credentials file"))
+        .ok_or_else(|| "no token in credentials file".to_string())
 }
 
 /// Build the HTTP client with JWT bearer auth.
-fn build_client() -> Result<reqwest::Client> {
+fn build_client() -> Result<reqwest::Client, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| anyhow!("build reqwest client: {e}"))?;
+        .map_err(|e| format!("build reqwest client: {e}"))?;
     Ok(client)
 }
 
@@ -48,14 +48,14 @@ fn engine_url() -> String {
     config.engine_url()
 }
 
-fn authed() -> Result<reqwest::Client> {
-    let token = load_token()?;
-    let client = build_client()?;
+fn authed() -> Result<reqwest::Client, String> {
+    let _token = load_token()?;
+    let _client = build_client()?;
     // Attach JWT to a cloned builder so the original client is not consumed.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| anyhow!("build reqwest client: {e}"))?;
+        .map_err(|e| format!("build reqwest client: {e}"))?;
     Ok(client)
 }
 
@@ -94,7 +94,7 @@ struct PostMomentRequest {
 
 /// Fetch moments, optionally filtered by group_id.
 #[tauri::command]
-pub async fn get_moments(group_id: Option<String>) -> Result<Vec<MomentInfo>> {
+pub async fn get_moments(group_id: Option<String>) -> Result<Vec<MomentInfo>, String> {
     let client = authed()?;
     let token = load_token()?;
     let mut url = format!("{}/api/user/moments", engine_url());
@@ -106,20 +106,20 @@ pub async fn get_moments(group_id: Option<String>) -> Result<Vec<MomentInfo>> {
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| anyhow!("get_moments request: {e}"))?;
+        .map_err(|e| format!("get_moments request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("get_moments failed: {}", resp.status()));
+        return Err(format!("get_moments failed: {}", resp.status()));
     }
     let moments: Vec<MomentInfo> = resp
         .json()
         .await
-        .map_err(|e| anyhow!("parse get_moments response: {e}"))?;
+        .map_err(|e| format!("parse get_moments response: {e}"))?;
     Ok(moments)
 }
 
 /// Post a new moment to a group.
 #[tauri::command]
-pub async fn post_moment(group_id: String, title: String, content: String) -> Result<()> {
+pub async fn post_moment(group_id: String, title: String, content: String) -> Result<(), String> {
     let client = authed()?;
     let token = load_token()?;
     let url = format!("{}/api/user/moments", engine_url());
@@ -134,16 +134,16 @@ pub async fn post_moment(group_id: String, title: String, content: String) -> Re
         .json(&body)
         .send()
         .await
-        .map_err(|e| anyhow!("post_moment request: {e}"))?;
+        .map_err(|e| format!("post_moment request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("post_moment failed: {}", resp.status()));
+        return Err(format!("post_moment failed: {}", resp.status()));
     }
     Ok(())
 }
 
 /// Delete a moment.
 #[tauri::command]
-pub async fn delete_moment(group_id: String, moment_id: String) -> Result<()> {
+pub async fn delete_moment(group_id: String, moment_id: String) -> Result<(), String> {
     let client = authed()?;
     let token = load_token()?;
     let url = format!("{}/api/groups/{}/moments/{}", engine_url(), group_id, moment_id);
@@ -152,9 +152,9 @@ pub async fn delete_moment(group_id: String, moment_id: String) -> Result<()> {
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| anyhow!("delete_moment request: {e}"))?;
+        .map_err(|e| format!("delete_moment request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("delete_moment failed: {}", resp.status()));
+        return Err(format!("delete_moment failed: {}", resp.status()));
     }
     Ok(())
 }

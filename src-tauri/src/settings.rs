@@ -53,7 +53,7 @@ impl Settings {
             Err(_) => {
                 let s = Self::default();
                 // Best-effort persist of defaults.
-                let path = path.clone();
+                let _path = path.clone();
                 let s_clone = s.clone();
                 tokio::spawn(async move {
                     let _ = s_clone.save().await;

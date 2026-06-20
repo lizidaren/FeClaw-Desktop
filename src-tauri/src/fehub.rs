@@ -4,7 +4,7 @@
 //! Calls the Engine's `/api/fehub/apps` endpoint to list published apps.
 
 use crate::config::Config;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -24,22 +24,22 @@ struct Credentials {
 }
 
 /// Read the JWT from the local-credentials file.
-fn load_token() -> Result<String> {
+fn load_token() -> Result<String, String> {
     let path = credentials_path();
-    let content = fs::read_to_string(&path)?;
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let creds: Credentials =
-        serde_json::from_str(&content).map_err(|e| anyhow!("parse credentials: {e}"))?;
+        serde_json::from_str(&content).map_err(|e| format!("parse credentials: {e}"))?;
     creds
         .token
-        .ok_or_else(|| anyhow!("no token in credentials file"))
+        .ok_or_else(|| "no token in credentials file".to_string())
 }
 
 /// Build an HTTP client.
-fn build_client() -> Result<reqwest::Client> {
+fn build_client() -> Result<reqwest::Client, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| anyhow!("build reqwest client: {e}"))?;
+        .map_err(|e| format!("build reqwest client: {e}"))?;
     Ok(client)
 }
 
@@ -69,7 +69,7 @@ pub struct PublishInfo {
 
 /// List all miniapps published by the current user.
 #[tauri::command]
-pub async fn list_my_publishes() -> Result<Vec<PublishInfo>> {
+pub async fn list_my_publishes() -> Result<Vec<PublishInfo>, String> {
     let token = load_token()?;
     let url = format!("{}/api/fehub/apps", engine_url());
     let resp = build_client()?
@@ -77,9 +77,9 @@ pub async fn list_my_publishes() -> Result<Vec<PublishInfo>> {
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| anyhow!("list_my_publishes request: {e}"))?;
+        .map_err(|e| format!("list_my_publishes request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!(
+        return Err(format!(
             "list_my_publishes failed: {}",
             resp.status()
         ));
@@ -87,7 +87,7 @@ pub async fn list_my_publishes() -> Result<Vec<PublishInfo>> {
     let publishes: Vec<PublishInfo> = resp
         .json()
         .await
-        .map_err(|e| anyhow!("parse list_my_publishes response: {e}"))?;
+        .map_err(|e| format!("parse list_my_publishes response: {e}"))?;
     Ok(publishes)
 }
 

@@ -5,7 +5,7 @@
 //! when the app is logged in but has no network connectivity.
 
 use crate::config::Config;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -63,13 +63,13 @@ struct Credentials {
     token: Option<String>,
 }
 
-fn load_token() -> Result<String> {
+fn load_token() -> Result<String, String> {
     let path = credentials_path();
-    let content = fs::read_to_string(&path)?;
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let creds: Credentials =
-        serde_json::from_str(&content).map_err(|e| anyhow!("parse credentials: {e}"))?;
+        serde_json::from_str(&content).map_err(|e| format!("parse credentials: {e}"))?;
     creds.token
-        .ok_or_else(|| anyhow!("no token in credentials file"))
+        .ok_or_else(|| "no token in credentials file".to_string())
 }
 
 fn engine_url() -> String {
@@ -84,7 +84,7 @@ fn engine_url() -> String {
 /// Call GET /api/user/search?q={query} on the Engine.
 /// Returns results grouped by source (chat, vfs, moments, textbook, miniapps).
 #[tauri::command]
-pub async fn search_all(query: String) -> Result<SearchResult> {
+pub async fn search_all(query: String) -> Result<SearchResult, String> {
     if query.trim().is_empty() {
         return Ok(SearchResult {
             query,
@@ -100,25 +100,25 @@ pub async fn search_all(query: String) -> Result<SearchResult> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| anyhow!("build reqwest client: {e}"))?;
+        .map_err(|e| format!("build reqwest client: {e}"))?;
 
     let resp = client
         .get(&url)
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| anyhow!("search request failed: {e}"))?;
+        .map_err(|e| format!("search request failed: {e}"))?;
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     if !resp.status().is_success() {
-        return Err(anyhow!("search_all failed: {}", resp.status()));
+        return Err(format!("search_all failed: {}", resp.status()));
     }
 
     let results: HashMap<String, SourceResults> = resp
         .json()
         .await
-        .map_err(|e| anyhow!("parse search response: {e}"))?;
+        .map_err(|e| format!("parse search response: {e}"))?;
 
     Ok(SearchResult {
         query,
@@ -130,7 +130,7 @@ pub async fn search_all(query: String) -> Result<SearchResult> {
 /// Search local SQLite chat_messages table using FTS5.
 /// Used when offline (cloud mode with no connection).
 #[tauri::command]
-pub async fn search_local_chat(query: String) -> Result<Vec<SearchItem>> {
+pub async fn search_local_chat(query: String) -> Result<Vec<SearchItem>, String> {
     use rusqlite::{Connection, params};
 
     if query.trim().is_empty() {
@@ -142,7 +142,7 @@ pub async fn search_local_chat(query: String) -> Result<Vec<SearchItem>> {
         return Ok(vec![]);
     }
 
-    let conn = Connection::open(&db_path)?;
+    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
 
     // Ensure FTS5 virtual table exists
     conn.execute(
@@ -151,10 +151,10 @@ pub async fn search_local_chat(query: String) -> Result<Vec<SearchItem>> {
             content_rowid='id'
         )",
         [],
-    )?;
+    ).map_err(|e| e.to_string())?;
 
     // Simple LIKE-based search on content (FTS5 requires FTS queries)
-    let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
+    let _fts_query = format!("\"{}\"", query.replace('"', "\"\""));
 
     let mut stmt = conn.prepare(
         "SELECT id, agent_hash, content, created_at
@@ -162,7 +162,7 @@ pub async fn search_local_chat(query: String) -> Result<Vec<SearchItem>> {
          WHERE content LIKE ?1
          ORDER BY created_at DESC
          LIMIT 50"
-    )?;
+    ).map_err(|e| e.to_string())?;
 
     let pattern = format!("%{}%", query);
     let rows = stmt.query_map(params![pattern], |row| {
@@ -194,7 +194,7 @@ pub async fn search_local_chat(query: String) -> Result<Vec<SearchItem>> {
             source: "chat".to_string(),
             reference: None,
         })
-    })?;
+    }).map_err(|e| e.to_string())?;
 
     let mut items = Vec::new();
     for item in rows {

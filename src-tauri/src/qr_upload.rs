@@ -9,7 +9,7 @@
 //!   6. Image is added to the chat input as an image card
 
 use crate::config::Config;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use image::Luma;
 use serde::{Deserialize, Serialize};
@@ -30,22 +30,22 @@ struct Credentials {
     token: Option<String>,
 }
 
-fn load_token() -> Result<String> {
+fn load_token() -> Result<String, String> {
     let path = credentials_path();
-    let content = fs::read_to_string(&path)?;
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let creds: Credentials =
-        serde_json::from_str(&content).map_err(|e| anyhow!("parse credentials: {e}"))?;
+        serde_json::from_str(&content).map_err(|e| format!("parse credentials: {e}"))?;
     creds
         .token
-        .ok_or_else(|| anyhow!("no token in credentials file"))
+        .ok_or_else(|| "no token in credentials file".to_string())
 }
 
-fn build_client() -> Result<reqwest::Client> {
-    let token = load_token()?;
+fn build_client() -> Result<reqwest::Client, String> {
+    let _token = load_token()?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| anyhow!("build reqwest client: {e}"))?;
+        .map_err(|e| format!("build reqwest client: {e}"))?;
     // Re-attaching bearer auth each call via clone
     Ok(client)
 }
@@ -55,7 +55,7 @@ fn engine_url() -> String {
     config.engine_url()
 }
 
-fn authed_client() -> Result<reqwest::Client> {
+fn authed_client() -> Result<reqwest::Client, String> {
     build_client()
 }
 
@@ -74,12 +74,12 @@ pub struct UploadSession {
 // ---- QR code generation ---------------------------------------------------
 
 /// Generate a QR code PNG as a base64-encoded data URL.
-pub fn generate_qr_image(data: &str) -> Result<String> {
+pub fn generate_qr_image(data: &str) -> Result<String, String> {
     use qrcode::QrCode;
     use image::ImageEncoder;
 
     let code = QrCode::new(data.as_bytes())
-        .map_err(|e| anyhow!("qrcode encode error: {e}"))?;
+        .map_err(|e| format!("qrcode encode error: {e}"))?;
 
     // Render to grayscale image
     let image = code.render::<Luma<u8>>().build();
@@ -93,7 +93,7 @@ pub fn generate_qr_image(data: &str) -> Result<String> {
         image.height(),
         image::ExtendedColorType::L8,
     )
-    .map_err(|e| anyhow!("png encode error: {e}"))?;
+    .map_err(|e| format!("png encode error: {e}"))?;
 
     // Wrap as data URL
     let b64 = BASE64.encode(&buf);
@@ -103,7 +103,7 @@ pub fn generate_qr_image(data: &str) -> Result<String> {
 // ---- Tauri commands -------------------------------------------------------
 
 #[tauri::command]
-pub async fn create_upload_session() -> Result<UploadSession> {
+pub async fn create_upload_session() -> Result<UploadSession, String> {
     let client = authed_client()?;
     let token = load_token()?;
     let url = format!("{}/api/desktop/upload_session", engine_url());
@@ -113,42 +113,42 @@ pub async fn create_upload_session() -> Result<UploadSession> {
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| anyhow!("create_upload_session request: {e}"))?;
+        .map_err(|e| format!("create_upload_session request: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(anyhow!("create_upload_session failed: {}", resp.status()));
+        return Err(format!("create_upload_session failed: {}", resp.status()));
     }
 
     let session: UploadSession = resp
         .json()
         .await
-        .map_err(|e| anyhow!("parse upload_session response: {e}"))?;
+        .map_err(|e| format!("parse upload_session response: {e}"))?;
 
     Ok(session)
 }
 
 #[tauri::command]
-pub async fn generate_qr_code(data: String) -> Result<String> {
+pub async fn generate_qr_code(data: String) -> Result<String, String> {
     generate_qr_image(&data)
 }
 
 #[tauri::command]
-pub async fn download_uploaded_file(url: String) -> Result<String> {
+pub async fn download_uploaded_file(url: String) -> Result<String, String> {
     let client = authed_client()?;
     let resp = client
         .get(&url)
         .send()
         .await
-        .map_err(|e| anyhow!("download_uploaded_file request: {e}"))?;
+        .map_err(|e| format!("download_uploaded_file request: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(anyhow!("download_uploaded_file failed: {}", resp.status()));
+        return Err(format!("download_uploaded_file failed: {}", resp.status()));
     }
 
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| anyhow!("read download bytes: {e}"))?;
+        .map_err(|e| format!("read download bytes: {e}"))?;
 
     // Detect content type from URL or default to image/png
     let mime = if url.contains(".jpg") || url.contains(".jpeg") {

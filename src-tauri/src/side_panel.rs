@@ -341,7 +341,7 @@ pub async fn open_config_window<R: tauri::Runtime>(
                 format!("{}/settings", base.trim_end_matches('/'))
             }
             crate::config::Mode::Cloud => {
-                let base = config.cloud_base_url().unwrap_or("https://feclaw.lizidaren.cn");
+                let _base = config.cloud_base_url().unwrap_or("https://feclaw.lizidaren.cn");
                 format!("https://{}.feclaw.lizidaren.cn/settings", agent_hash)
             }
         }

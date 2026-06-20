@@ -5,7 +5,7 @@
 //! credential store used by [`crate::auth::AuthManager`]).
 
 use crate::config::Config;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -25,23 +25,23 @@ struct Credentials {
 }
 
 /// Read the JWT from the local-credentials file.
-fn load_token() -> Result<String> {
+fn load_token() -> Result<String, String> {
     let path = credentials_path();
-    let content = fs::read_to_string(&path)?;
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let creds: Credentials =
-        serde_json::from_str(&content).map_err(|e| anyhow!("parse credentials: {e}"))?;
+        serde_json::from_str(&content).map_err(|e| format!("parse credentials: {e}"))?;
     creds
         .token
-        .ok_or_else(|| anyhow!("no token in credentials file"))
+        .ok_or_else(|| "no token in credentials file".to_string())
 }
 
 /// Build the HTTP client with JWT bearer auth.
-fn build_client() -> Result<reqwest::Client> {
-    let token = load_token()?;
+fn build_client() -> Result<reqwest::Client, String> {
+    let _token = load_token()?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| anyhow!("build reqwest client: {e}"))?;
+        .map_err(|e| format!("build reqwest client: {e}"))?;
     // Attach JWT to a cloned builder so the original client is not consumed.
     let client = client;
     Ok(client)
@@ -52,7 +52,7 @@ fn engine_url() -> String {
     config.engine_url()
 }
 
-fn authed() -> Result<reqwest::Client> {
+fn authed() -> Result<reqwest::Client, String> {
     build_client()
 }
 
@@ -98,45 +98,45 @@ pub struct GroupMessageInfo {
 // ---- Tauri commands --------------------------------------------------
 
 #[tauri::command]
-pub async fn list_groups() -> Result<Vec<GroupInfo>> {
+pub async fn list_groups() -> Result<Vec<GroupInfo>, String> {
     let client = authed()?;
     let url = format!("{}/api/groups", engine_url());
     let resp = client
         .get(&url)
         .send()
         .await
-        .map_err(|e| anyhow!("list_groups request: {e}"))?;
+        .map_err(|e| format!("list_groups request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("list_groups failed: {}", resp.status()));
+        return Err(format!("list_groups failed: {}", resp.status()));
     }
     let groups: Vec<GroupInfo> = resp
         .json()
         .await
-        .map_err(|e| anyhow!("parse list_groups response: {e}"))?;
+        .map_err(|e| format!("parse list_groups response: {e}"))?;
     Ok(groups)
 }
 
 #[tauri::command]
-pub async fn get_group_detail(group_id: String) -> Result<GroupInfo> {
+pub async fn get_group_detail(group_id: String) -> Result<GroupInfo, String> {
     let client = authed()?;
     let url = format!("{}/api/groups/{}", engine_url(), group_id);
     let resp = client
         .get(&url)
         .send()
         .await
-        .map_err(|e| anyhow!("get_group_detail request: {e}"))?;
+        .map_err(|e| format!("get_group_detail request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("get_group_detail failed: {}", resp.status()));
+        return Err(format!("get_group_detail failed: {}", resp.status()));
     }
     let group: GroupInfo = resp
         .json()
         .await
-        .map_err(|e| anyhow!("parse get_group_detail response: {e}"))?;
+        .map_err(|e| format!("parse get_group_detail response: {e}"))?;
     Ok(group)
 }
 
 #[tauri::command]
-pub async fn get_group_messages(group_id: String, before: Option<u64>) -> Result<Vec<GroupMessageInfo>> {
+pub async fn get_group_messages(group_id: String, before: Option<u64>) -> Result<Vec<GroupMessageInfo>, String> {
     let client = authed()?;
     let mut url = format!("{}/api/groups/{}/messages?limit=50", engine_url(), group_id);
     if let Some(b) = before {
@@ -146,19 +146,19 @@ pub async fn get_group_messages(group_id: String, before: Option<u64>) -> Result
         .get(&url)
         .send()
         .await
-        .map_err(|e| anyhow!("get_group_messages request: {e}"))?;
+        .map_err(|e| format!("get_group_messages request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("get_group_messages failed: {}", resp.status()));
+        return Err(format!("get_group_messages failed: {}", resp.status()));
     }
     let msgs: Vec<GroupMessageInfo> = resp
         .json()
         .await
-        .map_err(|e| anyhow!("parse get_group_messages response: {e}"))?;
+        .map_err(|e| format!("parse get_group_messages response: {e}"))?;
     Ok(msgs)
 }
 
 #[tauri::command]
-pub async fn create_group(name: String, member_hashes: Vec<String>) -> Result<GroupInfo> {
+pub async fn create_group(name: String, member_hashes: Vec<String>) -> Result<GroupInfo, String> {
     let client = authed()?;
     let url = format!("{}/api/groups", engine_url());
     let body = serde_json::json!({
@@ -170,19 +170,19 @@ pub async fn create_group(name: String, member_hashes: Vec<String>) -> Result<Gr
         .json(&body)
         .send()
         .await
-        .map_err(|e| anyhow!("create_group request: {e}"))?;
+        .map_err(|e| format!("create_group request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("create_group failed: {}", resp.status()));
+        return Err(format!("create_group failed: {}", resp.status()));
     }
     let group: GroupInfo = resp
         .json()
         .await
-        .map_err(|e| anyhow!("parse create_group response: {e}"))?;
+        .map_err(|e| format!("parse create_group response: {e}"))?;
     Ok(group)
 }
 
 #[tauri::command]
-pub async fn add_group_member(group_id: String, agent_hash: String) -> Result<()> {
+pub async fn add_group_member(group_id: String, agent_hash: String) -> Result<(), String> {
     let client = authed()?;
     let url = format!("{}/api/groups/{}/members", engine_url(), group_id);
     let body = serde_json::json!({ "agent_hash": agent_hash });
@@ -191,15 +191,15 @@ pub async fn add_group_member(group_id: String, agent_hash: String) -> Result<()
         .json(&body)
         .send()
         .await
-        .map_err(|e| anyhow!("add_group_member request: {e}"))?;
+        .map_err(|e| format!("add_group_member request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("add_group_member failed: {}", resp.status()));
+        return Err(format!("add_group_member failed: {}", resp.status()));
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn remove_group_member(group_id: String, agent_hash: String) -> Result<()> {
+pub async fn remove_group_member(group_id: String, agent_hash: String) -> Result<(), String> {
     let client = authed()?;
     let url = format!(
         "{}/api/groups/{}/members/{}",
@@ -211,24 +211,24 @@ pub async fn remove_group_member(group_id: String, agent_hash: String) -> Result
         .delete(&url)
         .send()
         .await
-        .map_err(|e| anyhow!("remove_group_member request: {e}"))?;
+        .map_err(|e| format!("remove_group_member request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("remove_group_member failed: {}", resp.status()));
+        return Err(format!("remove_group_member failed: {}", resp.status()));
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_group(group_id: String) -> Result<()> {
+pub async fn delete_group(group_id: String) -> Result<(), String> {
     let client = authed()?;
     let url = format!("{}/api/groups/{}", engine_url(), group_id);
     let resp = client
         .delete(&url)
         .send()
         .await
-        .map_err(|e| anyhow!("delete_group request: {e}"))?;
+        .map_err(|e| format!("delete_group request: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("delete_group failed: {}", resp.status()));
+        return Err(format!("delete_group failed: {}", resp.status()));
     }
     Ok(())
 }
