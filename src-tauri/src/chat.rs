@@ -24,12 +24,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::Emitter;
 
-// Re-export SQLite-backed chat functions from db.rs so they can be
-// registered as `chat::get_chat_history_by_agent` etc. in lib.rs.
-pub use crate::db::delete_chat_message;
-pub use crate::db::get_chat_history_by_agent;
-pub use crate::db::insert_chat_message;
-
 /// One persisted message. JSON-encoded to `~/.feclaw/chat_history.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
