@@ -12,6 +12,7 @@
 //! through [`ControlMsg`] (tray → runtime) or inbound WS messages
 //! (engine → runtime).
 
+mod alt_space;
 mod auth;
 mod autostart;
 mod chat;
@@ -28,6 +29,7 @@ mod group;
 mod local_setup;
 mod moments;
 mod right_click;
+mod search;
 mod settings;
 mod side_panel;
 mod tray;
@@ -104,6 +106,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             settings::load_settings,
             settings::save_settings,
@@ -193,6 +196,12 @@ pub fn run() {
             moments::get_moments,
             moments::post_moment,
             moments::delete_moment,
+            search::search_all,
+            search::search_local_chat,
+            alt_space::register_search_shortcut,
+            alt_space::unregister_search_shortcut,
+            alt_space::is_search_shortcut_bound,
+            alt_space::apply_search_privacy,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -327,6 +336,16 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
     // 6. Build system tray.
     if let Err(e) = tray::build_tray(&app) {
         tracing::warn!("failed to build tray: {e:#}");
+    }
+
+    // 6b. Register Alt+Space global shortcut if in cloud mode and previously bound.
+    if config.mode == crate::config::Mode::Cloud {
+        let app_for_shortcut = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = alt_space::register_if_needed(app_for_shortcut).await {
+                tracing::warn!("register_if_needed: {e}");
+            }
+        });
     }
 
     // 6. Wire executor + WS (consent Arc is shared with AppState).

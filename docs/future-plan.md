@@ -1457,24 +1457,222 @@ def create_post(title: str, content: str, attachments: list = None) -> dict:
 
 ---
 
-### Phase 6 — 小程序入口
+### Phase 6 — FeHub 小程序平台（设计讨论 → MVP 决策）
 
-**目标：** Agent 三 dot → 「🏪 小程序」→ iframe 嵌入引擎的 `apps_service.py` 已注册的 App。
-
-**关键交付：**
-- `src-tauri/src/mini_program.rs`：`MiniProgramEntry` 结构 + 2 个命令
-  - `list_mini_programs(agent_hash)` / `open_mini_program(agent_hash, app_id)`
-- 前端：Tauri WebviewWindow 加载引擎的小程序 URL
-  - 云模式：`https://{hash}.feclaw.lizidaren.cn/apps/{app_id}/`
-  - 本地模式：`http://127.0.0.1:{port}/apps/{app_id}/`
-- 引擎端：`GET /api/desktop/agents/{hash}/apps`（列 App 元信息）
-
-**引擎侧：** **零改动**——完全复用 `apps_service.py`
-
-
-**工时：** 2–3 天
+**目标：** 让 Agent 能发布、分发小程序——对标 GitHub 的代码托管 + 小程序分发平台。
 
 ---
+
+### 设计讨论历史（2026-06-20）
+
+#### 六轮方案演进
+
+**方案 A — Agent VFS 本地 git（老 MVP）**
+- Agent 在 workspace 里 git init/add/commit
+- fe-publish snapshot 当前状态
+- ❌ 不能协作（无共享远程）
+- 后弃用——无法满足多 Agent 协作需求
+
+**方案 B — 服务器 bare git repos**
+- 服务器本地 /data/fehub/repos/{hash}/{repo}.git/
+- Agent git remote add → git push/pull（真实 git 协议）
+- fe-publish 从 bare repo 最新 main 部署
+- ✅ 性能极好（C git，压缩增量传输）
+- ✅ 管理简单（rsync 备份 + git fsck/gc）
+- ❌ 沙箱需要 SSH 密钥，多一套备份系统
+
+**方案 C — MySQL + dulwich（纯 Python git）**
+- 一张 git_objects(sha, type, content, ref_name) 表
+- 自定义 dulwich ObjectStore backend（~300 行）
+- ✅ MySQL B-tree <1ms 查找
+- ❌ dulwich 纯 Python 比 C git 慢 5-10x
+- ❌ 最严重问题：Agent 侧 `git` CLI 需要拦截层。git-push/git-pull/git-clone/git-merge 参数各
+种组合，拦截层 ~500 行且容易出兼容性问题
+
+**方案 D — FUSE 兜底 git（复用 vfs_fuse_daemon.py）**
+- FUSE 挂载 VFS → Agent 在沙箱里跑原生 git
+- ✅ Agent 零学习成本
+- ❌ COS 最终一致性：git add 写入 blob 后，git commit 可能读不到
+- ❌ 需要 sync() 垫片，不优雅
+
+**方案 E — 自研 FeClaw VCS（原生设计）**
+- fe vcs save "msg" → snapshot 整个 workspace 到 .versions/{timestamp}/
+- fe vcs tag v1.0.0 / fe vcs log / fe vcs diff v1 v2
+- fe vcs restore v1.0.0 → 恢复旧版本
+- ✅ 无额外依赖，~200 行 Python
+- ❌ Agent 需要学新命令（非 git 兼容）
+
+**方案 F — COS 原生版本管理 🏆（最终选定 MVP）**
+- 腾讯云 COS 支持 Object Versioning（对象版本控制）
+- Agent 每次 PUT 文件 → COS 自动记录版本，**零操作**
+- fe vcs log path → COS ListObjectVersions
+- fe vcs restore path --version x → GET 旧版本 → PUT 回 workspace
+- 群协作：所有 Agent 共用同一 COS 目录，各 Agent 写创建独立版本 ID，不冲突
+- fe-publish v1.0.0 → snapshot workspace/* → .releases/v1.0.0/（不可变 COS 目录）
+- ✅ 零额外依赖，利用已有 COS bucket + VFS 层
+- ✅ 无最终一致性风险（COS 原生保证自己 Bucket 内的操作顺序）
+- ✅ 未来升级不锁定，可随时迁移到 bare repos 或 MySQL
+
+#### 方案对比
+
+| 维度 | A: 本地git | B: bare repos | C: MySQL+dulwich | D: FUSE+git | E: VCS原生 | F: COS 版本 🏆 |
+|:----|:---------:|:------------:|:----------------:|:----------:|:----------:|:--------------:|
+| Agent 交互 | 🟢 git CLI | 🟢 git CLI | 🔴 需拦截层 | 🟢 git CLI | 🟡 fe vcs | 🟡 fe vcs |
+| 协作能力 | ❌ 无 | ✅ 有 | ✅ 有 | ✅ 有 | ✅ 有 | ✅ 有 |
+| 新代码量 | 0 行 | 0 行 | ~500 行 | 0 行 | ~200 行 | ~150 行 |
+| 额外依赖 | git | git+SSH | dulwich+MySQL | git+sync | 0 | 0 (COS API) |
+| 一致性 | 🟢 | 🟢 | 🟢 | 🔴 最终一致 | 🟢 | 🟢 COS 原生 |
+| 性能 | 🟢 | 🟢 | 🟡 | 🔴 | 🟢 | 🟢 (单文件) |
+| 升级路径 | → B/F | → C | — | → B/F | → F | 不限 |
+
+---
+
+### MVP 决策：COS 版本管理（方案 F）
+
+**核心逻辑：** 不需要 git、不需要 FUSE、不需要 MySQL。腾讯云 COS 的 Object Versioning 特性本身就是我们要的版本管理系统。
+
+#### FeHub VCS 命令集（语义对齐 Git）
+
+| 命令 | 对应 Git | 底层实现 |
+|:-----|:---------|:---------|
+| `fe init --template=xxx` | `git init` + 模板 | 复制模板到当前目录 + 生成 manifest.json |
+| `fe vcs status` | `git status` | 扫描 workspace 与 .releases 最新版对比 |
+| `fe vcs commit "message"` | `git commit` | 写入 .fehub/commits/{timestamp}.json |
+| `fe vcs log [path]` | `git log` | COS ListObjectVersions + .fehub/commits/ |
+| `fe vcs diff path v1 v2` | `git diff` | COS 下载两版本 → Python difflib |
+| `fe vcs restore path v1` | `git checkout` | COS GET 旧版本 → PUT 回 workspace |
+| `fe publish v1.0.0 [--public]` | `git tag` + `git push` | snapshot + 注册 App + 配置可见性 |
+| `fe unpublish v1.0.0` | — | 下架（.releases/ 不删，只取消注册）|
+
+Agent 完整开发流程：
+```bash
+mkdir vocab-app
+cd vocab-app
+
+fe init --template=/public/feclaw/templates/miniapp/
+# → 复制模板 → manifest.json + index.html + CSS 骨架
+
+echo '{"words":[{"en":"apple","zh":"苹果"}]}' > data.json
+
+fe vcs commit "初版：单词数据"
+# → .fehub/commits/2026-06-20_221500.json
+
+fe vcs status
+# → 最新 commit: 初版：单词数据
+# → 未追踪: style.css（如果有新文件）
+
+fe vcs log
+# → commit: 初版：单词数据
+
+fe publish v0.1.0
+# → snapshot workspace/* → .fehub/releases/v0.1.0/
+# → 注册到 FeClaw App
+# → 返回: ✅ v0.1.0 已上线（私有）
+
+fe publish v1.0.0 --public
+# → 公有访问许可，任何人拿到 URL 都能用
+# → 返回: ✅ v1.0.0 已上线（公有）
+
+fe vcs log
+# → v1.0.0 (已发布 · 公有)
+# → v0.1.0 (已发布 · 私有)
+# → commit: 初版：单词数据
+# → fe init
+```
+
+#### 发布可见性
+
+| 发布时的参数 | 效果 |
+|:-----------|:-----|
+| `fe publish v1.0.0`（默认）| 私有——只有用户可以通过 FeClaw 鉴权或 Desktop 访问 |
+| `fe publish v1.0.0 --public` | 公有——任何有 URL 的人都可以打开（无鉴权）|
+
+**Engine 端实现：** 新赠 `FePublish` 模型或字段记录可见性。
+**Desktop 端：** 发布/发布历史面板展示可见性。
+
+#### App 系统现状
+
+现有 `services/apps_service.py`（428 行）已完备：
+- **static 类型** → serve VFS 文件，自动 Content-Type
+- **ai 类型** → LLM + 白名单工具，返回 JSON
+- **code 类型** → bwrap 沙箱执行 Python 脚本
+- 速率限制（30 req/min / agent）、asyncio 超时、Path traversal 检查
+- 注册/注销/列表 API 已有
+
+FeHub 不重建，只在这上面加 publish 快照 + 可见性控制。
+
+#### App 运行时数据存储
+
+**原则：** 代码（VFS / .fehub/）与数据（DB）严格分离。
+
+**AppData 模型（models/fehub.py）：**
+```python
+class AppData(Base):
+    __tablename__ = "app_data"
+    id = Column(Integer, primary_key=True)
+    app_id = Column(String(36), nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    key = Column(String(255), nullable=False)
+    value = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+    # 唯一约束: (app_id, user_id, key)
+```
+
+**App Storage API（小程序 JS 调用）：**
+```javascript
+// feclaw.storage 是 Engine 注入的 API
+// 底层 POST /api/apps/{app_id}/data 和 GET /api/apps/{app_id}/data
+
+const sdk = feclaw.storage;
+
+// CRUD
+await sdk.set("settings", { theme: "dark" });
+const val = await sdk.get("settings");         // → { theme: "dark" }
+const all = await sdk.list("essay_");           // → 前缀匹配
+await sdk.delete("settings");
+
+// 每对 (app_id, user_id, key) 唯一，天然按用户隔离
+```
+
+**为什么比 VFS apps-data/ 好：**
+| 维度 | VFS 目录 | AppData 表 |
+|:----|:---------|:-----------|
+| 读写 | COS ~50ms | SQLite/MySQL <1ms |
+| 查询 | list + grep | WHERE LIKE 直接索引 |
+| 权限 | 需 FilePermission | 天然 user_id 隔离 |
+| VCS 忽略 | 需要维护 ignore | 天然分离 |
+| 备份 | 多一套 | 跟主 DB 一起 |
+
+#### 分享机制（远期设计）
+
+Agent A 写了一个小程序并发布：
+```bash
+fe publish v1.0.0 --public
+# → 上架到 FeHub 公开市场
+```
+
+其他用户安装：
+1. 在 FeHub 公开主页浏览/搜索小程序
+2. 点击「安装」→ FeClaw 复制 .releases/{author_hash}/{app_id}/v1.0.0/ → 到目标用户的 apps/{app_id}/
+3. 小程序出现在目标用户 Desktop「小程序」Tab 里
+4. 目标用户的 Agent 也可以 fork → fe init → fe publish v2.0.0
+
+代码传播 = COS 目录复制。无需 GitHub fork/PR 机制。
+
+### MVP 关键交付
+
+| 组件 | 文件 | 代码量 |
+|:-----|:-----|:------:|
+| FeHubService（vcs + publish）| services/fehub_service.py | ~200 行 |
+| fe init/vcs/publish 命令 | services/tools/fehub_tools.py | ~150 行 |
+| API 端点 | routers/fehub.py | ~150 行 |
+| 发布可见性模型 | models/fehub.py | ~50 行 |
+| Desktop 小程序入口 | src-tauri/src/mini_program.rs | ~50 行 |
+
+**前置依赖：** 无（apps_service 已完备）
+
+**工时：** ~3 个 Claude Code 会话
 
 ### Phase 7 — 超级入口搜索（FirstEntrance — Alt+Space）
 
@@ -1562,6 +1760,18 @@ Desktop 侧：
 - 聊天记录搜索仅限用户本人
 
 **前置依赖：** 无（Engine 索引已有，仅需加聚合端点）
+
+**潜在坑点：**
+| # | 坑 | 风险 | 缓解 |
+|:-:|:---|:----:|:------|
+| 1 | Alt+Space 快捷键冲突（PowerToys/VS Code）| 🟡 中 | 首次绑定前检测占用 → 提示用户选择或解除 |
+| 2 | 多数据源同步等待 | 🟡 中 | 每源 3s 超时独立返回，超时显示"搜索超时"不影响其他源 |
+| 3 | 搜索结果跨组件跳转 | 🟡 中 | CustomEvent 驱动跨组件导航，各组件监听 |
+| 4 | 进程崩溃后快捷键残留 | 🟢 低 | Windows 自动清理；正常退出手动 unregister |
+| 5 | Agent 审批弹窗打扰 | 🟡 中 | DND→静默拒绝；非DND→弹窗+30s超时自动拒 |
+| 6 | FTS5 在大量聊天记录下的性能 | 🟢 低 | 百万级 <100ms |
+| 7 | 屏幕共享/会议中隐私泄露 | 🟡 中 | Windows API SetWindowDisplayAffinity(WDA_MONITOR) 使窗体在截屏不可见。多屏幕按鼠标位置定位 |
+| 8 | 本地文件索引范围 | 🟡 中 | 默认 Desktop+Documents+Downloads，用户可配置 |
 
 **决策记录：**
 | Q | 问题 | 决策 |

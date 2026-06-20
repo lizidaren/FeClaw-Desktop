@@ -17,6 +17,7 @@ import { openSidePanel } from "./components/side-panel";
 import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImageCards, clearImageCards } from "./components/input-box";
 import { openSendDialog, type PendingFile } from "./components/send-dialog";
 import { showMomentsFeed, hideMomentsFeed, addMomentCard, wireMomentsFeed, refreshMoments } from "./components/moments-feed";
+import { setupSearchOverlay } from "./components/search-overlay";
 
 // ---- Tauri bridge ------------------------------------------------
 
@@ -1054,6 +1055,53 @@ function wire(): void {
     void selectGroup(e.detail.groupId);
   }) as EventListener);
 
+  // ---- Phase 7: Search overlay navigation ----
+  // navigate-to-chat: { agentHash: string, messageId?: string }
+  window.addEventListener("navigate-to-chat", ((e: CustomEvent<{ agentHash: string; messageId?: string }>) => {
+    const { agentHash, messageId } = e.detail;
+    if (store.currentTab !== "chat") {
+      switchTab("chat");
+    }
+    void selectChat(agentHash).then(() => {
+      if (messageId) {
+        // Scroll to message
+        const el = document.querySelector(`[data-id="${messageId}"]`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+  }) as EventListener);
+
+  // navigate-to-vfs: { path: string, agentHash?: string }
+  window.addEventListener("navigate-to-vfs", ((e: CustomEvent<{ path: string; agentHash?: string }>) => {
+    const { path } = e.detail;
+    // Open file manager at that path — Phase 2A file manager is in side-panel
+    console.log("navigate-to-vfs:", path);
+    // TODO: Phase 8 file manager integration
+  }) as EventListener);
+
+  // navigate-to-moment: { momentId: string, groupId?: string }
+  window.addEventListener("navigate-to-moment", ((e: CustomEvent<{ momentId: string; groupId?: string }>) => {
+    const { momentId, groupId } = e.detail;
+    switchTab("moments");
+    if (groupId) {
+      store.setMomentsGroupFilter(groupId);
+    }
+    // Highlight the moment
+    setTimeout(() => {
+      const el = document.querySelector(`[data-moment-id="${momentId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("moment-highlight");
+        setTimeout(() => el.classList.remove("moment-highlight"), 2000);
+      }
+    }, 100);
+  }) as EventListener);
+
+  // navigate-to-reference: generic reference navigation
+  window.addEventListener("navigate-to-reference", ((e: CustomEvent<{ reference: string }>) => {
+    console.log("navigate-to-reference:", e.detail.reference);
+  }) as EventListener);
+
   // Tab bar
   document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
     const tab = btn.dataset.tab as "chat" | "profile" | "settings";
@@ -1118,4 +1166,5 @@ document.addEventListener("DOMContentLoaded", () => {
   wire();
   void initChat();
   void subscribeEvents();
+  void setupSearchOverlay();
 });

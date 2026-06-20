@@ -111,6 +111,39 @@
     </div>
   </div>
 
+  <!-- Search Overlay (Phase 7) -->
+  <div class="search-overlay" id="search-overlay" style="display:none;">
+    <div class="search-backdrop" id="search-backdrop"></div>
+    <div class="search-panel">
+      <div class="search-header">
+        <div class="search-icon" aria-hidden="true">🔍</div>
+        <input
+          type="text"
+          class="search-input"
+          id="search-input"
+          placeholder="搜索聊天、文件、动态..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button type="button" class="search-close" id="search-close" title="关闭 (Esc)">✕</button>
+      </div>
+      <div class="search-tabs" id="search-tabs">
+        <button class="search-tab active" data-source="all">全部</button>
+        <button class="search-tab" data-source="chat">💬 聊天</button>
+        <button class="search-tab" data-source="vfs">📁 文件</button>
+        <button class="search-tab" data-source="moments">📱 动态</button>
+      </div>
+      <div class="search-results" id="search-results">
+        <div class="search-empty" id="search-empty">
+          <span>输入关键词开始搜索</span>
+        </div>
+      </div>
+      <div class="search-footer" id="search-footer" style="display:none;">
+        <span id="search-stats"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- Moments toast notification -->
   <div class="moments-toast" id="moments-toast" style="opacity:0;">新动态</div>
 
