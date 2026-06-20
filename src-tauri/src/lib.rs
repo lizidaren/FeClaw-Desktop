@@ -227,6 +227,7 @@ pub fn run() {
                         }
                         return;
                     }
+                    let handle_for_pending = handle.clone();
                     if let Err(e) = startup(handle).await {
                         tracing::error!("startup failed: {e:#}");
                         let err_msg = format!("{e:#}");
@@ -251,7 +252,7 @@ pub fn run() {
                         tracing::info!("found pending right-click: mode={}, path={}", pending.mode, pending.path);
                         let pending_mode = pending.mode.clone();
                         let pending_path = pending.path.clone();
-                        let app_for_pending = handle.clone();
+                        let app_for_pending = handle_for_pending.clone();
                         tauri::async_runtime::spawn(async move {
                             // Give the UI a moment to initialise before emitting the event
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
