@@ -179,6 +179,32 @@ pub async fn file_delete(
     Ok(())
 }
 
+/// Open a local file with the system default application.
+/// Uses the `open` crate which is already a dependency.
+#[tauri::command]
+pub async fn open_local_file(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        open::that(&path).map_err(|e| format!("open file {}: {e}", path))
+    })
+    .await
+    .map_err(|e| format!("open_local_file task panicked: {e}"))?
+}
+
+/// Clean up the temp preview directory (called on app exit or window close).
+/// Removes all files under `~/.feclaw/temp/preview/`.
+#[tauri::command]
+pub fn cleanup_preview_temp() -> Result<(), String> {
+    let preview_dir = crate::config::Config::config_dir().join("temp").join("preview");
+    if !preview_dir.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&preview_dir)
+        .map_err(|e| format!("cleanup preview dir: {e}"))?;
+    std::fs::create_dir_all(&preview_dir)
+        .map_err(|e| format!("recreate preview dir: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

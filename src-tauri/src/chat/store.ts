@@ -40,7 +40,13 @@ export type ChatMessage = {
   is_deleted?: boolean;
   timestamp?: string;
   agent?: string;
+  attachments?: Attachment[];
 };
+
+export type Attachment =
+  | { type: "image"; source: "vfs" | "url" | "data"; path?: string; url?: string; data?: string; width?: number; height?: number }
+  | { type: "file"; name: string; size: number; path?: string; url?: string }
+  | { type: "miniapp_card"; title: string; app_name: string; preview_url?: string; path?: string };
 
 export type ChatItem = {
   agent_hash: string;

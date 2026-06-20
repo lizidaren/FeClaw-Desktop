@@ -1,0 +1,1644 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>文件管理器</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --bg-elev: #1e293b;
+      --bg-hover: #273449;
+      --bg-active: #1e3a5f;
+      --border: #334155;
+      --border-soft: #1e293b;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --primary: #38bdf8;
+      --primary-dark: #0284c7;
+      --error: #f87171;
+      --success: #34d399;
+      --warning: #fbbf24;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --bg-elev: #ffffff;
+        --bg-hover: #f1f5f9;
+        --bg-active: #e0f0ff;
+        --border: #e2e8f0;
+        --border-soft: #f1f5f9;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --primary: #0284c7;
+        --primary-dark: #075985;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg); color: var(--text);
+      overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+
+    /* Header */
+    .fm-header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 16px;
+      background: var(--bg-elev);
+      border-bottom: 1px solid var(--border-soft);
+      flex-shrink: 0;
+    }
+    .breadcrumb {
+      font-size: 14px; color: var(--text);
+      flex: 1; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .breadcrumb .sep { color: var(--text-muted); margin: 0 4px; }
+    .search-box {
+      width: 180px; padding: 6px 10px;
+      border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--text);
+      font-family: inherit; font-size: 13px; outline: none;
+    }
+    .search-box:focus { border-color: var(--primary); }
+
+    /* Body: sidebar + main */
+    .fm-body {
+      display: flex; flex: 1; min-height: 0;
+    }
+
+    /* Sidebar tree */
+    .sidebar {
+      width: 200px; flex-shrink: 0;
+      background: var(--bg-elev);
+      border-right: 1px solid var(--border-soft);
+      overflow-y: auto; padding: 8px 0;
+    }
+    .tree-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 12px; cursor: pointer;
+      font-size: 13px; color: var(--text);
+      transition: background 0.1s;
+      user-select: none;
+    }
+    .tree-item:hover { background: var(--bg-hover); }
+    .tree-item.active { background: var(--bg-active); color: var(--primary); }
+    .tree-item .icon { font-size: 14px; flex-shrink: 0; }
+    .tree-item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tree-children { padding-left: 16px; }
+    .tree-toggle { width: 14px; flex-shrink: 0; color: var(--text-muted); font-size: 10px; }
+
+    /* Main panel */
+    .main-panel {
+      flex: 1; min-width: 0;
+      display: flex; flex-direction: column;
+    }
+
+    /* Column header */
+    .file-list-header {
+      display: flex; align-items: center; gap: 0;
+      padding: 8px 16px;
+      background: var(--bg-elev);
+      border-bottom: 1px solid var(--border-soft);
+      font-size: 12px; color: var(--text-muted);
+      font-weight: 500; flex-shrink: 0;
+    }
+    .col-name { flex: 1; cursor: pointer; }
+    .col-name:hover { color: var(--text); }
+    .col-size { width: 80px; text-align: right; cursor: pointer; }
+    .col-size:hover { color: var(--text); }
+    .col-mtime { width: 140px; text-align: left; cursor: pointer; margin-left: 16px; }
+    .col-mtime:hover { color: var(--text); }
+    .sort-arrow { color: var(--primary); }
+
+    /* File list */
+    .file-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+    .file-item {
+      display: flex; align-items: center;
+      padding: 6px 16px; cursor: pointer;
+      font-size: 13px; transition: background 0.1s;
+      border-radius: 0;
+    }
+    .file-item:hover { background: var(--bg-hover); }
+    .file-item.selected { background: var(--bg-active); }
+    .file-item .file-icon { font-size: 16px; margin-right: 8px; flex-shrink: 0; width: 20px; text-align: center; }
+    .file-item .file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-item .file-size { width: 80px; text-align: right; color: var(--text-muted); font-size: 12px; }
+    .file-item .file-mtime { width: 140px; margin-left: 16px; color: var(--text-muted); font-size: 12px; }
+
+    /* Empty state */
+    .fm-empty {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      color: var(--text-muted); font-size: 14px; gap: 8px;
+    }
+
+    /* Loading */
+    .fm-loading {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      color: var(--text-muted); font-size: 14px;
+    }
+
+    /* Error banner */
+    .fm-error {
+      padding: 8px 16px;
+      background: rgba(248, 113, 113, 0.1);
+      border-bottom: 1px solid var(--error);
+      color: var(--error); font-size: 13px;
+    }
+
+    /* Context menu */
+    .context-menu {
+      position: fixed; z-index: 200;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+      padding: 4px 0;
+      min-width: 160px;
+    }
+    .context-menu-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 14px; cursor: pointer;
+      font-size: 13px; color: var(--text);
+      transition: background 0.1s;
+    }
+    .context-menu-item:hover { background: var(--bg-hover); }
+    .context-menu-item.danger { color: var(--error); }
+    .context-menu-sep { height: 1px; background: var(--border-soft); margin: 4px 0; }
+
+    /* Viewer overlay */
+    .viewer-overlay {
+      position: fixed; inset: 0; z-index: 300;
+      background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .viewer-box {
+      background: var(--bg-elev);
+      border-radius: 12px;
+      width: 80vw; max-width: 900px; height: 80vh;
+      display: flex; flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .viewer-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-soft);
+      flex-shrink: 0;
+    }
+    .viewer-title { font-size: 14px; font-weight: 500; }
+    .viewer-close {
+      width: 28px; height: 28px; border-radius: 6px;
+      border: none; background: transparent; color: var(--text-muted);
+      cursor: pointer; font-size: 14px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .viewer-close:hover { background: var(--bg-hover); color: var(--text); }
+    .viewer-body { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+    .viewer-body img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }
+    .viewer-body pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 13px; font-family: "SF Mono", "Fira Code", Consolas, monospace; }
+    .viewer-body textarea { width: 100%; height: 100%; resize: none; border: none; background: var(--bg); color: var(--text); font-family: "SF Mono", "Fira Code", Consolas, monospace; font-size: 13px; outline: none; padding: 8px; }
+    .viewer-unsaved { font-size: 12px; color: var(--warning); margin-left: 8px; }
+
+    /* ---- Image viewer controls ---- */
+    .viewer-img-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      overflow: hidden;
+    }
+    .viewer-img-wrap img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+      margin: 0 auto;
+      cursor: zoom-in;
+      transition: transform 0.15s;
+    }
+    .viewer-img-wrap img.zoomed { cursor: zoom-out; }
+    .viewer-img-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(30,41,59,0.8);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s;
+      z-index: 2;
+    }
+    .viewer-img-nav:hover { background: rgba(56,189,248,0.6); }
+    .viewer-img-nav.prev { left: 8px; }
+    .viewer-img-nav.next { right: 8px; }
+    .viewer-img-counter { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--text-muted); background: rgba(15,23,42,0.7); padding: 2px 10px; border-radius: 12px; }
+    .viewer-img-toolbar {
+      position: absolute; top: 8px; right: 8px;
+      display: flex; gap: 6px; z-index: 2;
+    }
+    .viewer-img-btn {
+      width: 30px; height: 30px; border-radius: 6px;
+      border: none; background: rgba(30,41,59,0.8);
+      color: var(--text); cursor: pointer;
+      font-size: 13px;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s;
+    }
+    .viewer-img-btn:hover { background: rgba(56,189,248,0.6); }
+
+    /* ---- Fullscreen viewer ---- */
+    .viewer-fullscreen {
+      position: fixed; inset: 0; z-index: 500;
+      background: #000;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .viewer-fullscreen img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .viewer-fullscreen-close {
+      position: absolute; top: 16px; right: 16px;
+      width: 36px; height: 36px; border-radius: 50%;
+      border: none; background: rgba(255,255,255,0.15);
+      color: #fff; cursor: pointer; font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    /* ---- Code editor ---- */
+    .code-editor-wrap {
+      display: flex;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .code-line-nums {
+      padding: 8px 12px 8px 8px;
+      background: var(--bg-elev);
+      border-right: 1px solid var(--border-soft);
+      color: var(--text-muted);
+      text-align: right;
+      user-select: none;
+      min-width: 48px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .code-editor-area {
+      flex: 1;
+      overflow: auto;
+      position: relative;
+    }
+    .code-textarea {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      resize: none; border: none; background: transparent;
+      color: var(--text);
+      font-family: inherit; font-size: inherit; line-height: inherit;
+      outline: none; padding: 8px 12px;
+      white-space: pre; overflow: auto;
+      tab-size: 4;
+      caret-color: var(--primary);
+    }
+    .code-highlight {
+      position: absolute; inset: 0;
+      padding: 8px 12px;
+      white-space: pre;
+      pointer-events: none;
+      overflow: hidden;
+      line-height: 1.6;
+    }
+    .code-highlight .tok-keyword { color: #c792ea; }
+    .code-highlight .tok-string { color: #c3e88d; }
+    .code-highlight .tok-comment { color: #546e7a; font-style: italic; }
+    .code-highlight .tok-number { color: #f78c6c; }
+    .code-highlight .tok-function { color: #82aaff; }
+    .code-highlight .tok-operator { color: #89ddff; }
+    .code-highlight .tok-type { color: #ffcb6b; }
+    .code-highlight .tok-punctuation { color: #89ddff; }
+
+    /* ---- Markdown viewer ---- */
+    .md-rendered {
+      padding: 4px 0;
+      line-height: 1.7;
+      color: var(--text);
+    }
+    .md-rendered h1,.md-rendered h2,.md-rendered h3,.md-rendered h4 { color: var(--text); margin: 12px 0 6px; font-weight: 600; }
+    .md-rendered h1 { font-size: 1.4em; }
+    .md-rendered h2 { font-size: 1.2em; }
+    .md-rendered h3 { font-size: 1.1em; }
+    .md-rendered p { margin: 8px 0; }
+    .md-rendered code { background: var(--bg); padding: 2px 5px; border-radius: 4px; font-size: 0.9em; }
+    .md-rendered pre { background: var(--bg); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
+    .md-rendered pre code { background: none; padding: 0; }
+    .md-rendered blockquote { border-left: 3px solid var(--primary); margin: 8px 0; padding: 4px 12px; color: var(--text-muted); }
+    .md-rendered a { color: var(--primary); }
+    .md-rendered ul,.md-rendered ol { padding-left: 20px; margin: 6px 0; }
+    .md-rendered li { margin: 2px 0; }
+    .md-rendered table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+    .md-rendered td,.md-rendered th { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+    .md-rendered th { background: var(--bg-elev); }
+    .md-rendered img { max-width: 100%; }
+    .md-rendered hr { border: none; border-top: 1px solid var(--border-soft); margin: 12px 0; }
+
+    /* ---- Media player (audio/video) ---- */
+    .media-player-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 12px;
+    }
+    .media-player-wrap video, .media-player-wrap audio {
+      max-width: 100%;
+      border-radius: 8px;
+    }
+    .media-label { font-size: 13px; color: var(--text-muted); }
+
+    /* ---- Download-only view ---- */
+    .dl-only-wrap {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      height: 100%; gap: 12px;
+    }
+    .dl-only-icon { font-size: 48px; }
+    .dl-only-name { font-size: 14px; font-weight: 500; word-break: break-all; text-align: center; }
+    .dl-only-size { font-size: 12px; color: var(--text-muted); }
+
+    /* ---- Viewer toolbar actions ---- */
+    .viewer-actions {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .viewer-action-btn {
+      padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border);
+      background: transparent; color: var(--text);
+      cursor: pointer; font-family: inherit; font-size: 13px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .viewer-action-btn:hover { background: var(--bg-hover); border-color: var(--primary); color: var(--primary); }
+
+    /* Permission dialog */
+    .perm-overlay {
+      position: fixed; inset: 0; z-index: 400;
+      background: rgba(0,0,0,0.5);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .perm-dialog {
+      background: var(--bg-elev);
+      border-radius: 12px;
+      padding: 20px 24px;
+      width: 320px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .perm-dialog h3 { margin: 0 0 16px; font-size: 15px; font-weight: 600; }
+    .perm-dialog .perm-file { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; word-break: break-all; }
+    .perm-dialog .perm-label { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; }
+    .perm-option {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-radius: 6px;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .perm-option:hover { background: var(--bg-hover); }
+    .perm-option input[type="radio"] { accent-color: var(--primary); }
+    .perm-dialog-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    .perm-dialog-btns button {
+      padding: 6px 16px; border-radius: 6px; border: none;
+      cursor: pointer; font-family: inherit; font-size: 13px;
+      transition: background 0.1s;
+    }
+    .btn-cancel { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+    .btn-cancel:hover { background: var(--bg-hover); }
+    .btn-confirm { background: var(--primary); color: white; }
+    .btn-confirm:hover { background: var(--primary-dark); }
+
+    /* Dialog (generic) */
+    .dialog-overlay {
+      position: fixed; inset: 0; z-index: 400;
+      background: rgba(0,0,0,0.5);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .dialog-box {
+      background: var(--bg-elev);
+      border-radius: 12px; padding: 20px 24px;
+      width: 300px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .dialog-box h3 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+    .dialog-box input {
+      width: 100%; padding: 8px 10px;
+      border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--text);
+      font-family: inherit; font-size: 13px; outline: none; margin-bottom: 12px;
+    }
+    .dialog-box input:focus { border-color: var(--primary); }
+    .dialog-box .btns { display: flex; justify-content: flex-end; gap: 8px; }
+    .dialog-box button {
+      padding: 6px 16px; border-radius: 6px; border: none;
+      cursor: pointer; font-family: inherit; font-size: 13px;
+    }
+    .btn-ok { background: var(--primary); color: white; }
+    .btn-ok:hover { background: var(--primary-dark); }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="fm-header">
+    <div class="breadcrumb" id="breadcrumb">📂 /workspace/</div>
+    <input type="text" class="search-box" id="searchBox" placeholder="搜索文件..." />
+  </div>
+
+  <!-- Body -->
+  <div class="fm-body">
+    <!-- Sidebar tree -->
+    <div class="sidebar" id="sidebar"></div>
+
+    <!-- Main panel -->
+    <div class="main-panel">
+      <!-- Error banner -->
+      <div class="fm-error" id="errorBanner" style="display:none;"></div>
+
+      <!-- Column headers -->
+      <div class="file-list-header">
+        <span class="col-name" id="colName" data-sort="name">名称 <span class="sort-arrow" id="sortArrow"></span></span>
+        <span class="col-size" id="colSize" data-sort="size">大小</span>
+        <span class="col-mtime" id="colMtime" data-sort="mtime">修改时间</span>
+      </div>
+
+      <!-- File list or empty/loading -->
+      <div class="file-list" id="fileList"></div>
+    </div>
+  </div>
+
+  <!-- Context menu (hidden) -->
+  <div id="contextMenu" class="context-menu" style="display:none;"></div>
+
+  <!-- Viewer overlay (hidden) -->
+  <div id="viewerOverlay" class="viewer-overlay" style="display:none;">
+    <div class="viewer-box">
+      <div class="viewer-header">
+        <span class="viewer-title" id="viewerTitle">预览</span>
+        <span id="viewerUnsaved" class="viewer-unsaved" style="display:none;">有未保存的更改</span>
+        <div class="viewer-actions" id="viewerActions"></div>
+        <button class="viewer-close" id="viewerClose">✕</button>
+      </div>
+      <div class="viewer-body" id="viewerBody"></div>
+    </div>
+  </div>
+
+  <!-- Permission dialog (hidden) -->
+  <div id="permOverlay" class="perm-overlay" style="display:none;">
+    <div class="perm-dialog">
+      <h3>文件权限</h3>
+      <div class="perm-file" id="permFileName"></div>
+      <div class="perm-label">Agent 对文件的访问权限：</div>
+      <label class="perm-option"><input type="radio" name="perm" value="none" /> 🔒 隐藏（不可见）</label>
+      <label class="perm-option"><input type="radio" name="perm" value="read" checked /> 📖 只读</label>
+      <label class="perm-option"><input type="radio" name="perm" value="readwrite" /> ✏️ 可读可写</label>
+      <div class="perm-dialog-btns">
+        <button class="btn-cancel" id="permCancel">取消</button>
+        <button class="btn-confirm" id="permConfirm">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // ================================================================
+    // FeClaw Desktop — File Manager (Phase 2A Desktop)
+    // ================================================================
+    // HTML: file-manager.html
+    // Bundled from: file-manager.ts + viewer.ts
+    // ================================================================
+
+    // ---- Tauri invoke bridge ------------------------------------------------
+    function getTauri() {
+      const g = window.__TAURI__;
+      if (!g?.core) throw new Error("Tauri global not available");
+      return g.core;
+    }
+    const invoke = (cmd, args) => getTauri().invoke(cmd, args);
+
+    // ---- Types (mirror Rust structs) ----------------------------------------
+    // FsEntry { name, type, size, mtime, content_type }
+
+    // ---- State ---------------------------------------------------------------
+    let agentHash = null;
+    let currentPath = "/workspace";
+    let entries = [];           // current directory entries
+    let selectedEntry = null;  // right-clicked entry (or null for blank)
+    let sortKey = "name";
+    let sortDir = 1;           // 1 = asc, -1 = desc
+    let searchQuery = "";
+    let clipboard = [];        // [{path, isCut}]
+    let viewerUnsaved = false;
+
+    // ---- DOM refs ------------------------------------------------------------
+    const $ = (id) => document.getElementById(id);
+    const breadcrumb = $("breadcrumb");
+    const sidebar = $("sidebar");
+    const fileList = $("fileList");
+    const errorBanner = $("errorBanner");
+    const contextMenu = $("contextMenu");
+    const viewerOverlay = $("viewerOverlay");
+    const viewerTitle = $("viewerTitle");
+    const viewerBody = $("viewerBody");
+    const viewerUnsavedEl = $("viewerUnsaved");
+    const permOverlay = $("permOverlay");
+    const permFileName = $("permFileName");
+    const searchBox = $("searchBox");
+
+    // ---- Init ----------------------------------------------------------------
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      agentHash = params.get("agent");
+      if (!agentHash) {
+        showError("缺少 agent 参数，请从侧边栏打开文件管理器");
+        return;
+      }
+      // Build sidebar tree
+      buildSidebar();
+      // Load root
+      await loadDirectory("/workspace");
+      // Wire events
+      wireEvents();
+      // Clean up temp preview files on window close
+      window.addEventListener("unload", () => {
+        invoke("cleanup_preview_temp", {}).catch(() => {});
+      });
+    }
+
+    function wireEvents() {
+      // Column header clicks → sort
+      $("colName").addEventListener("click", () => setSort("name"));
+      $("colSize").addEventListener("click", () => setSort("size"));
+      $("colMtime").addEventListener("click", () => setSort("mtime"));
+
+      // Search box
+      searchBox.addEventListener("input", (e) => {
+        searchQuery = e.target.value.trim().toLowerCase();
+        renderFileList();
+      });
+
+      // Context menu dismiss on click outside
+      document.addEventListener("click", (e) => {
+        if (!contextMenu.contains(e.target)) hideContextMenu();
+      });
+
+      // Viewer close
+      $("viewerClose").addEventListener("click", () => closeViewer());
+
+      // Permission dialog
+      $("permCancel").addEventListener("click", () => { permOverlay.style.display = "none"; });
+      $("permConfirm").addEventListener("click", () => confirmPermission());
+
+      // Keyboard
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          if (viewerOverlay.style.display !== "none") { closeViewer(); return; }
+          if (permOverlay.style.display !== "none") { permOverlay.style.display = "none"; return; }
+          hideContextMenu();
+        }
+      });
+    }
+
+    // ---- Sidebar tree --------------------------------------------------------
+    function buildSidebar() {
+      sidebar.innerHTML = "";
+      const root = makeTreeNode("📁", "workspace", "/workspace", false);
+      sidebar.appendChild(root);
+    }
+
+    function makeTreeNode(icon, label, path, hasChildren) {
+      const item = document.createElement("div");
+      item.className = "tree-item" + (path === currentPath ? " active" : "");
+      item.dataset.path = path;
+
+      const toggle = document.createElement("span");
+      toggle.className = "tree-toggle";
+      toggle.textContent = hasChildren ? "▶" : "";
+      item.appendChild(toggle);
+
+      const iconSpan = document.createElement("span");
+      iconSpan.className = "icon";
+      iconSpan.textContent = icon;
+      item.appendChild(iconSpan);
+
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "label";
+      labelSpan.textContent = label;
+      item.appendChild(labelSpan);
+
+      item.addEventListener("click", () => navigateTo(path));
+      return item;
+    }
+
+    function updateSidebarActive() {
+      sidebar.querySelectorAll(".tree-item").forEach((el) => {
+        el.classList.toggle("active", el.dataset.path === currentPath);
+      });
+    }
+
+    // ---- Directory loading ---------------------------------------------------
+    async function loadDirectory(path) {
+      showLoading(true);
+      hideError();
+      try {
+        entries = await invoke("list_vfs_dir", { agent_hash: agentHash, path });
+        currentPath = path;
+        updateBreadcrumb();
+        updateSidebarActive();
+        renderFileList();
+      } catch (e) {
+        showError(`加载目录失败：${e}`);
+        fileList.innerHTML = "";
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    function navigateTo(path) {
+      if (path !== currentPath) loadDirectory(path);
+    }
+
+    function updateBreadcrumb() {
+      const parts = currentPath.split("/").filter(Boolean);
+      let html = '📂 ';
+      let cum = "";
+      for (const p of parts) {
+        cum += "/" + p;
+        html += `<span class="sep">/</span><span data-path="${cum}" style="cursor:pointer">${p}</span>`;
+      }
+      breadcrumb.innerHTML = html;
+      breadcrumb.querySelectorAll("span[data-path]").forEach((el) => {
+        el.addEventListener("click", () => navigateTo(el.dataset.path));
+      });
+    }
+
+    // ---- Sorting -------------------------------------------------------------
+    function setSort(key) {
+      if (sortKey === key) {
+        sortDir *= -1;
+      } else {
+        sortKey = key;
+        sortDir = key === "name" ? 1 : -1;
+      }
+      updateSortArrow();
+      renderFileList();
+    }
+
+    function updateSortArrow() {
+      const arrow = sortDir === 1 ? "▲" : "▼";
+      document.getElementById("sortArrow").textContent = sortKey !== "name" ? "" : arrow;
+    }
+
+    // ---- File list rendering -------------------------------------------------
+    function getSortedEntries() {
+      let list = [...entries];
+
+      // Filter by search
+      if (searchQuery) {
+        list = list.filter((e) => e.name.toLowerCase().includes(searchQuery));
+      }
+
+      // Sort: dirs first, then by key
+      list.sort((a, b) => {
+        if (a.type === "dir" && b.type !== "dir") return -1;
+        if (a.type !== "dir" && b.type === "dir") return 1;
+        let av, bv;
+        if (sortKey === "name") { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
+        else if (sortKey === "size") { av = a.size; bv = b.size; }
+        else { av = a.mtime; bv = b.mtime; }
+        if (av < bv) return -sortDir;
+        if (av > bv) return sortDir;
+        return 0;
+      });
+      return list;
+    }
+
+    function renderFileList() {
+      const list = getSortedEntries();
+      if (list.length === 0) {
+        fileList.innerHTML = '<div class="fm-empty">此目录为空</div>';
+        return;
+      }
+
+      fileList.innerHTML = list.map((entry) => {
+        const icon = entry.type === "dir" ? "📁" : getFileIcon(entry.name, entry.content_type);
+        const size = entry.type === "dir" ? "—" : formatSize(entry.size);
+        const mtime = formatMtime(entry.mtime);
+        return `<div class="file-item" data-path="${esc(currentPath === "/" ? "/" + entry.name : currentPath + "/" + entry.name)}" data-type="${entry.type}" data-name="${esc(entry.name)}">
+          <span class="file-icon">${icon}</span>
+          <span class="file-name">${esc(entry.name)}</span>
+          <span class="file-size">${size}</span>
+          <span class="file-mtime">${mtime}</span>
+        </div>`;
+      }).join("");
+
+      // Double-click to enter dir or open file
+      fileList.querySelectorAll(".file-item").forEach((el) => {
+        el.addEventListener("dblclick", () => {
+          if (el.dataset.type === "dir") {
+            navigateTo(el.dataset.path);
+          } else {
+            void openFile(el.dataset.path);
+          }
+        });
+        // Right-click on file
+        el.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          selectedEntry = {
+            path: el.dataset.path,
+            name: el.dataset.name,
+            type: el.dataset.type,
+          };
+          showFileContextMenu(e.clientX, e.clientY);
+        });
+        // Single click to select
+        el.addEventListener("click", () => {
+          fileList.querySelectorAll(".file-item").forEach((x) => x.classList.remove("selected"));
+          el.classList.add("selected");
+        });
+      });
+
+      // Right-click on blank area
+      fileList.addEventListener("contextmenu", (e) => {
+        if (e.target === fileList || e.target.closest(".fm-empty") || e.target.closest(".fm-loading")) {
+          e.preventDefault();
+          selectedEntry = null;
+          showBlankContextMenu(e.clientX, e.clientY);
+        }
+      });
+    }
+
+    function getFileIcon(name, contentType) {
+      const ext = name.split(".").pop()?.toLowerCase() || "";
+      const imageExts = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];
+      const docExts = ["md", "txt", "doc", "docx", "pdf"];
+      const codeExts = ["js", "ts", "py", "rs", "go", "java", "c", "cpp", "h", "css", "html", "json", "toml", "yaml", "yml", "sh", "bash"];
+      const dataExts = ["csv", "xlsx", "xls"];
+      if (imageExts.includes(ext)) return "🖼️";
+      if (docExts.includes(ext)) return "📄";
+      if (codeExts.includes(ext)) return "💻";
+      if (dataExts.includes(ext)) return "📊";
+      if (contentType?.startsWith("image/")) return "🖼️";
+      if (contentType?.startsWith("text/")) return "📝";
+      if (contentType?.includes("markdown")) return "📝";
+      return "📎";
+    }
+
+    function formatSize(bytes) {
+      if (bytes === 0) return "0 B";
+      const k = 1024;
+      const sizes = ["B", "KB", "MB", "GB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+    }
+
+    function formatMtime(ts) {
+      if (!ts) return "—";
+      const d = new Date(ts * 1000);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    // ---- Context menus -------------------------------------------------------
+    function showFileContextMenu(x, y) {
+      contextMenu.innerHTML = `
+        <div class="context-menu-item" data-action="preview">👁️ 预览</div>
+        <div class="context-menu-item" data-action="edit">✏️ 编辑</div>
+        <div class="context-menu-item" data-action="local">💻 本地查看</div>
+        <div class="context-menu-sep"></div>
+        <div class="context-menu-item" data-action="copy">📋 复制</div>
+        <div class="context-menu-item" data-action="cut">✂️ 剪切</div>
+        <div class="context-menu-item" data-action="rename">📝 重命名</div>
+        <div class="context-menu-item" data-action="download">⬇️ 下载</div>
+        <div class="context-menu-sep"></div>
+        <div class="context-menu-item" data-action="permission">🔐 权限</div>
+        <div class="context-menu-item danger" data-action="delete">🗑️ 删除</div>
+      `;
+      positionContextMenu(x, y);
+      wireContextMenuActions();
+    }
+
+    function showBlankContextMenu(x, y) {
+      const hasPaste = clipboard.length > 0;
+      contextMenu.innerHTML = `
+        <div class="context-menu-item" data-action="upload">⬆️ 上传文件</div>
+        <div class="context-menu-item" data-action="newFile">📄 新建文件</div>
+        <div class="context-menu-item" data-action="newDir">📁 新建文件夹</div>
+        <div class="context-menu-sep"></div>
+        <div class="context-menu-item${hasPaste ? "" : " style=\"opacity:0.4\""}" data-action="paste">📋 粘贴</div>
+        <div class="context-menu-item" data-action="refresh">🔄 刷新</div>
+      `;
+      positionContextMenu(x, y);
+      wireContextMenuActions();
+    }
+
+    function positionContextMenu(x, y) {
+      contextMenu.style.display = "block";
+      const rect = contextMenu.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      contextMenu.style.left = (x + rect.width > vw ? x - rect.width : x) + "px";
+      contextMenu.style.top = (y + rect.height > vh ? y - rect.height : y) + "px";
+    }
+
+    function hideContextMenu() {
+      contextMenu.style.display = "none";
+    }
+
+    function wireContextMenuActions() {
+      contextMenu.querySelectorAll(".context-menu-item").forEach((el) => {
+        el.addEventListener("click", () => {
+          const action = el.dataset.action;
+          hideContextMenu();
+          void handleContextAction(action);
+        });
+      });
+    }
+
+    async function handleContextAction(action) {
+      switch (action) {
+        case "preview":    await openFile(selectedEntry.path, "preview"); break;
+        case "edit":       await openFile(selectedEntry.path, "edit"); break;
+        case "local":      await openLocally(selectedEntry.path); break;
+        case "copy":       clipboard = [{ path: selectedEntry.path, isCut: false }]; break;
+        case "cut":        clipboard = [{ path: selectedEntry.path, isCut: true }]; break;
+        case "rename":     await doRename(selectedEntry.path, selectedEntry.name); break;
+        case "download":   await downloadFile(selectedEntry.path); break;
+        case "permission": showPermissionDialog(selectedEntry.path, selectedEntry.name); break;
+        case "delete":     await deleteEntry(selectedEntry.path); break;
+        case "upload":     await uploadFile(); break;
+        case "newFile":    await createNewFile(); break;
+        case "newDir":     await createNewDir(); break;
+        case "paste":      await pasteFromClipboard(); break;
+        case "refresh":    await loadDirectory(currentPath); break;
+      }
+    }
+
+    // ---- File type detection ------------------------------------------------
+    const IMAGE_EXTS   = ["png","jpg","jpeg","gif","webp","svg","bmp","ico","avif"];
+    const VIDEO_EXTS   = ["mp4","webm","mov","avi","mkv"];
+    const AUDIO_EXTS   = ["mp3","wav","ogg","flac","aac","m4a"];
+    const MD_EXTS      = ["md","markdown"];
+    const CODE_EXTS    = ["py","js","ts","rs","go","java","c","cpp","h","hpp","css","html","htm","json","toml","yaml","yml","xml","sql","sh","bash","zsh","rb","php","cson","ini","conf"];
+    const TEXT_EXTS    = ["txt","log","csv","ini","conf"];
+    // Map of file extension → language for syntax highlighting
+    const LANG_MAP: Record<string, string> = {
+      py:"python",js:"javascript",ts:"typescript",rs:"rust",go:"go",
+      java:"java",c:"c",cpp:"cpp",h:"c",hpp:"cpp",css:"css",
+      html:"html",htm:"html",json:"json",toml:"toml",yaml:"yaml",
+      yml:"yaml",xml:"xml",sql:"sql",sh:"bash",bash:"bash",
+      rb:"ruby",php:"php",rs:"rust",cs:"csharp",
+    };
+
+    function getFileCategory(ext: string, contentType: string): string {
+      if (IMAGE_EXTS.includes(ext) || contentType.startsWith("image/")) return "image";
+      if (VIDEO_EXTS.includes(ext) || contentType.startsWith("video/")) return "video";
+      if (AUDIO_EXTS.includes(ext) || contentType.startsWith("audio/")) return "audio";
+      if (MD_EXTS.includes(ext) || contentType.includes("markdown")) return "markdown";
+      if (CODE_EXTS.includes(ext) || contentType.startsWith("text/")) return "code";
+      if (TEXT_EXTS.includes(ext)) return "text";
+      return "binary";
+    }
+
+    // ---- Lightweight Markdown renderer (CDNless) --------------------------
+    function renderMarkdown(src: string): string {
+      let html = src
+        // Escape HTML entities first (except in code blocks)
+        .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+        // Fenced code blocks
+        .replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+          `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`)
+        // Inline code
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        // Headers
+        .replace(/^######\s+(.*)$/gm, "<h6>$1</h6>")
+        .replace(/^#####\s+(.*)$/gm, "<h5>$1</h5>")
+        .replace(/^####\s+(.*)$/gm, "<h4>$1</h4>")
+        .replace(/^###\s+(.*)$/gm, "<h3>$1</h3>")
+        .replace(/^##\s+(.*)$/gm, "<h2>$1</h2>")
+        .replace(/^#\s+(.*)$/gm, "<h1>$1</h1>")
+        // Bold/italic
+        .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*(.+?)\*/g, "<em>$1</em>")
+        .replace(/___(.+?)___/g, "<strong><em>$1</em></strong>")
+        .replace(/__(.+?)__/g, "<strong>$1</strong>")
+        .replace(/_(.+?)_/g, "<em>$1</em>")
+        // Blockquote
+        .replace(/^&gt;\s+(.*)$/gm, "<blockquote>$1</blockquote>")
+        // Horizontal rule
+        .replace(/^---$/gm, "<hr>")
+        .replace(/^\*\*\*$/gm, "<hr>")
+        // Unordered lists
+        .replace(/^[-*+]\s+(.*)$/gm, "<li>$1</li>")
+        // Ordered lists
+        .replace(/^\d+\.\s+(.*)$/gm, "<li>$1</li>")
+        // Links
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+        // Images
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" />')
+        // Paragraphs (double newlines)
+        .replace(/\n\n+/g, "</p><p>")
+        // Single newlines within paragraphs → <br>
+        .replace(/\n/g, "<br>");
+      // Wrap in paragraph
+      html = "<p>" + html + "</p>";
+      // Post-process: merge consecutive block elements
+      html = html
+        .replace(/<\/blockquote>\s*<blockquote>/g, "<br>")
+        .replace(/<p>\s*<h/g, "<h")
+        .replace(/<\/h(\d)>\s*<\/p>/g, "</h$1>")
+        .replace(/<p>\s*<pre>/g, "<pre>")
+        .replace(/<\/pre>\s*<\/p>/g, "</pre>")
+        .replace(/<p>\s*<ul>/g, "<ul>")
+        .replace(/<\/ul>\s*<\/p>/g, "</ul>")
+        .replace(/<p>\s*<ol>/g, "<ol>")
+        .replace(/<\/ol>\s*<\/p>/g, "</ol>")
+        .replace(/<p>\s*<li>/g, "<li>")
+        .replace(/<p>\s*<hr\s*\/?>\s*<\/p>/g, "<hr>")
+        .replace(/<p>\s*<\/p>/g, "")
+        .replace(/<br><br>/g, "<br>");
+      return html;
+    }
+
+    // ---- Syntax highlighter (simple, no CDN) ------------------------------
+    function highlight(code: string, lang: string): string {
+      // Escape HTML first
+      let s = code
+        .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      // Comments
+      s = s.replace(/(\/\/[^\n]*|\/\*[\s\S]*?\*\/|#.*$)/gm,
+        '<span class="tok-comment">$1</span>');
+      // Strings (double, single, template)
+      s = s.replace(/("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|`[^`]*`)/g,
+        '<span class="tok-string">$1</span>');
+      // Numbers
+      s = s.replace(/\b(\d+\.?\d*)\b/g,
+        '<span class="tok-number">$1</span>');
+      // Keywords
+      const kwMap: Record<string,string[]> = {
+        python:["def","class","if","elif","else","for","while","try","except","finally","with","as","import","from","return","yield","raise","pass","break","continue","and","or","not","in","is","None","True","False","async","await","lambda","global","nonlocal","assert"],
+        javascript:["const","let","var","function","async","await","return","if","else","for","while","do","switch","case","break","continue","try","catch","finally","throw","new","class","extends","import","export","from","default","of","in","typeof","instanceof","null","undefined","true","false","this","super"],
+        typescript:["const","let","var","function","async","await","return","if","else","for","while","switch","case","break","continue","try","catch","finally","throw","new","class","extends","implements","import","export","from","default","interface","type","enum","namespace","module","declare","public","private","protected","readonly","as","is","keyof","never","void","null","undefined","true","false","this","super"],
+        rust:["fn","let","mut","const","static","if","else","match","for","while","loop","break","continue","return","struct","enum","impl","trait","type","where","pub","mod","use","crate","self","super","as","in","ref","move","async","await","dyn","unsafe","extern","true","false","Some","None","Ok","Err"],
+        go:["func","var","const","type","struct","interface","map","chan","if","else","for","range","switch","case","default","break","continue","return","go","defer","select","package","import","true","false","nil","make","new","len","cap","append","copy","delete","panic","recover"],
+        java:["public","private","protected","static","final","class","interface","extends","implements","if","else","for","while","do","switch","case","break","continue","return","try","catch","finally","throw","throws","new","import","package","this","super","void","true","false","null","instanceof","synchronized","volatile"," transient","native"],
+        c:["int","char","float","double","void","long","short","unsigned","signed","const","static","extern","if","else","for","while","do","switch","case","break","continue","return","goto","sizeof","struct","union","enum","typedef","define","include","ifdef","ifndef","pragma","NULL","true","false"],
+        cpp:["int","char","float","double","void","long","short","unsigned","signed","const","static","extern","class","struct","union","enum","namespace","using","if","else","for","while","do","switch","case","break","continue","return","goto","sizeof","new","delete","try","catch","throw"," noexcept","template","typename","virtual","override","public","private","protected","NULL","nullptr","true","false","std","cout","cin","endl"],
+        css:["@import","@media","@keyframes","@font-face","@charset","@supports","@page","important","from","to"],
+        html:["DOCTYPE","html","head","body","div","span","p","a","img","ul","ol","li","table","tr","td","th","form","input","button","select","option","textarea","label","script","style","link","meta","title","header","footer","nav","section","article","aside","main","h1","h2","h3","h4","h5","h6"],
+        json:["true","false","null"],
+        toml:["true","false"],
+        yaml:["true","false","null"],
+        xml:["xml","version","encoding"],
+        sql:["SELECT","FROM","WHERE","INSERT","UPDATE","DELETE","CREATE","DROP","ALTER","TABLE","INDEX","JOIN","LEFT","RIGHT","INNER","OUTER","ON","AND","OR","NOT","NULL","PRIMARY","KEY","FOREIGN","REFERENCES","UNIQUE","CHECK","DEFAULT","AUTO_INCREMENT","ORDER","BY","GROUP","HAVING","LIMIT","OFFSET","UNION","ALL","DISTINCT","AS","IN","BETWEEN","LIKE","IS","EXISTS","CASE","WHEN","THEN","ELSE","END","VALUES","SET","INTO"],
+        bash:["if","then","else","elif","fi","for","while","do","done","case","esac","in","function","return","exit","echo","read","local","export","source","alias","unalias","cd","pwd","ls","cp","mv","rm","mkdir","chmod","chown","grep","sed","awk","find","xargs","true","false","test","["],
+        ruby:["def","end","class","module","if","elsif","else","unless","case","when","while","until","for","do","begin","rescue","ensure","raise","return","yield","break","next","redo","retry","self","super","nil","true","false","and","or","not","in","require","require_relative","include","extend","attr_reader","attr_writer","attr_accessor","private","public","protected","puts","print","gets","loop","each","map","select","reject"],
+        php:["php","echo","print","if","else","elseif","endif","while","endwhile","for","endfor","foreach","endforeach","switch","endswitch","case","break","default","function","return","class","extends","interface","trait","implements","public","private","protected","static","final","abstract","const","new","try","catch","finally","throw","use","namespace","global","array","echo","print_r","var_dump","true","false","null","this","self","parent","instanceof"],
+        csharp:["public","private","protected","static","readonly","const","class","struct","interface","enum","namespace","if","else","for","foreach","while","do","switch","case","break","continue","return","try","catch","finally","throw","new","using","virtual","override","abstract","sealed","partial","async","await","Task","string","int","bool","void","true","false","null","this","base","is","as","out","ref","in","var","dynamic","object"],
+      };
+      const kwds = kwMap[lang] || kwMap[Object.keys(LANG_MAP).find(k=>LANG_MAP[k]===lang)] || [];
+      if (kwds.length) {
+        const kwRegex = new RegExp("\\b(" + kwds.join("|") + ")\\b", "g");
+        s = s.replace(kwRegex, '<span class="tok-keyword">$1</span>');
+      }
+      // Function calls
+      s = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g,
+        '<span class="tok-function">$1</span>(');
+      return s;
+    }
+
+    // ---- Image viewer state (for multi-image nav) --------------------------
+    let imageGallery: Array<{ path: string; dataUrl: string }> = [];
+    let imageGalleryIndex = 0;
+    let currentViewerPath: string = "";
+    let isZoomed = false;
+
+    function buildImageViewer(dataUrl: string, path: string) {
+      // Gather same-dir images for gallery nav
+      const dir = currentPath;
+      imageGallery = [];
+      const exts = IMAGE_EXTS;
+      for (const e of entries) {
+        if (e.type === "file") {
+          const ext2 = e.name.split(".").pop()?.toLowerCase() || "";
+          if (exts.includes(ext2)) {
+            imageGallery.push({ path: currentPath === "/" ? "/" + e.name : currentPath + "/" + e.name, dataUrl: "" });
+          }
+        }
+      }
+      imageGalleryIndex = imageGallery.findIndex(g => g.path === path);
+      if (imageGalleryIndex < 0) imageGalleryIndex = 0;
+      // Preload all gallery images
+      for (let i = 0; i < imageGallery.length; i++) {
+        if (imageGallery[i].path === path) {
+          imageGallery[i].dataUrl = dataUrl;
+        } else {
+          loadGalleryThumb(imageGallery[i].path, i);
+        }
+      }
+      renderImageViewer();
+    }
+
+    async function loadGalleryThumb(imgPath: string, idx: number) {
+      try {
+        const preview = await invoke("get_vfs_preview_url", { agent_hash: agentHash, path: imgPath });
+        const resp = await fetch(preview.url);
+        if (resp.ok) {
+          const blob = await resp.blob();
+          imageGallery[idx].dataUrl = await blobToDataURL(blob);
+          // Update if currently showing
+          if (imageGalleryIndex === idx) renderImageViewer();
+        }
+      } catch {}
+    }
+
+    function renderImageViewer() {
+      const img = imageGallery[imageGalleryIndex];
+      if (!img) return;
+      const navHtml = imageGallery.length > 1 ? `
+        <button class="viewer-img-nav prev" onclick="imageNav(-1)">◀</button>
+        <button class="viewer-img-nav next" onclick="imageNav(1)">▶</button>
+        <span class="viewer-img-counter">${imageGalleryIndex + 1} / ${imageGallery.length}</span>
+      ` : "";
+      viewerBody.innerHTML = `
+        <div class="viewer-img-wrap" id="imgWrap">
+          <img id="viewerMainImg" src="${img.dataUrl}" alt="${esc(currentViewerPath)}"
+               onclick="toggleZoom()" style="${isZoomed ? "transform:scale(2);cursor:zoom-out;" : ""}" />
+          <div class="viewer-img-toolbar">
+            <button class="viewer-img-btn" onclick="toggleFullscreen()" title="全屏">⛶</button>
+          </div>
+          ${navHtml}
+        </div>`;
+      // Add toolbar buttons
+      const actionsEl = $("viewerActions");
+      if (actionsEl) {
+        actionsEl.innerHTML = `
+          <button class="viewer-action-btn" onclick="openLocally('${esc(currentViewerPath)}')">💻 本地打开</button>
+          <button class="viewer-action-btn" onclick="downloadFile('${esc(currentViewerPath)}')">⬇ 下载</button>`;
+      }
+    }
+
+    window["imageNav"] = function(dir: number) {
+      imageGalleryIndex = (imageGalleryIndex + dir + imageGallery.length) % imageGallery.length;
+      isZoomed = false;
+      renderImageViewer();
+    };
+
+    window["toggleZoom"] = function() {
+      isZoomed = !isZoomed;
+      const img = $("viewerMainImg") as HTMLImageElement | null;
+      if (img) {
+        img.style.transform = isZoomed ? "scale(2)" : "scale(1)";
+        img.style.cursor = isZoomed ? "zoom-out" : "zoom-in";
+      }
+    };
+
+    window["toggleFullscreen"] = function() {
+      const img = imageGallery[imageGalleryIndex];
+      if (!img) return;
+      const fs = document.createElement("div");
+      fs.className = "viewer-fullscreen";
+      fs.innerHTML = `<img src="${img.dataUrl}" />`;
+      fs.addEventListener("click", () => fs.remove());
+      const closeBtn = document.createElement("button");
+      closeBtn.className = "viewer-fullscreen-close";
+      closeBtn.textContent = "✕";
+      closeBtn.addEventListener("click", () => fs.remove());
+      fs.appendChild(closeBtn);
+      document.body.appendChild(fs);
+    };
+
+    // ---- Code editor with line numbers + syntax highlighting -------------
+    function buildCodeEditor(text: string, path: string) {
+      const ext = path.split(".").pop()?.toLowerCase() || "";
+      const lang = LANG_MAP[ext] || "text";
+      const lines = text.split("\n");
+      const lineCount = lines.length;
+      const lineNums = Array.from({ length: lineCount }, (_, i) => i + 1).join("\n");
+      const highlighted = highlight(text, lang);
+
+      viewerBody.innerHTML = `
+        <div class="code-editor-wrap" id="codeEditorWrap">
+          <div class="code-line-nums" id="codeLineNums">${lineNums}</div>
+          <div class="code-editor-area">
+            <div class="code-highlight" id="codeHighlight">${highlight(text, lang)}</div>
+            <textarea class="code-textarea" id="codeTextarea" spellcheck="false">${esc(text)}</textarea>
+          </div>
+        </div>`;
+
+      const ta = $("codeTextarea") as HTMLTextAreaElement | null;
+      const hl = $("codeHighlight") as HTMLElement | null;
+      const ln = $("codeLineNums") as HTMLElement | null;
+
+      function syncScroll() {
+        if (hl) hl.scrollTop = ta?.scrollTop || 0;
+        if (ln) ln.scrollTop = ta?.scrollTop || 0;
+      }
+      function updateLineNums() {
+        if (!ta) return;
+        const lcount = ta.value.split("\n").length;
+        const nums = Array.from({ length: lcount }, (_, i) => i + 1).join("\n");
+        const lnEl = $("codeLineNums");
+        if (lnEl) lnEl.textContent = nums;
+      }
+
+      ta?.addEventListener("scroll", syncScroll);
+      ta?.addEventListener("input", () => {
+        viewerUnsaved = true;
+        viewerUnsavedEl.style.display = "inline";
+        updateLineNums();
+        // Re-highlight on edit
+        if (hl) hl.innerHTML = highlight(ta.value, lang);
+      });
+      ta?.addEventListener("keydown", (e) => {
+        // Tab → 4 spaces
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const start = ta.selectionStart;
+          const end = ta.selectionEnd;
+          ta.value = ta.value.substring(0, start) + "    " + ta.value.substring(end);
+          ta.selectionStart = ta.selectionEnd = start + 4;
+          updateLineNums();
+          if (hl) hl.innerHTML = highlight(ta.value, lang);
+        }
+        // Ctrl+S → save
+        if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+          e.preventDefault();
+          void saveFileContent(path, ta.value);
+        }
+        // Ctrl+/ → toggle comment (line comment for most languages)
+        if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+          e.preventDefault();
+          toggleLineComment(ta, lang);
+          updateLineNums();
+          if (hl) hl.innerHTML = highlight(ta.value, lang);
+        }
+      });
+
+      // Toolbar actions
+      const actionsEl = $("viewerActions");
+      if (actionsEl) {
+        actionsEl.innerHTML = `
+          <button class="viewer-action-btn" onclick="openLocally('${esc(path)}')">💻 本地打开</button>
+          <button class="viewer-action-btn" onclick="downloadFile('${esc(path)}')">⬇ 下载</button>`;
+      }
+    }
+
+    function toggleLineComment(ta: HTMLTextAreaElement, lang: string) {
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const selected = ta.value.substring(start, end);
+      const commentChar = ["python","ruby","bash","yaml","toml","ini"].includes(lang) ? "#" : "//";
+      if (selected.includes("\n")) {
+        // Multi-line: comment each line
+        const lines2 = ta.value.substring(ta.selectionStart, ta.selectionEnd).split("\n");
+        const commented = lines2.map(l => commentChar + " " + l).join("\n");
+        ta.value = ta.value.substring(0, ta.selectionStart) + commented + ta.value.substring(ta.selectionEnd);
+      } else {
+        ta.value = ta.value.substring(0, start) + commentChar + " " + ta.value.substring(end);
+        ta.selectionStart = start + commentChar.length + 1;
+        ta.selectionEnd = ta.selectionStart;
+      }
+      viewerUnsaved = true;
+      viewerUnsavedEl.style.display = "inline";
+    }
+
+    // ---- Markdown viewer / editor ----------------------------------------
+    let mdEditMode = false;
+    let mdOriginalText = "";
+
+    function buildMarkdownViewer(text: string, path: string) {
+      mdOriginalText = text;
+      mdEditMode = false;
+      renderMdView(text, path);
+    }
+
+    function renderMdView(text: string, path: string) {
+      viewerBody.innerHTML = `<div class="md-rendered" id="mdRendered">${renderMarkdown(text)}</div>`;
+      const actionsEl = $("viewerActions");
+      if (actionsEl) {
+        actionsEl.innerHTML = `
+          <button class="viewer-action-btn" id="mdEditBtn" onclick="switchMdEdit('${esc(path)}')">✏️ 编辑</button>
+          <button class="viewer-action-btn" onclick="openLocally('${esc(path)}')">💻 本地打开</button>
+          <button class="viewer-action-btn" onclick="downloadFile('${esc(path)}')">⬇ 下载</button>`;
+      }
+    }
+
+    function switchMdEdit(path: string) {
+      mdEditMode = true;
+      viewerBody.innerHTML = `
+        <div class="code-editor-wrap" id="mdEditorWrap">
+          <div class="code-line-nums" id="mdLineNums">${mdOriginalText.split("\n").map((_,i)=>i+1).join("\n")}</div>
+          <div class="code-editor-area">
+            <textarea class="code-textarea" id="mdTextarea" spellcheck="false">${esc(mdOriginalText)}</textarea>
+          </div>
+        </div>`;
+      const ta = $("mdTextarea") as HTMLTextAreaElement | null;
+      ta?.addEventListener("input", () => {
+        viewerUnsaved = true;
+        viewerUnsavedEl.style.display = "inline";
+        if (ta) {
+          const lnEl = $("mdLineNums");
+          if (lnEl) lnEl.textContent = ta.value.split("\n").map((_,i)=>i+1).join("\n");
+        }
+      });
+      ta?.addEventListener("keydown", (e) => {
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const start = ta.selectionStart;
+          ta.value = ta.value.substring(0, start) + "    " + ta.value.substring(ta.selectionEnd);
+          ta.selectionStart = ta.selectionEnd = start + 4;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+          e.preventDefault();
+          void saveFileContent(path, ta.value);
+        }
+      });
+      const actionsEl = $("viewerActions");
+      if (actionsEl) {
+        actionsEl.innerHTML = `
+          <button class="viewer-action-btn" onclick="switchMdView('${esc(path)}')">👁️ 预览</button>
+          <button class="viewer-action-btn" onclick="downloadFile('${esc(path)}')">⬇ 下载</button>`;
+      }
+    }
+
+    window["switchMdEdit"] = (path: string) => {
+      const ta = $("mdTextarea") as HTMLTextAreaElement | null;
+      mdOriginalText = ta?.value || mdOriginalText;
+      switchMdEdit(path);
+    };
+
+    window["switchMdView"] = (path: string) => {
+      mdEditMode = false;
+      const ta = $("mdTextarea") as HTMLTextAreaElement | null;
+      if (ta) mdOriginalText = ta.value;
+      renderMdView(mdOriginalText, path);
+    };
+
+    // ---- Media player (audio / video) -----------------------------------
+    async function buildMediaPlayer(blob: Blob, path: string, category: string) {
+      const dataUrl = await blobToDataURL(blob);
+      const url = URL.createObjectURL(await fetch(dataUrl).then(r => r.blob()));
+      const isVideo = category === "video";
+      const fileName = path.split("/").pop();
+      const size = formatSize(blob.size);
+      viewerBody.innerHTML = `
+        <div class="media-player-wrap">
+          ${isVideo
+            ? `<video src="${dataUrl}" controls loop style="max-width:100%;max-height:60vh;"></video>`
+            : `<audio src="${dataUrl}" controls loop style="width:100%;"></audio>`}
+          <div class="media-label">📄 ${esc(fileName || "")} · ${size}</div>
+          <button class="viewer-action-btn" onclick="downloadFile('${esc(path)}')">⬇ 下载</button>
+        </div>`;
+      const actionsEl = $("viewerActions");
+      if (actionsEl) actionsEl.innerHTML = "";
+    }
+
+    // ---- Binary / unsupported: download only ----------------------------
+    function buildBinaryView(path: string, size: number) {
+      const fileName = path.split("/").pop();
+      viewerBody.innerHTML = `
+        <div class="dl-only-wrap">
+          <div class="dl-only-icon">📎</div>
+          <div class="dl-only-name">${esc(fileName || "")}</div>
+          <div class="dl-only-size">${formatSize(size)}</div>
+          <button class="btn-primary" style="margin-top:8px;padding:8px 20px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-size:14px;"
+            onclick="downloadFile('${esc(path)}')">⬇ 下载文件</button>
+        </div>`;
+      const actionsEl = $("viewerActions");
+      if (actionsEl) actionsEl.innerHTML = "";
+    }
+
+    // ---- Main openFile dispatcher ----------------------------------------
+    async function openFile(path: string, mode = "preview") {
+      if (!path) return;
+      currentViewerPath = path;
+      isZoomed = false;
+      mdEditMode = false;
+      viewerTitle.textContent = path.split("/").pop() || "";
+      viewerUnsaved = false;
+      viewerUnsavedEl.style.display = "none";
+      $("viewerActions").innerHTML = "";
+      viewerOverlay.style.display = "flex";
+      viewerBody.innerHTML = '<div class="fm-loading">加载中…</div>';
+
+      try {
+        const preview = await invoke("get_vfs_preview_url", { agent_hash: agentHash, path });
+        const resp = await fetch(preview.url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        const contentType = blob.type || "";
+        const ext = path.split(".").pop()?.toLowerCase() || "";
+        const cat = getFileCategory(ext, contentType);
+
+        if (cat === "image") {
+          const dataUrl = await blobToDataURL(blob);
+          buildImageViewer(dataUrl, path);
+        } else if (cat === "markdown") {
+          const text = await blob.text();
+          buildMarkdownViewer(text, path);
+        } else if (cat === "code" || cat === "text") {
+          const text = await blob.text();
+          if (mode === "edit" && isEditable(ext)) {
+            buildCodeEditor(text, path);
+          } else {
+            // Read-only code view
+            const lang = LANG_MAP[ext] || "text";
+            viewerBody.innerHTML = `<div class="code-editor-wrap"><div class="code-line-nums">${text.split("\n").map((_,i)=>i+1).join("\n")}</div><div class="code-editor-area"><div class="code-highlight">${highlight(text, lang)}</div></div></div>`;
+            const actionsEl = $("viewerActions");
+            if (actionsEl) {
+              actionsEl.innerHTML = `
+                <button class="viewer-action-btn" onclick="void 0">✏️ <span onclick="reopenInEdit('${esc(path)}')" style="cursor:pointer">编辑</span></button>
+                <button class="viewer-action-btn" onclick="openLocally('${esc(path)}')">💻 本地打开</button>
+                <button class="viewer-action-btn" onclick="downloadFile('${esc(path)}')">⬇ 下载</button>`;
+            }
+          }
+        } else if (cat === "video" || cat === "audio") {
+          await buildMediaPlayer(blob, path, cat);
+        } else {
+          buildBinaryView(path, blob.size);
+        }
+      } catch (e) {
+        viewerBody.innerHTML = `<div class="fm-error">预览失败：${esc(String(e))}</div>`;
+      }
+    }
+
+    window["reopenInEdit"] = (path: string) => { void openFile(path, "edit"); };
+
+    function isEditable(ext: string): boolean {
+      return CODE_EXTS.includes(ext) || TEXT_EXTS.includes(ext) || MD_EXTS.includes(ext);
+    }
+
+    function isEditable(ext) {
+      const editable = ["txt", "md", "js", "ts", "py", "rs", "go", "java", "c", "cpp", "h", "css", "html", "json", "toml", "yaml", "yml", "sh", "bash", "xml", "sql"];
+      return editable.includes(ext);
+    }
+
+    async function saveFileContent(path: string, content: string) {
+      try {
+        const uploadInfo = await invoke("get_vfs_upload_url", { agent_hash: agentHash, path });
+        const resp = await fetch(uploadInfo.url, {
+          method: uploadInfo.method || "PUT",
+          body: content,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+        if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
+        viewerUnsaved = false;
+        viewerUnsavedEl.style.display = "none";
+      } catch (e) {
+        alert(`保存失败：${e}`);
+      }
+    }
+    window["saveFileContent"] = saveFileContent;
+
+    // ---- Unsaved changes custom dialog ------------------------------------
+    let unsavedDialogResolve: ((v: "save"|"discard"|"cancel") => void) | null = null;
+
+    function showUnsavedDialog(): Promise<"save"|"discard"|"cancel"> {
+      return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.id = "unsavedDialog";
+        overlay.style.cssText = "position:fixed;inset:0;z-index:500;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;";
+        overlay.innerHTML = `
+          <div style="background:var(--bg-elev);border-radius:12px;padding:20px 24px;width:320px;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+            <h3 style="margin:0 0 12px;font-size:15px;font-weight:600;">有未保存的更改</h3>
+            <p style="margin:0 0 16px;font-size:13px;color:var(--text-muted);">是否保存对文件的更改？</p>
+            <div style="display:flex;justify-content:flex-end;gap:8px;">
+              <button id="unsavedDiscard" style="padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer;font-family:inherit;font-size:13px;">不保存</button>
+              <button id="unsavedCancel" style="padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer;font-family:inherit;font-size:13px;">取消</button>
+              <button id="unsavedSave" style="padding:6px 16px;border-radius:6px;border:none;background:var(--primary);color:#fff;cursor:pointer;font-family:inherit;font-size:13px;">保存</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+        unsavedDialogResolve = resolve;
+
+        $("unsavedSave")?.addEventListener("click", () => {
+          overlay.remove(); resolve("save");
+        });
+        $("unsavedDiscard")?.addEventListener("click", () => {
+          overlay.remove(); resolve("discard");
+        });
+        $("unsavedCancel")?.addEventListener("click", () => {
+          overlay.remove(); resolve("cancel");
+        });
+        // ESC = cancel
+        const escHandler = (e: KeyboardEvent) => {
+          if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", escHandler); resolve("cancel"); }
+        };
+        document.addEventListener("keydown", escHandler);
+      });
+    }
+
+    async function closeViewer() {
+      if (viewerUnsaved) {
+        const choice = await showUnsavedDialog();
+        if (choice === "cancel") return;
+        if (choice === "save") {
+          // Try to get content from active editor
+          const ta = $("codeTextarea") as HTMLTextAreaElement | null;
+          const ta2 = $("mdTextarea") as HTMLTextAreaElement | null;
+          const activeTa = ta || ta2;
+          if (activeTa && currentViewerPath) {
+            await saveFileContent(currentViewerPath, activeTa.value);
+          }
+        }
+        // choice === "discard": just close
+      }
+      viewerUnsaved = false;
+      viewerOverlay.style.display = "none";
+      viewerBody.innerHTML = "";
+      $("viewerActions").innerHTML = "";
+    }
+
+    async function openLocally(path) {
+      try {
+        const localPath = await invoke("download_vfs_file", { agent_hash: agentHash, path });
+        // Open with system default app via Tauri's open::that()
+        await invoke("open_local_file", { path: localPath });
+      } catch (e) {
+        alert(`打开失败：${e}`);
+      }
+    }
+
+    async function downloadFile(path) {
+      try {
+        const localPath = await invoke("download_vfs_file", { agent_hash: agentHash, path });
+        // Trigger browser download via anchor trick (for the webview window)
+        const a = document.createElement("a");
+        a.href = `file://${localPath}`;
+        a.download = path.split("/").pop();
+        a.click();
+      } catch (e) {
+        alert(`下载失败：${e}`);
+      }
+    }
+
+    async function deleteEntry(path) {
+      const name = path.split("/").pop();
+      if (!confirm(`确定要删除 "${name}" 吗？此操作不可撤销。`)) return;
+      try {
+        await invoke("vfs_rm", { agent_hash: agentHash, path });
+        await loadDirectory(currentPath);
+      } catch (e) {
+        alert(`删除失败：${e}`);
+      }
+    }
+
+    async function doRename(path, oldName) {
+      const newName = prompt("输入新名称：", oldName);
+      if (!newName || newName === oldName) return;
+      const parentPath = path.substring(0, path.lastIndexOf("/")) || "/";
+      const newPath = (parentPath === "/" ? "" : parentPath) + "/" + newName;
+      try {
+        await invoke("vfs_mv", { agent_hash: agentHash, from_path: path, to_path: newPath });
+        await loadDirectory(currentPath);
+      } catch (e) {
+        alert(`重命名失败：${e}`);
+      }
+    }
+
+    // ---- Blank area operations -----------------------------------------------
+    async function createNewDir() {
+      const name = prompt("输入文件夹名称：");
+      if (!name) return;
+      const fullPath = (currentPath === "/" ? "" : currentPath) + "/" + name;
+      try {
+        await invoke("vfs_mkdir", { agent_hash: agentHash, path: fullPath });
+        await loadDirectory(currentPath);
+      } catch (e) {
+        alert(`创建文件夹失败：${e}`);
+      }
+    }
+
+    async function createNewFile() {
+      const name = prompt("输入文件名称（包含扩展名）：");
+      if (!name) return;
+      const fullPath = (currentPath === "/" ? "" : currentPath) + "/" + name;
+      // Create empty file by getting upload URL and uploading empty content
+      try {
+        const uploadInfo = await invoke("get_vfs_upload_url", { agent_hash: agentHash, path: fullPath });
+        await fetch(uploadInfo.url, { method: uploadInfo.method || "PUT", body: "" });
+        await loadDirectory(currentPath);
+      } catch (e) {
+        alert(`创建文件失败：${e}`);
+      }
+    }
+
+    async function uploadFile() {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.addEventListener("change", async () => {
+        const file = input.files[0];
+        if (!file) return;
+        const fullPath = (currentPath === "/" ? "" : currentPath) + "/" + file.name;
+        try {
+          const uploadInfo = await invoke("get_vfs_upload_url", { agent_hash: agentHash, path: fullPath });
+          await fetch(uploadInfo.url, {
+            method: uploadInfo.method || "PUT",
+            body: file,
+            headers: { "Content-Type": file.type || "application/octet-stream" },
+          });
+          await loadDirectory(currentPath);
+        } catch (e) {
+          alert(`上传失败：${e}`);
+        }
+      });
+      input.click();
+    }
+
+    async function pasteFromClipboard() {
+      if (!clipboard.length) return;
+      const parentPath = currentPath;
+      for (const item of clipboard) {
+        const name = item.path.split("/").pop();
+        const destPath = (parentPath === "/" ? "" : parentPath) + "/" + name;
+        try {
+          if (item.isCut) {
+            await invoke("vfs_mv", { agent_hash: agentHash, from_path: item.path, to_path: destPath });
+          } else {
+            // Copy: download then re-upload
+            const localPath = await invoke("download_vfs_file", { agent_hash: agentHash, path: item.path });
+            const fileData = await (await fetch(`file://${localPath}`)).blob();
+            const uploadInfo = await invoke("get_vfs_upload_url", { agent_hash: agentHash, path: destPath });
+            await fetch(uploadInfo.url, {
+              method: uploadInfo.method || "PUT",
+              body: fileData,
+            });
+          }
+        } catch (e) {
+          alert(`粘贴失败 (${name}): ${e}`);
+        }
+      }
+      clipboard = [];
+      await loadDirectory(currentPath);
+    }
+
+    // ---- Permission dialog ---------------------------------------------------
+    function showPermissionDialog(path, name) {
+      permFileName.textContent = name;
+      permOverlay.style.display = "flex";
+      permOverlay.dataset.path = path;
+      // Reset to read
+      document.querySelectorAll('input[name="perm"]').forEach((r) => { r.checked = r.value === "read"; });
+    }
+
+    async function confirmPermission() {
+      const path = permOverlay.dataset.path;
+      const permission = document.querySelector('input[name="perm"]:checked')?.value || "read";
+      permOverlay.style.display = "none";
+      try {
+        await invoke("vfs_set_permission", { agent_hash: agentHash, path, permission });
+      } catch (e) {
+        alert(`设置权限失败：${e}`);
+      }
+    }
+
+    // ---- UI helpers ---------------------------------------------------------
+    function showLoading(show) {
+      if (show) {
+        fileList.innerHTML = '<div class="fm-loading">加载中...</div>';
+      }
+    }
+
+    function showError(msg) {
+      errorBanner.textContent = msg;
+      errorBanner.style.display = "block";
+    }
+
+    function hideError() {
+      errorBanner.style.display = "none";
+    }
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function blobToDataURL(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    // ---- Start ---------------------------------------------------------------
+    init().catch((e) => showError(`初始化失败：${e}`));
+  </script>
+</body>
+</html>

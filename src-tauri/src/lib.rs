@@ -22,6 +22,7 @@ mod db;
 mod engine;
 mod executor;
 mod file_bridge;
+mod file_manager;
 mod file_ops;
 mod local_setup;
 mod settings;
@@ -110,6 +111,17 @@ pub fn run() {
             file_ops::file_read,
             file_ops::file_write,
             file_ops::file_delete,
+            file_ops::open_local_file,
+            file_ops::cleanup_preview_temp,
+            file_manager::list_vfs_dir,
+            file_manager::get_vfs_preview_url,
+            file_manager::get_vfs_upload_url,
+            file_manager::vfs_mkdir,
+            file_manager::vfs_rm,
+            file_manager::vfs_mv,
+            file_manager::vfs_set_permission,
+            file_manager::vfs_notify_event,
+            file_manager::download_vfs_file,
             welcome::check_first_launch,
             welcome::save_welcome_config,
             welcome::discover_well_known,

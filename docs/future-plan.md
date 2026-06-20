@@ -1359,37 +1359,101 @@ TIER_CONFIGS = {
 
 ### Phase 5 — 群广场（Engine 侧事件管理）
 
-**目标：** 群广场跟随群上云。Agent 完成任务 → 写入 `GroupMoments` 表 → WS 推送给 Desktop。
+**核心理念：** 群广场 = 群聊的快速看板 / Todo List。100 轮递归深度跑下来可能上百条消息，群广场记录主线的里程碑——Agent 完成任务、达成共识、产出文件。用户不需要翻聊天记录，看广场就知道群在干什么。
+
+**设计决策（Q1-Q6）：**
+| Q | 决策 |
+|:--|:-----|
+| Q1 形态 | ⏱ 时间线（朋友圈风格），按时间倒序 |
+| Q2 入口 | ① 左 Tab「📱 广场」— 聚合所有群的动态，时间线混排，可筛选某个群。动态显示：头像、昵称、归属群 |
+|  | ② 群内视图 — 群 ⋮ 菜单 → 群广场 |
+| Q3 Agent 工具 | `create_post(title, content, attachments)` — 带图片/文件/小程序卡片，对齐消息多媒体能力 |
+| Q4 互动 | ❌ 暂不做（点赞/评论/转发全部暂缓）|
+| Q5 入口位置 | 已在 Q2 覆盖 |
+| Q6 单聊 | ❌ 无广场。群广场是群聊专属，只有群内行为才上广场 |
 
 **引擎侧新增：**
-- `models/group.py` 中 GroupMoments 表（或独立文件）
+
 ```python
+# models/group.py 中 GroupMoments 表
 class GroupMoments(Base):
-    id: str (UUID)
-    group_id: str → Group.id
-    agent_hash: str
-    kind: str ("task_done" | "file_changed" | "analysis" | "manual")
-    title: str
-    content: str
-    data: JSON (附加链接/详情)
-    created_at: datetime
+    __tablename__ = "group_moments"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    group_id = Column(String(36), nullable=False, index=True)
+    agent_hash = Column(String(4), nullable=True)  # None = 用户自己发的
+    kind = Column(String(32), nullable=False)  # "task_done" | "file_changed" | "analysis" | "consensus" | "manual"
+    title = Column(String(200))
+    content = Column(Text)
+    attachments = Column(JSON, default=list)  # [{ type: "image"|"file"|"miniapp_card", ... }]
+    created_at = Column(DateTime, default=datetime.utcnow)
 ```
-- `services/group_service.py` 中 `post_moment(group_id, agent_hash, kind, title, content, data)` 方法
-- `services/agent_tools_service.py` 增加 `_check_post_moment()` 钩子
-  - Agent 完成写文件 → 自动发一条 `file_changed` 类型动态
-  - Agent 完成分析/批改 → 自动发 `analysis` 类型动态
-  - 涉及隐私操作 → 不自动发（默认禁止）
-- WS 推送：`/ws/desktop/groups/{group_id}` 接收 `moments_event` 类型
+
+**Engine REST API：**
+```
+GET    /api/groups/{id}/moments             — 获取本群动态（?before=timestamp&limit=50）
+GET    /api/user/moments                    — 获取用户所有群的聚合动态（?group_id=xxx 可筛选）
+POST   /api/user/moments                    — 手动发布动态（Agent/用户）
+DELETE /api/groups/{id}/moments/{moment_id} — 删除动态
+PATCH  /api/groups/{id}/settings            — 群广场开关（跟 settings 一起）
+```
+
+**Agent 工具：**
+```python
+# services/agent_tools_service.py
+def create_post(title: str, content: str, attachments: list = None) -> dict:
+    """
+    Agent 手动发群广场动态。
+    
+    自动检测 Agent 是否在群聊上下文中。
+    如果在单聊中调用则报错：「create_post 只能在群聊中使用」
+    """
+
+# 自动发动态的钩子（在工具执行后检查）：
+# - Agent 完成写文件（write_file/edit_file）→ 自动发 file_changed
+# - Agent 完成 search/knowledge_search → 自动发 analysis
+# - Agent 调用 spawn_subagent 完成长任务 → 自动发 task_done
+# - 涉及隐私操作（bash/route_tool）→ 不发
+```
+
+**WS 推送：**
+```json
+// Engine → Desktop
+{
+  "type": "moments_event",
+  "group_id": "uuid-xxx",
+  "moment": {
+    "id": "moment-uuid",
+    "agent_hash": "abc123",
+    "agent_name": "李老师",
+    "kind": "task_done",
+    "title": "完成了三角公式总结",
+    "content": "已整理 20 个公式并分类...",
+    "attachments": [{ "type": "file", "name": "三角公式总结.md" }],
+    "created_at": 1710000000
+  }
+}
+```
 
 **Desktop 侧改动：**
-- `src-tauri/src/moments.rs` — 3 个命令（均调 Engine API）
-  - `get_group_moments(group_id)` → GET /api/groups/{id}/moments
-  - `post_moment(group_id, title, content)` → POST 手动发布
-  - `set_moments_enabled(group_id, enabled)` → PATCH settings
-- 本地缓存：`~/.feclaw/groups/{group_id}_moments.json`（离线浏览）
-- 前端：聊天窗口顶部 Tab「💬 聊天」/「📱 群广场」切换
+- 左 Tab 新增「📱 广场」入口，跟「💬 聊天」「🙋 我的」并列
+- 聚合视图：所有群动态按时间倒序混排，每条显示头像+昵称+归属群+内容
+- 筛选：点击 Tab 标题旁的下拉可筛选到某个群
+- 群内视图：群右上角 ⋮ → 「群广场」
+- `src-tauri/src/moments.rs`（新建）— 3 个 Tauri 命令：
+  - `get_moments(group_id?)` → GET /api/user/moments（可选筛选）
+  - `post_moment(group_id, title, content, attachments)` → 手动发布
+  - `delete_moment(moment_id)` → DELETE
+- WS 消息类型新增 `moments_event` 解析
+- ws.rs 扩展处理 moments_event → 实时插入广场列表
 
-**工时：** 引擎 3–4 天 + Desktop 2 天
+**潜在坑点：**
+| 坑 | 风险 | 缓解 |
+|:--:|:----:|:-----|
+| Agent 自动发太多动态刷屏 | 🟢 低 | 不限频率，system prompt 告知不要太频繁即可 |
+| 群已解散 | 🟢 低 | 解散群时保留聊天记录和动态，用户仍可查看历史产出。群本身不可操作（不能发消息/不能加人）|
+| 离线时广场不可见 | 🟢 低 | Desktop SQLite 缓存最近 100 条动态 |
+
+**工时估计：** ~3 个 Claude Code 会话（Engine ~1.5 + Desktop ~1.5）
 
 ---
 

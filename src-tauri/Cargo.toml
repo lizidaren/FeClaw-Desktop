@@ -34,6 +34,7 @@ auto-launch = "0.5"
 dirs = "5"
 base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
+urlencoding = "2"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

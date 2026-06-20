@@ -11,7 +11,7 @@
 //
 // Compiled to chat.js with esbuild (see project docs).
 
-import { store, type AgentInfo, type ChatMessage, type ChatItem } from "./store";
+import { store, type AgentInfo, type ChatMessage, type ChatItem, type Attachment } from "./store";
 import { openCreateDialog } from "./components/create-dialog";
 import { openSidePanel } from "./components/side-panel";
 import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImageCards, clearImageCards } from "./components/input-box";
@@ -113,7 +113,7 @@ function renderMessageEl(parent: HTMLElement, msg: ChatMessage): void {
   wrap.className = `bubble ${msg.role === "user" ? "user" : "assistant"}`;
   wrap.dataset.id = msg.id;
 
-  // Image message
+  // Image message (legacy single-image type)
   if (msg.message_type === "image" || msg.content.startsWith("data:image/")) {
     const imgWrap = document.createElement("div");
     imgWrap.className = "bubble-image";
@@ -129,6 +129,22 @@ function renderMessageEl(parent: HTMLElement, msg: ChatMessage): void {
     wrap.appendChild(body);
   }
 
+  // Render attachments (WS message attachments)
+  if (msg.attachments && msg.attachments.length > 0) {
+    const attContainer = document.createElement("div");
+    attContainer.className = "msg-attachments";
+    for (const att of msg.attachments) {
+      void renderAttachment(attContainer, att, msg.agent_hash);
+    }
+    // Insert after body, before meta
+    const bodyEl = wrap.querySelector(".bubble-body");
+    if (bodyEl) {
+      wrap.insertBefore(attContainer, bodyEl.nextSibling);
+    } else {
+      wrap.appendChild(attContainer);
+    }
+  }
+
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   const ts = msg.timestamp || formatTime(msg.created_at);
@@ -137,6 +153,170 @@ function renderMessageEl(parent: HTMLElement, msg: ChatMessage): void {
   wrap.appendChild(meta);
 
   parent.appendChild(wrap);
+}
+
+// ---- Attachment rendering ---------------------------------------------------
+
+async function renderAttachment(
+  container: HTMLElement,
+  att: Attachment,
+  agentHash?: string
+): Promise<void> {
+  if (att.type === "image") {
+    const imgDiv = document.createElement("div");
+    imgDiv.className = "attachment-image";
+
+    const img = document.createElement("img");
+    img.className = "attachment-thumb";
+    img.alt = "图片附件";
+    img.loading = "lazy";
+
+    // Load image based on source
+    if (att.source === "data" && att.data) {
+      img.src = att.data;
+    } else if (att.source === "url" && att.url) {
+      img.src = att.url;
+    } else if (att.source === "vfs" && att.path && agentHash) {
+      img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect fill='%23334155' width='80' height='80' rx='8'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' fill='%2394a3b8' font-size='12'%3E加载中…%3C/text%3E%3C/svg%3E";
+      try {
+        const preview = await invoke<{ url: string }>("get_vfs_preview_url", {
+          agent_hash: agentHash,
+          path: att.path,
+        });
+        const resp = await fetch(preview.url);
+        if (resp.ok) {
+          const blob = await resp.blob();
+          img.src = await blobToDataURL(blob);
+        }
+      } catch (e) {
+        console.error("Failed to load VFS image attachment:", e);
+        img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect fill='%23334155' width='80' height='80' rx='8'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' fill='%2394a3b8' font-size='12'%3E加载失败%3C/text%3E%3C/svg%3E";
+      }
+    } else {
+      img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect fill='%23334155' width='80' height='80' rx='8'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' fill='%2394a3b8' font-size='12'%3E图片%3C/text%3E%3C/svg%3E";
+    }
+
+    // Click → full view
+    img.style.cursor = "pointer";
+    img.addEventListener("click", () => openFullView(img.src));
+
+    imgDiv.appendChild(img);
+    container.appendChild(imgDiv);
+
+  } else if (att.type === "file") {
+    const fileDiv = document.createElement("div");
+    fileDiv.className = "attachment-file";
+    const icon = document.createElement("span");
+    icon.className = "af-icon";
+    icon.textContent = "📄";
+    const name = document.createElement("span");
+    name.className = "af-name";
+    name.textContent = att.name;
+    const size = document.createElement("span");
+    size.className = "af-size";
+    size.textContent = formatBytes(att.size);
+    const dlBtn = document.createElement("button");
+    dlBtn.className = "af-download";
+    dlBtn.textContent = "下载";
+    dlBtn.addEventListener("click", () => void downloadAttachment(att, agentHash));
+    fileDiv.appendChild(icon);
+    fileDiv.appendChild(name);
+    fileDiv.appendChild(size);
+    fileDiv.appendChild(dlBtn);
+    container.appendChild(fileDiv);
+
+  } else if (att.type === "miniapp_card") {
+    const card = document.createElement("div");
+    card.className = "attachment-miniapp";
+    if (att.preview_url) {
+      const preview = document.createElement("img");
+      preview.className = "am-preview";
+      preview.src = att.preview_url;
+      preview.alt = att.title;
+      card.appendChild(preview);
+    }
+    const info = document.createElement("div");
+    info.className = "am-info";
+    const title = document.createElement("span");
+    title.className = "am-title";
+    title.textContent = att.title;
+    const appName = document.createElement("span");
+    appName.className = "am-app";
+    appName.textContent = att.app_name;
+    info.appendChild(title);
+    info.appendChild(appName);
+    card.appendChild(info);
+    const openBtn = document.createElement("button");
+    openBtn.className = "am-open";
+    openBtn.textContent = "打开";
+    openBtn.addEventListener("click", () => void openMiniapp(att.path));
+    card.appendChild(openBtn);
+    container.appendChild(card);
+  }
+}
+
+function openFullView(src: string): void {
+  const overlay = document.createElement("div");
+  overlay.className = "viewer-fullscreen";
+  overlay.innerHTML = `<img src="${src}" />`;
+  overlay.addEventListener("click", () => overlay.remove());
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "viewer-fullscreen-close";
+  closeBtn.textContent = "✕";
+  closeBtn.addEventListener("click", () => overlay.remove());
+  overlay.appendChild(closeBtn);
+  document.body.appendChild(overlay);
+}
+
+async function downloadAttachment(
+  att: Attachment,
+  agentHash?: string
+): Promise<void> {
+  if (att.type !== "file") return;
+  if (att.url) {
+    // Direct URL: create anchor download
+    const a = document.createElement("a");
+    a.href = att.url;
+    a.download = att.name;
+    a.click();
+  } else if (att.path && agentHash) {
+    try {
+      const localPath = await invoke<string>("download_vfs_file", {
+        agent_hash: agentHash,
+        path: att.path,
+      });
+      const a = document.createElement("a");
+      a.href = `file://${localPath}`;
+      a.download = att.name;
+      a.click();
+    } catch (e) {
+      alert(`下载失败：${e}`);
+    }
+  }
+}
+
+async function openMiniapp(path?: string): Promise<void> {
+  if (path) {
+    // For now just alert; Phase 6 will implement deep linking
+    console.log("open miniapp:", path);
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
+
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 function appendStreamingMessage(id: string, chunk: string): void {
