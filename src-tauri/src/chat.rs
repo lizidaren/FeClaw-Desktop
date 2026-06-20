@@ -412,8 +412,9 @@ pub async fn list_agents() -> Result<Vec<AgentInfo>, String> {
         .map_err(|e| format!("获取 Agent 列表失败：{e}"))?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("获取 Agent 列表失败 ({}): {}", resp.status(), body));
+        return Err(format!("获取 Agent 列表失败 ({}): {}", status, body));
     }
 
     let agents: Vec<AgentInfo> = resp.json().await

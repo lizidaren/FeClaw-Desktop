@@ -544,7 +544,7 @@ impl WsClient {
                 timestamp: Some(crate::ws_types::current_timestamp()),
                 payload: FileReadResponsePayload {
                     content: None,
-                    error: Some(format!("read task panicked: {e} (path={path_for_err})")),
+                    error: Some(format!("read task panicked: {e} (path={})", path_for_err.display())),
                 },
             },
         };
@@ -660,7 +660,7 @@ impl WsClient {
                 timestamp: Some(crate::ws_types::current_timestamp()),
                 payload: FileWriteResponsePayload {
                     success: false,
-                    error: Some(format!("write task panicked: {e} (path={path_for_err})")),
+                    error: Some(format!("write task panicked: {e} (path={})", path_for_err.display())),
                     content_length: None,
                     hash: None,
                 },

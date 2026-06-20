@@ -8,7 +8,6 @@
 //! so the overlay is hidden from screenshots and screen recordings.
 
 use tauri::{AppHandle, Runtime};
-use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
 // ---------------------------------------------------------------------------
 // Shortcut registration state

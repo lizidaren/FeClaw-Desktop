@@ -24,17 +24,16 @@ fn db_path() -> PathBuf {
 
 /// Acquire a connection to the SQLite database. Creates the file and
 /// tables if they don't exist.
-fn with_conn<F, T>(f: F) -> Result<T, String>
+fn with_conn<F, T>(f: F) -> Result<T, rusqlite::Error>
 where
     F: FnOnce(&Connection) -> Result<T, rusqlite::Error>,
 {
     let path = db_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建配置目录失败：{e}"))?;
+            .map_err(|e| rusqlite::Error::InvalidPath(path.clone()))?;
     }
-    let conn = Connection::open(&path)
-        .map_err(|e| format!("打开数据库失败：{e}"))?;
+    let conn = Connection::open(&path)?;
     f(&conn)
 }
 
@@ -119,7 +118,7 @@ pub fn init_db() -> Result<(), String> {
             "#,
         )?;
         Ok(())
-    })
+    }).map_err(|e| format!("数据库初始化失败：{e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +180,7 @@ pub fn import_chat_history() -> Result<u64, String> {
             ])?;
         }
         Ok(())
-    })?;
+    }).map_err(|e| format!("数据库错误：{e}"))?;
 
     // Rename the old file so we don't re-import
     let renamed = path.with_extension("json.imported");
@@ -211,7 +210,7 @@ pub fn save_draft(channel: String, content: String) -> Result<(), String> {
             params![format!("draft:{}", channel), content],
         )?;
         Ok(())
-    })
+    }).map_err(|e| format!("数据库错误：{e}"))
 }
 
 /// Load the draft for a given channel. Returns `None` if no draft exists.
@@ -228,9 +227,9 @@ pub fn load_draft(channel: String) -> Result<Option<String>, String> {
         match result {
             Ok(content) => Ok(Some(content)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(format!("加载草稿失败：{e}")),
+            Err(e) => Err(e),
         }
-    })
+    }).map_err(|e| format!("加载草稿失败：{e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -278,11 +277,11 @@ pub fn get_chat_history_by_agent(agent_hash: String) -> Result<Vec<DbChatMessage
         })?;
         let mut messages = Vec::new();
         for row in rows {
-            let msg = row.map_err(|e| format!("读取消息行失败：{e}"))?;
+            let msg = row?;
             messages.push(msg);
         }
         Ok(messages)
-    })
+    }).map_err(|e| format!("读取消息失败：{e}"))
 }
 
 /// Insert a new chat message into SQLite.
@@ -304,7 +303,7 @@ pub fn insert_chat_message(
             params![id, channel, agent_hash, role, content, message_type, created_at],
         )?;
         Ok(())
-    })
+    }).map_err(|e| format!("数据库错误：{e}"))
 }
 
 /// Mark a message as deleted (soft delete).
@@ -316,7 +315,7 @@ pub fn delete_chat_message(id: String) -> Result<(), String> {
             params![id],
         )?;
         Ok(())
-    })
+    }).map_err(|e| format!("数据库错误：{e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -479,11 +478,11 @@ pub fn get_prompt_templates() -> Result<Vec<PromptTemplate>, String> {
             })
         })?;
         for row in rows {
-            let tmpl = row.map_err(|e| format!("read template row failed: {e}"))?;
+            let tmpl = row?;
             templates.push(tmpl);
         }
         Ok(templates)
-    })
+    }).map_err(|e| format!("读取模板失败：{e}"))
 }
 
 /// Save (create or update) a custom prompt template.
@@ -501,7 +500,7 @@ pub fn save_prompt_template(input: PromptTemplateInput) -> Result<(), String> {
             params![input.id, input.name, input.prefix, now],
         )?;
         Ok(())
-    })
+    }).map_err(|e| format!("数据库错误：{e}"))
 }
 
 /// Delete a custom prompt template by id (built-in templates cannot be deleted).
@@ -513,5 +512,5 @@ pub fn delete_prompt_template(id: String) -> Result<(), String> {
     with_conn(|conn| {
         conn.execute("DELETE FROM prompt_templates WHERE id = ?1", params![id])?;
         Ok(())
-    })
+    }).map_err(|e| format!("数据库错误：{e}"))
 }

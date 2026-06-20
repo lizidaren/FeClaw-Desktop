@@ -19,6 +19,7 @@
 
 use crate::config::Config;
 use rusqlite::{params, Connection};
+use tauri::Manager;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -28,17 +29,16 @@ fn db_path() -> PathBuf {
 }
 
 /// Acquire a connection to the SQLite database.
-fn with_conn<F, T>(f: F) -> Result<T, String>
+fn with_conn<F, T>(f: F) -> Result<T, rusqlite::Error>
 where
     F: FnOnce(&Connection) -> Result<T, rusqlite::Error>,
 {
     let path = db_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建配置目录失败：{e}"))?;
+            .map_err(|e| rusqlite::Error::InvalidPath(path.clone()))?;
     }
-    let conn =
-        Connection::open(&path).map_err(|e| format!("打开数据库失败：{e}"))?;
+    let conn = Connection::open(&path)?;
     f(&conn)
 }
 
@@ -113,7 +113,7 @@ fn run_migrations() -> Result<(), String> {
         )?;
         migrate_permission_configs(conn)?;
         Ok(())
-    })
+    }).map_err(|e| format!("数据库迁移失败：{e}"))
 }
 
 /// Data returned by `get_agent_panel_info`.
@@ -162,7 +162,7 @@ pub fn get_agent_panel_info(agent_hash: String) -> Result<AgentPanelInfo, String
         })?;
 
         Ok(info)
-    })
+    }).map_err(|e| format!("数据库错误：{e}"))
 }
 
 /// Update the display alias for an agent.
@@ -184,7 +184,7 @@ pub fn update_agent_alias(agent_hash: String, alias: String) -> Result<(), Strin
             params![alias, chrono_now_s(), agent_hash],
         )?;
         Ok(())
-    })
+    }).map_err(|e| format!("数据库错误：{e}"))
 }
 
 /// Toggle the pinned status for an agent.
@@ -214,7 +214,7 @@ pub fn toggle_pin(agent_hash: String) -> Result<bool, String> {
         )?;
 
         Ok(is_pinned)
-    })
+    }).map_err(|e| format!("数据库错误：{e}"))
 }
 
 /// Toggle the do-not-disturb status for an agent.
@@ -244,7 +244,7 @@ pub fn toggle_dnd(agent_hash: String) -> Result<bool, String> {
         )?;
 
         Ok(is_dnd)
-    })
+    }).map_err(|e| format!("数据库错误：{e}"))
 }
 
 /// Return the current Unix timestamp in seconds.
@@ -299,7 +299,7 @@ pub async fn set_agent_permission_mode(
             params![&mode, chrono_now_s(), &agent_hash],
         )?;
         Ok(())
-    })?;
+    }).map_err(|e| format!("数据库错误：{e}"))?;
 
     // Fire-and-forget sync to Engine (log warning on failure, don't block)
     let hash = agent_hash.clone();

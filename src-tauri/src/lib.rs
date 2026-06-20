@@ -106,170 +106,176 @@ pub struct AppState {
 pub fn run() {
     // Logging is handled by `tauri-plugin-log` below.
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::default().build())
-        #[cfg(feature = "global-shortcut")]
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![
-            settings::load_settings,
-            settings::save_settings,
-            settings::open_settings_window,
-            settings::test_cloud_connection,
-            settings::get_cloud_session,
-            settings::cloud_login,
-            settings::cloud_disconnect,
-            settings::set_theme,
-            settings::get_theme,
-            settings::get_app_version,
-            file_ops::file_read,
-            file_ops::file_write,
-            file_ops::file_delete,
-            file_ops::open_local_file,
-            file_ops::cleanup_preview_temp,
-            file_manager::list_vfs_dir,
-            file_manager::get_vfs_preview_url,
-            file_manager::get_vfs_upload_url,
-            file_manager::vfs_mkdir,
-            file_manager::vfs_rm,
-            file_manager::vfs_mv,
-            file_manager::vfs_set_permission,
-            file_manager::vfs_notify_event,
-            file_manager::download_vfs_file,
-            welcome::check_first_launch,
-            welcome::save_welcome_config,
-            welcome::discover_well_known,
-            welcome::open_welcome_window,
-            welcome::get_permissions,
-            chat::get_chat_history,
-            chat::append_chat_message,
-            chat::clear_chat_history,
-            chat::send_chat_message,
-            chat::open_chat_window,
-            chat::get_connection_status,
-            chat::get_chat_history_path,
-            chat::send_consent_response,
-            chat::list_agents,
-            chat::get_chat_history_by_agent,
-            chat::insert_chat_message,
-            chat::delete_chat_message,
-            create::create_agent,
-            create::create_group_placeholder,
-            create::pick_local_file,
-            db::init_db,
-            db::check_legacy_chat_history,
-            db::import_chat_history,
-            db::save_draft,
-            db::load_draft,
-            db::save_temp_image,
-            db::get_prompt_templates,
-            db::save_prompt_template,
-            db::delete_prompt_template,
-            local_setup::check_git_installed,
-            local_setup::check_python_version,
-            local_setup::clone_feclaw,
-            local_setup::generate_env_template,
-            local_setup::write_env_file,
-            local_setup::install_dependencies,
-            local_setup::start_feclaw,
-            local_setup::check_engine_health,
-            local_setup::save_local_engine_config,
-            local_setup::default_engine_dest,
-            local_setup::open_local_setup_window,
-            side_panel::get_agent_panel_info,
-            side_panel::update_agent_alias,
-            side_panel::toggle_pin,
-            side_panel::toggle_dnd,
-            side_panel::set_agent_permission_mode,
-            side_panel::sync_agent_settings,
-            side_panel::list_agent_apps,
-            side_panel::open_config_window,
-            side_panel::open_file_manager_window,
-            right_click::register_right_click,
-            right_click::unregister_right_click,
-            right_click::is_right_click_registered,
-            right_click::get_executable_path,
-            group::list_groups,
-            group::get_group_detail,
-            group::get_group_messages,
-            group::create_group,
-            group::add_group_member,
-            group::remove_group_member,
-            group::delete_group,
-            chat::send_group_message,
-            moments::get_moments,
-            moments::post_moment,
-            moments::delete_moment,
-            qr_upload::create_upload_session,
-            qr_upload::generate_qr_code,
-            qr_upload::download_uploaded_file,
-            fehub::list_my_publishes,
-            fehub::open_miniapp,
-            search::search_all,
-            search::search_local_chat,
-            alt_space::register_search_shortcut,
-            alt_space::unregister_search_shortcut,
-            alt_space::is_search_shortcut_bound,
-            alt_space::apply_search_privacy,
-        ])
-        .setup(|app| {
-            let handle = app.handle().clone();
-            let app_handle_for_error = app.handle().clone();
-            // First-launch check: if `~/.feclaw/config.toml` does not exist,
-            // open the welcome window immediately so the user can pick an
-            // onboarding path (official / selfhosted / local).
-            // NOTE: Config::load() CREATES the file on first call (default +
-            // auto-save), so we must check existence BEFORE calling load().
-            let is_first = !crate::config::Config::config_path().exists();
-            let _ = crate::config::Config::load(); // ensure default config exists
-            tauri::async_runtime::spawn(async move {
-                if is_first {
-                    if let Err(e) = welcome::open_welcome_window(handle.clone()).await {
-                        tracing::warn!("failed to open welcome window on first launch: {e}");
-                    }
-                    return;
-                }
-                if let Err(e) = startup(handle).await {
-                    tracing::error!("startup failed: {e:#}");
-                    let err_msg = format!("{e:#}");
-                    let app_handle = app_handle_for_error.clone();
-                    std::thread::spawn(move || {
-                        let _ = rfd::MessageDialog::new()
-                            .set_title("FeClaw Desktop — 启动失败")
-                            .set_description(&err_msg)
-                            .set_buttons(rfd::MessageButtons::Ok)
-                            .set_level(rfd::MessageLevel::Error)
-                            .show();
-                    });
-                    // Open settings so user can configure cloud mode.
-                    tauri::async_runtime::spawn(async move {
-                        let _ = settings::open_settings_window(app_handle).await;
-                    });
-                    return;
-                }
-
-                // Check for pending right-click file (written by shell invocation)
-                if let Ok(Some(pending)) = right_click::take_pending_right_click() {
-                    tracing::info!("found pending right-click: mode={}, path={}", pending.mode, pending.path);
-                    let pending_mode = pending.mode.clone();
-                    let pending_path = pending.path.clone();
-                    let app_for_pending = handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        // Give the UI a moment to initialise before emitting the event
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        if let Err(e) = app_for_pending.emit("right-click-pending", &pending) {
-                            tracing::warn!("emit right-click-pending: {e}");
+    tauri::async_runtime::block_on(async {
+        let app = tauri::Builder::default()
+            .plugin(tauri_plugin_log::Builder::default().build())
+            .invoke_handler(tauri::generate_handler![
+                settings::load_settings,
+                settings::save_settings,
+                settings::open_settings_window,
+                settings::test_cloud_connection,
+                settings::get_cloud_session,
+                settings::cloud_login,
+                settings::cloud_disconnect,
+                settings::set_theme,
+                settings::get_theme,
+                settings::get_app_version,
+                file_ops::file_read,
+                file_ops::file_write,
+                file_ops::file_delete,
+                file_ops::open_local_file,
+                file_ops::cleanup_preview_temp,
+                file_manager::list_vfs_dir,
+                file_manager::get_vfs_preview_url,
+                file_manager::get_vfs_upload_url,
+                file_manager::vfs_mkdir,
+                file_manager::vfs_rm,
+                file_manager::vfs_mv,
+                file_manager::vfs_set_permission,
+                file_manager::vfs_notify_event,
+                file_manager::download_vfs_file,
+                welcome::check_first_launch,
+                welcome::save_welcome_config,
+                welcome::discover_well_known,
+                welcome::open_welcome_window,
+                welcome::get_permissions,
+                chat::get_chat_history,
+                chat::append_chat_message,
+                chat::clear_chat_history,
+                chat::send_chat_message,
+                chat::open_chat_window,
+                chat::get_connection_status,
+                chat::get_chat_history_path,
+                chat::send_consent_response,
+                chat::list_agents,
+                chat::get_chat_history_by_agent,
+                chat::insert_chat_message,
+                chat::delete_chat_message,
+                create::create_agent,
+                create::create_group_placeholder,
+                create::pick_local_file,
+                db::init_db,
+                db::check_legacy_chat_history,
+                db::import_chat_history,
+                db::save_draft,
+                db::load_draft,
+                db::save_temp_image,
+                db::get_prompt_templates,
+                db::save_prompt_template,
+                db::delete_prompt_template,
+                local_setup::check_git_installed,
+                local_setup::check_python_version,
+                local_setup::clone_feclaw,
+                local_setup::generate_env_template,
+                local_setup::write_env_file,
+                local_setup::install_dependencies,
+                local_setup::start_feclaw,
+                local_setup::check_engine_health,
+                local_setup::save_local_engine_config,
+                local_setup::default_engine_dest,
+                local_setup::open_local_setup_window,
+                side_panel::get_agent_panel_info,
+                side_panel::update_agent_alias,
+                side_panel::toggle_pin,
+                side_panel::toggle_dnd,
+                side_panel::set_agent_permission_mode,
+                side_panel::sync_agent_settings,
+                side_panel::list_agent_apps,
+                side_panel::open_config_window,
+                side_panel::open_file_manager_window,
+                right_click::register_right_click,
+                right_click::unregister_right_click,
+                right_click::is_right_click_registered,
+                right_click::get_executable_path,
+                group::list_groups,
+                group::get_group_detail,
+                group::get_group_messages,
+                group::create_group,
+                group::add_group_member,
+                group::remove_group_member,
+                group::delete_group,
+                chat::send_group_message,
+                moments::get_moments,
+                moments::post_moment,
+                moments::delete_moment,
+                qr_upload::create_upload_session,
+                qr_upload::generate_qr_code,
+                qr_upload::download_uploaded_file,
+                fehub::list_my_publishes,
+                fehub::open_miniapp,
+                search::search_all,
+                search::search_local_chat,
+                alt_space::register_search_shortcut,
+                alt_space::unregister_search_shortcut,
+                alt_space::is_search_shortcut_bound,
+                alt_space::apply_search_privacy,
+            ])
+            .setup(|app| {
+                let handle = app.handle().clone();
+                let app_handle_for_error = app.handle().clone();
+                // First-launch check: if `~/.feclaw/config.toml` does not exist,
+                // open the welcome window immediately so the user can pick an
+                // onboarding path (official / selfhosted / local).
+                // NOTE: Config::load() CREATES the file on first call (default +
+                // auto-save), so we must check existence BEFORE calling load().
+                let is_first = !crate::config::Config::config_path().exists();
+                let _ = crate::config::Config::load(); // ensure default config exists
+                tauri::async_runtime::spawn(async move {
+                    if is_first {
+                        if let Err(e) = welcome::open_welcome_window(handle.clone()).await {
+                            tracing::warn!("failed to open welcome window on first launch: {e}");
                         }
-                    });
-                    // Store the pending info in a static so chat.ts can read it after init
-                    // (The event above is the primary mechanism; the static is a fallback.)
-                    let _ = pending_mode;
-                    let _ = pending_path;
-                }
-            });
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+                        return;
+                    }
+                    if let Err(e) = startup(handle).await {
+                        tracing::error!("startup failed: {e:#}");
+                        let err_msg = format!("{e:#}");
+                        let app_handle = app_handle_for_error.clone();
+                        std::thread::spawn(move || {
+                            let _ = rfd::MessageDialog::new()
+                                .set_title("FeClaw Desktop — 启动失败")
+                                .set_description(&err_msg)
+                                .set_buttons(rfd::MessageButtons::Ok)
+                                .set_level(rfd::MessageLevel::Error)
+                                .show();
+                        });
+                        // Open settings so user can configure cloud mode.
+                        tauri::async_runtime::spawn(async move {
+                            let _ = settings::open_settings_window(app_handle).await;
+                        });
+                        return;
+                    }
+
+                    // Check for pending right-click file (written by shell invocation)
+                    if let Ok(Some(pending)) = right_click::take_pending_right_click() {
+                        tracing::info!("found pending right-click: mode={}, path={}", pending.mode, pending.path);
+                        let pending_mode = pending.mode.clone();
+                        let pending_path = pending.path.clone();
+                        let app_for_pending = handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            // Give the UI a moment to initialise before emitting the event
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            if let Err(e) = app_for_pending.emit("right-click-pending", &pending) {
+                                tracing::warn!("emit right-click-pending: {e}");
+                            }
+                        });
+                        // Store the pending info in a static so chat.ts can read it after init
+                        // (The event above is the primary mechanism; the static is a fallback.)
+                        let _ = pending_mode;
+                        let _ = pending_path;
+                    }
+                });
+                Ok(())
+            })
+            .build(tauri::generate_context!())
+            .await
+            .expect("error while building tauri application");
+
+        #[cfg(feature = "global-shortcut")]
+        let app = app.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+        app.run(|_app_handle, _event| {});
+    });
 }
 
 async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
