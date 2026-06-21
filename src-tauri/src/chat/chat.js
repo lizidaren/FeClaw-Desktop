@@ -96,7 +96,7 @@ function renderChatList(items) {
         btn.className = "btn btn-secondary btn-create-agent";
         btn.type = "button";
         btn.textContent = "创建新 Agent";
-        btn.addEventListener("click", () => void handleCreateAgent());
+        btn.addEventListener("click", () => void openCreateDialog());
         hint.appendChild(btn);
       }
       list.appendChild(hint);
@@ -315,20 +315,52 @@ async function sendMessage() {
     input.focus();
   }
 }
-async function handleCreateAgent() {
+function openCreateDialog() {
+  const overlay = $("createAgentOverlay");
+  const nameInput = $("agentNameInput");
+  const errorEl = $("createAgentError");
+  if (!overlay || !nameInput || !errorEl) return;
+  nameInput.value = "";
+  errorEl.style.display = "none";
+  errorEl.textContent = "";
+  overlay.style.display = "flex";
+  nameInput.focus();
+}
+
+function closeCreateDialog() {
+  const overlay = $("createAgentOverlay");
+  if (overlay) overlay.style.display = "none";
+}
+
+async function submitCreateAgent() {
+  const nameInput = $("agentNameInput");
+  const typeSelect = $("agentTypeSelect");
+  const errorEl = $("createAgentError");
+  if (!nameInput || !typeSelect || !errorEl) return;
+  const name = nameInput.value.trim();
+  if (!name) {
+    errorEl.textContent = "请输入 Agent 名称";
+    errorEl.style.display = "";
+    return;
+  }
+  const agentType = typeSelect.value;
+  closeCreateDialog();
   try {
-    const agent = await invoke("create_agent", {
-      name: "新助手",
-      agentType: "im"
-    });
+    const agent = await invoke("create_agent", { name, agentType });
     const agents = await invoke("list_agents");
     store.setAgents(agents);
     renderChatList(store.chatItems);
     if (agent?.hash) {
+      await invoke("open_agent_config", { agentHash: agent.hash });
       await selectChat(agent.hash);
     }
   } catch (e) {
     console.error("create_agent failed:", e);
+    const errEl = $("createAgentError");
+    if (errEl) {
+      errEl.textContent = typeof e === "string" ? e : "创建失败";
+      errEl.style.display = "";
+    }
   }
 }
 
@@ -573,8 +605,7 @@ function wire() {
   }
   const newChat = $("btn-new-chat");
   if (newChat) {
-    newChat.addEventListener("click", () => {
-    });
+    newChat.addEventListener("click", () => void openCreateDialog());
   }
 }
 document.addEventListener("DOMContentLoaded", () => {

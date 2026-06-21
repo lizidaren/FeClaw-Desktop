@@ -155,6 +155,7 @@ pub fn run() {
                 db::insert_chat_message,
                 db::delete_chat_message,
                 create::create_agent,
+                create::open_agent_config,
                 create::pick_local_file,
                 db::init_db,
                 db::check_legacy_chat_history,

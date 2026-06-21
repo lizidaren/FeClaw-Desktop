@@ -3,9 +3,11 @@
 //! [`create_agent`] — POST /api/desktop/agents to the engine.
 //! [`create_group_placeholder`] — empty shell, wired in Phase 4.
 //! [`pick_local_file`] — native file picker → returns file metadata for input cards.
+//! [`open_agent_config`] — opens the agent config WebView in a new window.
 
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
+use tauri::webview::WebviewWindowBuilder;
 
 /// Request body for POST /api/desktop/agents.
 #[derive(Debug, Serialize)]
@@ -90,6 +92,53 @@ pub async fn create_agent(
 pub async fn create_group_placeholder() -> Result<String, String> {
     // Returns a placeholder group ID. Real implementation in Phase 4.
     Ok(String::from("placeholder-group-id"))
+}
+
+/// Open the agent configuration WebView (AI config wizard on the web).
+#[tauri::command]
+pub async fn open_agent_config(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::AppState>,
+    agent_hash: String,
+) -> Result<(), String> {
+    let config = state.config.read().map_err(|e| format!("读取配置失败: {e}"))?.clone();
+    let token = config.cloud_token.clone()
+        .ok_or_else(|| "未登录".to_string())?;
+    let base_url = config.cloud_base_url()
+        .ok_or_else(|| "cloud_url 未配置".to_string())?;
+    let configure_url = format!(
+        "{}/agent/{}/configure?token={}",
+        base_url.trim_end_matches('/'),
+        agent_hash,
+        token,
+    );
+
+    let app_clone = app.clone();
+    let url = configure_url.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Ok(window) = WebviewWindowBuilder::new(
+            &app_clone,
+            "agent-config",
+            tauri::WebviewUrl::External(url.parse().unwrap()),
+        )
+        .title("Agent 配置")
+        .inner_size(1024.0, 720.0)
+        .on_navigation(move |url| {
+            if !url.as_str().contains("/configure") {
+                if let Some(w) = app_clone.get_webview_window("agent-config") {
+                    let _ = w.close();
+                }
+                return false;
+            }
+            true
+        })
+        .build()
+        {
+            let _ = window;
+        }
+    });
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
