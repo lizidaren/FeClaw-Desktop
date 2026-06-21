@@ -128,7 +128,7 @@ pub async fn open_agent_config(
         .inner_size(1024.0, 720.0)
         .on_navigation(move |url| {
             if !url.as_str().contains("/configure") {
-                if let Some(w) = app_clone.get_webview_window("agent-config") {
+                if let Some(w) = app_nav.get_webview_window("agent-config") {
                     let _ = w.close();
                 }
                 return false;
