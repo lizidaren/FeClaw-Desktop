@@ -115,12 +115,13 @@ pub async fn open_agent_config(
         token,
     );
 
-    let app_clone = app.clone();
-    let app_nav = app.clone();
+    let app_handle = app.clone();
     let url = configure_url.clone();
     tauri::async_runtime::spawn(async move {
+        let bapp = app_handle.clone();
+        let napp = app_handle;
         if let Ok(window) = WebviewWindowBuilder::new(
-            &app_clone,
+            &bapp,
             "agent-config",
             tauri::WebviewUrl::External(url.parse().unwrap()),
         )
@@ -128,7 +129,7 @@ pub async fn open_agent_config(
         .inner_size(1024.0, 720.0)
         .on_navigation(move |url| {
             if !url.as_str().contains("/configure") {
-                if let Some(w) = app_nav.get_webview_window("agent-config") {
+                if let Some(w) = napp.get_webview_window("agent-config") {
                     let _ = w.close();
                 }
                 return false;
