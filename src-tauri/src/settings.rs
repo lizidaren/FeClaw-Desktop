@@ -352,7 +352,46 @@ pub async fn cloud_login(
     if body.token.trim().is_empty() {
         return Err("服务器响应中未找到 token".to_string());
     }
-    let token = body.token;
+    let platform_token = body.token;
+
+    // ---- Exchange Platform JWT → FeClaw JWT -------------------------
+    // 调用 FeClaw 的 auth_exchange 端点验证 Platform JWT 并兑换为 FeClaw JWT。
+    // 后续的 API 调用和 WS 连接都使用 FeClaw JWT。
+    let exchange_url = format!(
+        "{}/api/desktop/auth_exchange",
+        url_trimmed.trim_end_matches('/')
+    );
+    tracing::info!("exchanging Platform JWT for FeClaw JWT: {exchange_url}");
+
+    let exchange_resp = client
+        .post(&exchange_url)
+        .json(&serde_json::json!({
+            "platform_token": &platform_token,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("兑换 FeClaw JWT 失败：{e}"))?;
+
+    if !exchange_resp.status().is_success() {
+        let body = exchange_resp.text().await.unwrap_or_default();
+        return Err(format!("兑换 FeClaw JWT 失败 ({}): {}", exchange_resp.status(), body));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ExchangeResponse {
+        token: String,
+        #[allow(dead_code)]
+        user_id: Option<i32>,
+        #[allow(dead_code)]
+        username: Option<String>,
+    }
+
+    let exchange_body: ExchangeResponse = exchange_resp
+        .json()
+        .await
+        .map_err(|e| format!("解析 FeClaw JWT 兑换响应失败：{e}"))?;
+
+    let feclaw_token = exchange_body.token;
 
     // ---- Persist to config.toml -------------------------------------
     // Load the existing config so we don't clobber unrelated fields
@@ -361,12 +400,12 @@ pub async fn cloud_login(
     cfg.cloud_url = Some(url_trimmed.trim_end_matches('/').to_string());
     cfg.cloud_login_url = Some(login_base.trim_end_matches('/').to_string());
     cfg.cloud_username = Some(username_owned);
-    cfg.cloud_token = Some(token.clone());
+    cfg.cloud_token = Some(feclaw_token.clone());
     cfg.mode = crate::config::Mode::Cloud;
     cfg.save().map_err(|e| format!("保存配置失败：{e:#}"))?;
 
-    tracing::info!("cloud login succeeded; token length={}", token.len());
-    Ok(token)
+    tracing::info!("cloud login succeeded; token length={}", feclaw_token.len());
+    Ok(feclaw_token)
 }
 
 /// Disconnect from the cloud: clear the stored credentials and switch the
