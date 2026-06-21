@@ -18,11 +18,11 @@
 //! which emits the `chat-event` Tauri event.
 
 use crate::config::Config;
+use crate::types::AgentInfo;
 use crate::AppState;
-use tauri::Manager;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 /// One persisted message. JSON-encoded to `~/.feclaw/chat_history.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -374,18 +374,6 @@ pub(crate) fn _phantom_marker() {}
 // ---------------------------------------------------------------------------
 // V3 Phase 0a: list_agents + SQLite-backed history
 // ---------------------------------------------------------------------------
-
-/// Agent info returned by `GET /api/desktop/agents`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentInfo {
-    pub hash: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub avatar_url: Option<String>,
-    pub permission_mode: Option<String>,
-    pub is_online: bool,
-}
 
 /// Fetch the list of agents from the engine.
 /// Calls `GET {cloud_url}/api/desktop/agents` with Bearer JWT auth.

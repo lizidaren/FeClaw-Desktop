@@ -37,6 +37,7 @@ mod search;
 mod settings;
 mod side_panel;
 mod tray;
+mod types;
 mod welcome;
 mod ws;
 mod ws_types;
@@ -392,6 +393,9 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
                 let state = app_for_status.state::<AppState>();
                 *state.status.write().await = status;
             }
+            // Emit ws-status event so the chat UI can update conn-dot / conn-text.
+            let status_label = format!("{:?}", status);
+            let _ = app_for_status.emit("ws-status", serde_json::json!({ "status": status_label }));
             if let Some(tray_icon) = app_for_status.tray_by_id(tray::TRAY_ID) {
                 let icon = tray::icon_for_status(status);
                 let _ = tray_icon.set_icon(Some(icon));

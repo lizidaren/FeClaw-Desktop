@@ -6,6 +6,7 @@
 //! [`open_agent_config`] — opens the agent config WebView in a new window.
 
 use crate::config::Config;
+use crate::types::AgentInfo;
 use serde::{Deserialize, Serialize};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::Manager;
@@ -16,18 +17,6 @@ use tauri::Manager;
 struct CreateAgentRequest {
     name: String,
     agent_type: String,
-}
-
-/// Response from GET /api/desktop/agents (mirrors chat.rs AgentInfo).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentInfo {
-    pub hash: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub avatar_url: Option<String>,
-    pub permission_mode: Option<String>,
-    pub is_online: bool,
 }
 
 /// Response envelope from POST /api/desktop/agents.
