@@ -8,41 +8,13 @@
 //!   5. Desktop downloads the image via the presigned GET URL
 //!   6. Image is added to the chat input as an image card
 
+use crate::auth::load_local_token;
 use crate::config::Config;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use image::Luma;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
 
 // ---- Auth -----------------------------------------------------------------
-
-fn credentials_path() -> PathBuf {
-    crate::config::Config::config_dir().join("local-credentials")
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Credentials {
-    #[serde(default)]
-    username: String,
-    #[serde(default)]
-    token: Option<String>,
-}
-
-fn load_token() -> Result<String, String> {
-    let path = credentials_path();
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let creds: Credentials =
-        serde_json::from_str(&content).map_err(|e| format!("parse credentials: {e}"))?;
-    creds
-        .token
-        .ok_or_else(|| "no token in credentials file".to_string())
-}
-
-fn build_client() -> Result<reqwest::Client, String> {
-    let _token = load_token()?;
-    Ok(crate::http_client::http_client().clone())
-}
 
 fn engine_url() -> String {
     let config = Config::load();
@@ -50,7 +22,7 @@ fn engine_url() -> String {
 }
 
 fn authed_client() -> Result<reqwest::Client, String> {
-    build_client()
+    Ok(crate::http_client::http_client().clone())
 }
 
 // ---- Data types -----------------------------------------------------------
@@ -99,7 +71,7 @@ pub fn generate_qr_image(data: &str) -> Result<String, String> {
 #[tauri::command]
 pub async fn create_upload_session() -> Result<UploadSession, String> {
     let client = authed_client()?;
-    let token = load_token()?;
+    let token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
     let url = format!("{}/api/desktop/upload_session", engine_url());
 
     let resp = client

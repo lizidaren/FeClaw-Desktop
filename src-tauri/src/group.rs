@@ -4,38 +4,12 @@
 //! `local-credentials` file at `~/.feclaw/local-credentials` (the same
 //! credential store used by [`crate::auth::AuthManager`]).
 
+use crate::auth::load_local_token;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
-
-/// Path to the persisted credentials file.
-fn credentials_path() -> PathBuf {
-    crate::config::Config::config_dir().join("local-credentials")
-}
-
-/// Lightweight struct mirroring the Credentials file layout.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Credentials {
-    #[serde(default)]
-    username: String,
-    #[serde(default)]
-    token: Option<String>,
-}
-
-/// Read the JWT from the local-credentials file.
-fn load_token() -> Result<String, String> {
-    let path = credentials_path();
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let creds: Credentials =
-        serde_json::from_str(&content).map_err(|e| format!("parse credentials: {e}"))?;
-    creds
-        .token
-        .ok_or_else(|| "no token in credentials file".to_string())
-}
 
 /// Build the HTTP client with JWT bearer auth.
 fn build_client() -> Result<reqwest::Client, String> {
-    let _token = load_token()?;
+    let _token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
     Ok(crate::http_client::http_client().clone())
 }
 

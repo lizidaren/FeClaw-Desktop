@@ -4,11 +4,10 @@
 //! `search_local_chat` queries the local SQLite chat_messages FTS5 table
 //! when the app is logged in but has no network connectivity.
 
+use crate::auth::load_local_token;
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use std::time::Instant;
 
 // ---------------------------------------------------------------------------
@@ -46,31 +45,6 @@ pub struct SearchResult {
     pub elapsed_ms: u64,
 }
 
-// ---------------------------------------------------------------------------
-// Credentials helper (same pattern as group.rs / moments.rs)
-// ---------------------------------------------------------------------------
-
-fn credentials_path() -> PathBuf {
-    crate::config::Config::config_dir().join("local-credentials")
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Credentials {
-    #[serde(default)]
-    username: String,
-    #[serde(default)]
-    token: Option<String>,
-}
-
-fn load_token() -> Result<String, String> {
-    let path = credentials_path();
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let creds: Credentials =
-        serde_json::from_str(&content).map_err(|e| format!("parse credentials: {e}"))?;
-    creds.token
-        .ok_or_else(|| "no token in credentials file".to_string())
-}
-
 fn engine_url() -> String {
     let config = Config::load();
     config.engine_url()
@@ -92,7 +66,7 @@ pub async fn search_all(query: String) -> Result<SearchResult, String> {
         });
     }
 
-    let token = load_token()?;
+    let token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
     let url = format!("{}/api/user/search?q={}", engine_url(), urlencoding::encode(&query));
 
     let start = Instant::now();

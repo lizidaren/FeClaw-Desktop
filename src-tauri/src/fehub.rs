@@ -3,35 +3,9 @@
 //! Manages publishing and browsing of FeHub mini-programs (miniapps).
 //! Calls the Engine's `/api/fehub/apps` endpoint to list published apps.
 
+use crate::auth::load_local_token;
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
-
-/// Path to the persisted credentials file (same as group.rs / moments.rs).
-fn credentials_path() -> PathBuf {
-    crate::config::Config::config_dir().join("local-credentials")
-}
-
-/// Lightweight struct mirroring the Credentials file layout.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Credentials {
-    #[serde(default)]
-    username: String,
-    #[serde(default)]
-    token: Option<String>,
-}
-
-/// Read the JWT from the local-credentials file.
-fn load_token() -> Result<String, String> {
-    let path = credentials_path();
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let creds: Credentials =
-        serde_json::from_str(&content).map_err(|e| format!("parse credentials: {e}"))?;
-    creds
-        .token
-        .ok_or_else(|| "no token in credentials file".to_string())
-}
 
 /// Build an HTTP client.
 fn build_client() -> Result<reqwest::Client, String> {
@@ -65,7 +39,7 @@ pub struct PublishInfo {
 /// List all miniapps published by the current user.
 #[tauri::command]
 pub async fn list_my_publishes() -> Result<Vec<PublishInfo>, String> {
-    let token = load_token()?;
+    let token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
     let url = format!("{}/api/fehub/apps", engine_url());
     let resp = build_client()?
         .get(&url)
