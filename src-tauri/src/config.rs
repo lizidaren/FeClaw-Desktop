@@ -112,17 +112,52 @@ impl Config {
         Ok(())
     }
 
-    /// `http://host:port` URL for the engine REST API.
+    /// Base URL for the engine REST API.
+    ///
+    /// * `Local`  → `http://{host}:{port}` against the embedded engine.
+    /// * `Cloud`  → `{cloud_url}` (trailing slash stripped) so all engine-side
+    ///              API calls (chat, file index, settings, …) hit the remote
+    ///              server instead of the local engine. Falls back to a
+    ///              loopback default if `cloud_url` is missing so mis-config
+    ///              can't silently contact the wrong host.
     pub fn engine_url(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
+        match self.mode {
+            Mode::Local => format!("http://{}:{}", self.host, self.port),
+            Mode::Cloud => self
+                .cloud_url
+                .as_deref()
+                .unwrap_or("http://127.0.0.1:8080")
+                .trim_end_matches('/')
+                .to_string(),
+        }
+    }
+
+    /// URL to POST credentials to for authentication.
+    ///
+    /// * `Local`  → `{engine_url}/api/login` (the embedded engine's own login).
+    /// * `Cloud`  → `{cloud_login_base_url}/api/auth/login` — the Platform
+    ///              OAuth host (separately configured so single-host self-
+    ///              hosted setups can still reuse `cloud_url`).
+    pub fn login_url(&self) -> String {
+        if self.mode == Mode::Cloud {
+            if let Some(login_url) = self.cloud_login_base_url() {
+                return format!(
+                    "{}/api/auth/login",
+                    login_url.trim_end_matches('/')
+                );
+            }
+        }
+        format!("{}/api/login", self.engine_url())
     }
 
     /// WebSocket URL the engine manager should dial.
     ///
     /// * `Local`  → `ws://{host}:{port}{ws_path}` against the embedded engine.
-    /// * `Cloud`  → `{cloud_url}/ws/desktop` against the remote FeClaw server.
-    ///              `cloud_url` is required and is normalised so the trailing
-    ///              slash is stripped before `/ws/desktop` is appended.
+    /// * `Cloud`  → `wss://{cloud_url}/ws/desktop` (or `ws://` when the
+    ///              server is plain HTTP, e.g. local-network dev boxes)
+    ///              against the remote FeClaw server. `cloud_url` is required
+    ///              and the protocol is normalised so the WebSocket handshake
+    ///              always uses the matching scheme.
     pub fn ws_url(&self) -> String {
         match self.mode {
             Mode::Local => format!("ws://{}:{}{}", self.host, self.port, self.ws_path),
@@ -131,7 +166,14 @@ impl Config {
                     .cloud_url
                     .as_deref()
                     .unwrap_or("https://feclaw.example.com");
-                format!("{}/ws/desktop", base.trim_end_matches('/'))
+                let scheme = if let Some(rest) = base.strip_prefix("https://") {
+                    format!("wss://{}", rest)
+                } else if let Some(rest) = base.strip_prefix("http://") {
+                    format!("ws://{}", rest)
+                } else {
+                    base.to_string()
+                };
+                format!("{}/ws/desktop", scheme.trim_end_matches('/'))
             }
         }
     }
@@ -172,6 +214,84 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.engine_url(), "http://127.0.0.1:8080");
         assert_eq!(cfg.ws_url(), "ws://127.0.0.1:8080/ws/desktop");
+    }
+
+    #[test]
+    fn cloud_engine_url_uses_cloud_url() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.engine_url(), "https://feclaw.example.com");
+    }
+
+    #[test]
+    fn cloud_engine_url_strips_trailing_slash() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com/".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.engine_url(), "https://feclaw.example.com");
+    }
+
+    #[test]
+    fn cloud_engine_url_falls_back_when_missing() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: None,
+            ..Default::default()
+        };
+        // Mis-config fallback: don't silently contact the wrong host.
+        assert_eq!(cfg.engine_url(), "http://127.0.0.1:8080");
+    }
+
+    #[test]
+    fn local_login_url_targets_engine() {
+        let cfg = Config::default();
+        assert_eq!(cfg.login_url(), "http://127.0.0.1:8080/api/login");
+    }
+
+    #[test]
+    fn cloud_login_url_prefers_login_url() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            cloud_login_url: Some("https://platform.example.com".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.login_url(),
+            "https://platform.example.com/api/auth/login"
+        );
+    }
+
+    #[test]
+    fn cloud_login_url_falls_back_to_cloud_url() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            cloud_login_url: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.login_url(),
+            "https://feclaw.example.com/api/auth/login"
+        );
+    }
+
+    #[test]
+    fn cloud_login_url_strips_trailing_slash() {
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com/".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.login_url(),
+            "https://feclaw.example.com/api/auth/login"
+        );
     }
 
     #[test]
@@ -273,7 +393,7 @@ mod tests {
             cloud_url: Some("https://feclaw.example.com".to_string()),
             ..Default::default()
         };
-        assert_eq!(cfg.ws_url(), "https://feclaw.example.com/ws/desktop");
+        assert_eq!(cfg.ws_url(), "wss://feclaw.example.com/ws/desktop");
     }
 
     #[test]
@@ -283,7 +403,7 @@ mod tests {
             cloud_url: Some("https://feclaw.example.com/".to_string()),
             ..Default::default()
         };
-        assert_eq!(cfg.ws_url(), "https://feclaw.example.com/ws/desktop");
+        assert_eq!(cfg.ws_url(), "wss://feclaw.example.com/ws/desktop");
     }
 
     #[test]
@@ -293,7 +413,7 @@ mod tests {
             cloud_url: Some("https://feclaw.example.com///".to_string()),
             ..Default::default()
         };
-        assert_eq!(cfg.ws_url(), "https://feclaw.example.com/ws/desktop");
+        assert_eq!(cfg.ws_url(), "wss://feclaw.example.com/ws/desktop");
     }
 
     #[test]
@@ -304,7 +424,7 @@ mod tests {
             cloud_url: Some("http://10.0.0.5:8080".to_string()),
             ..Default::default()
         };
-        assert_eq!(cfg.ws_url(), "http://10.0.0.5:8080/ws/desktop");
+        assert_eq!(cfg.ws_url(), "ws://10.0.0.5:8080/ws/desktop");
     }
 
     #[test]

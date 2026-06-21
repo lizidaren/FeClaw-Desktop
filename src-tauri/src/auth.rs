@@ -106,9 +106,13 @@ impl AuthManager {
         Ok(token)
     }
 
-    /// POST `/api/login` with `username` + `password`, return the JWT.
+    /// POST credentials to `config.login_url()`, return the JWT.
+    ///
+    /// In cloud mode this hits the Platform OAuth host
+    /// (`{cloud_login_base_url}/api/auth/login`); in local mode it hits the
+    /// embedded engine's own `/api/login` endpoint.
     pub async fn login(&self, username: &str, password: &str) -> Result<String> {
-        let url = format!("{}/api/login", self.config.engine_url());
+        let url = self.config.login_url();
         let resp = crate::http_client::http_client()
             .post(&url)
             .json(&serde_json::json!({

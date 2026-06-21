@@ -13,9 +13,11 @@ use tauri::{AppHandle, Runtime};
 // Shortcut registration state
 // ---------------------------------------------------------------------------
 
-/// Guard type to hold the registered shortcut so it stays alive.
+/// Types needed by [`alt_space_shortcut`]; the register/unregister
+/// functions below re-import `GlobalShortcutExt` / `ShortcutState`
+/// locally so they don't show up as unused at this scope.
 #[cfg(feature = "global-shortcut")]
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
 /// Whether the Alt+Space shortcut is currently registered.
 static ALT_SPACE_REGISTERED: std::sync::atomic::AtomicBool =
