@@ -815,6 +815,30 @@ function escapeHtml(s: string): string {
 // ---- Event subscriptions ----------------------------------------
 
 async function subscribeEvents(): Promise<void> {
+  // ws-status from the status pump in lib.rs
+  try {
+    await listen<{ status: string }>("ws-status", (e) => {
+      const dot = $<HTMLSpanElement>("conn-dot");
+      const text = $<HTMLSpanElement>("conn-text");
+      if (!dot || !text) return;
+      const s = e.payload.status;
+      dot.className = "conn-dot";
+      text.className = "conn-text";
+      if (s === "Connected") {
+        dot.classList.add("connected");
+        text.textContent = "在线";
+      } else if (s === "Connecting" || s === "Reconnecting") {
+        dot.classList.add("connecting");
+        text.textContent = "连接中…";
+      } else {
+        dot.classList.add("disconnected");
+        text.textContent = "离线";
+      }
+    });
+  } catch (e) {
+    console.error("listen ws-status:", e);
+  }
+
   // chat-event from WS
   try {
     await listen<ChatMessage>("chat-event", (e) => {

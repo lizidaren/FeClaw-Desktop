@@ -475,6 +475,28 @@ function escapeHtml(s) {
 }
 async function subscribeEvents() {
   try {
+    await listen("ws-status", (e) => {
+      const dot = $("conn-dot");
+      const text = $("conn-text");
+      if (!dot || !text) return;
+      const s = e.payload.status;
+      dot.className = "conn-dot";
+      text.className = "conn-text";
+      if (s === "Connected") {
+        dot.classList.add("connected");
+        text.textContent = "在线";
+      } else if (s === "Connecting" || s === "Reconnecting") {
+        dot.classList.add("connecting");
+        text.textContent = "连接中…";
+      } else {
+        dot.classList.add("disconnected");
+        text.textContent = "离线";
+      }
+    });
+  } catch (e) {
+    console.error("listen ws-status:", e);
+  }
+  try {
     await listen("connection-status", (e) => {
       const dot = $("conn-dot");
       const text = $("conn-text");
