@@ -420,10 +420,7 @@ pub async fn list_agent_apps(
 
     let url = format!("{}/api/user/agents/{}/apps", base_url.trim_end_matches('/'), agent_hash);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("build reqwest client: {e}"))?;
+    let client = crate::http_client::http_client();
 
     let mut req = client.get(&url);
     if let Some(t) = token {
@@ -492,10 +489,7 @@ async fn sync_to_engine_internal(agent_hash: &str) -> Result<(), String> {
         permission_mode,
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("build reqwest client: {e}"))?;
+    let client = crate::http_client::http_client();
 
     let mut req = client.patch(&url).json(&payload);
     if let Some(t) = token {

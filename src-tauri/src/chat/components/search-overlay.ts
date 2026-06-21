@@ -142,6 +142,7 @@ function sourceIcon(source: string): string {
     case "moments": return "📱";
     case "textbook": return "📖";
     case "miniapps": return "🚀";
+    case "local": return "🖥️";
     default: return "📄";
   }
 }
@@ -310,19 +311,49 @@ async function doSearch(query: string): Promise<void> {
     return;
   }
 
-  try {
-    const result = await invoke<SearchResult>("search_all", { query });
-    renderResults(result);
-  } catch (e) {
-    console.warn("search_all failed (offline?):", e);
-    // Fallback to local search
-    try {
-      const localItems = await invoke<SearchItem[]>("search_local_chat", { query });
-      renderOfflineResults(localItems);
-    } catch (e2) {
-      console.error("search_local_chat also failed:", e2);
-    }
+  // Run cloud search + local file search in parallel
+  const [cloudResult, localFileItems] = await Promise.allSettled([
+    invoke<SearchResult>("search_all", { query }),
+    invoke<IndexFileInfo[]>("search_local_files", { query }),
+  ]);
+
+  // Build SearchResult from cloud response (may fail if offline)
+  let result: SearchResult;
+  if (cloudResult.status === "fulfilled") {
+    result = cloudResult.value;
+  } else {
+    console.warn("search_all failed (offline?):", cloudResult.reason);
+    result = {
+      query,
+      results: {},
+      elapsed_ms: 0,
+    };
   }
+
+  // Merge local file results under "local" source
+  if (localFileItems.status === "fulfilled" && localFileItems.value.length > 0) {
+    const items: SearchItem[] = localFileItems.value.map(f => ({
+      id: String(f.id),
+      snippet: `${f.file_name} — ${f.snippet}`,
+      score: 0.9,
+      timestamp: f.modified_at,
+      source: "local" as const,
+      reference: f.file_path,
+    }));
+    result.results["local"] = { status: "ok", items };
+  }
+
+  renderResults(result);
+}
+
+// Local file info from Rust file_index module
+interface IndexFileInfo {
+  id: number;
+  file_path: string;
+  file_name: string;
+  extension: string;
+  snippet: string;
+  modified_at: number;
 }
 
 // ---- Event handlers ----------------------------------------------

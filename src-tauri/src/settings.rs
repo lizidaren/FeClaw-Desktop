@@ -197,11 +197,7 @@ pub async fn test_cloud_connection(url: String, token: String) -> Result<bool, S
         trimmed.trim_end_matches('/'),
     );
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .user_agent(concat!("FeClaw-Desktop/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+    let client = crate::http_client::http_client();
 
     let mut req = client.get(&probe_url);
     if !token.trim().is_empty() {
@@ -330,11 +326,7 @@ pub async fn cloud_login(
     let username_owned = username.trim().to_string();
 
     // ---- HTTP POST ---------------------------------------------------
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent(concat!("FeClaw-Desktop/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+    let client = crate::http_client::http_client();
 
     let resp = client
         .post(&login_endpoint)

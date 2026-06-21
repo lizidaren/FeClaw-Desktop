@@ -2246,17 +2246,30 @@ Agent 写完文件 → Desktop 展示**可视化差异**（并排/上下对照�
 Windows 文件系统
   ↓ walkdir 递归遍历
 Rust Walker
-  ↓ 解析文本内容
-Rust Parser（TXT → 直读，PDF/DOCX → 库解析）
-  ↓ 分块 + 向量化
-Desktop Embedder（Engine /api/embed 优先 → ONNX MiniLM 回退）
+  ↓ 读取文本内容
+Rust Parser
+  ├── .txt/.md/.json/.py/.js/.html/.css → UTF-8 直读
+  ├── .docx → 解 ZIP 读 XML → 纯文本
+  └── .pdf → 延后：PyMuPDF 渲染为图片 → VLM → 文本
+  ↓ 语义切分
+Chunker（调用 DeepSeek / 复用 MinerU 切分 Pipeline）
+  ↓ 向量化（始终在线，调 Engine /api/embed → LLM API）
+Embedder（Rust → POST /api/embed → Engine → EmbeddingService）
   ↓ 存库
-Local Vector Store（SQLite vec0 或 NumpyVec）
-  ↑
-Alt+Space 搜索（Phase 7 search-overlay.ts 集成 local 源）
+Store
+  ├── ☁️ 云模式 → COS 向量存储桶（已有 CosVectorStorage）
+  └── 💻 本地模式 → SQLite vec0（已有 SqliteVecStorage）
 ```
 
-#### 分阶段实施
+**关键设计决策：**
+| 决策 | 内容 |
+|:----|:------|
+| Embedding | **始终在线。** Desktop POST /api/embed → Engine 调 LLM API。不做本地 ONNX |
+| PDF 解析 | **延后。** 以后用 PyMuPDF 渲染页面 → VLM 看 → 提取文本。不碰 lopdf |
+| DOCX 解析 | **解 ZIP 读 XML。** 纯文本提取，简单可靠，不需要第三方 crate |
+| 语义切分 | **复用 DeepSeek + MinerU Pipeline**。按语义边界切分，不做固定 token 拆分 |
+| 数据存储 | **云/本地选择**：向量存 COS 桶或 SQLite vec0，embedding 始终在线 |
+| Rust 依赖 | **极简**：只需要 walkdir + 已有 reqwest。不要 ort/lopdf/docx-rs |
 
 **Phase 10.0 — 文本文件全文索引（~3 天）**
 

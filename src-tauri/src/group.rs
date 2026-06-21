@@ -4,8 +4,6 @@
 //! `local-credentials` file at `~/.feclaw/local-credentials` (the same
 //! credential store used by [`crate::auth::AuthManager`]).
 
-use crate::config::Config;
-use anyhow::{anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -38,13 +36,7 @@ fn load_token() -> Result<String, String> {
 /// Build the HTTP client with JWT bearer auth.
 fn build_client() -> Result<reqwest::Client, String> {
     let _token = load_token()?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("build reqwest client: {e}"))?;
-    // Attach JWT to a cloned builder so the original client is not consumed.
-    let client = client;
-    Ok(client)
+    Ok(crate::http_client::http_client().clone())
 }
 
 fn engine_url() -> String {
@@ -231,4 +223,220 @@ pub async fn delete_group(group_id: String) -> Result<(), String> {
         return Err(format!("delete_group failed: {}", resp.status()));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------------------
+    // GroupInfo
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn group_info_deserialize_full() {
+        let json = r#"{
+            "id": "grp-001",
+            "name": "Test Group",
+            "announcement": "Welcome!",
+            "member_count": 42,
+            "created_at": 1700000000
+        }"#;
+        let g: GroupInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(g.id, "grp-001");
+        assert_eq!(g.name, "Test Group");
+        assert_eq!(g.announcement, "Welcome!");
+        assert_eq!(g.member_count, 42);
+        assert_eq!(g.created_at, 1700000000);
+    }
+
+    #[test]
+    fn group_info_deserialize_minimal() {
+        // announcement is required but may be empty string
+        let json = r#"{
+            "id": "grp-002",
+            "name": "Minimal",
+            "announcement": "",
+            "member_count": 0,
+            "created_at": 0
+        }"#;
+        let g: GroupInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(g.id, "grp-002");
+        assert_eq!(g.name, "Minimal");
+        assert_eq!(g.announcement, "");
+        assert_eq!(g.member_count, 0);
+        assert_eq!(g.created_at, 0);
+    }
+
+    #[test]
+    fn group_info_roundtrip() {
+        let g = GroupInfo {
+            id: "grp-round".to_string(),
+            name: "Roundtrip Test".to_string(),
+            announcement: "Test announcement".to_string(),
+            member_count: 10,
+            created_at: 1700001234,
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        let parsed: GroupInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, g);
+    }
+
+    #[test]
+    fn group_info_missing_required_field_fails() {
+        // "id" is required — missing it should fail
+        let json = r#"{"name": "No ID", "announcement": "", "member_count": 0, "created_at": 0}"#;
+        let result: Result<GroupInfo, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    // ---------------------------------------------------------------------------
+    // GroupMemberInfo
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn group_member_info_deserialize() {
+        let json = r#"{
+            "agent_hash": "a1b2",
+            "role": "admin",
+            "is_silent": false
+        }"#;
+        let m: GroupMemberInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(m.agent_hash, "a1b2");
+        assert_eq!(m.role, "admin");
+        assert!(!m.is_silent);
+    }
+
+    #[test]
+    fn group_member_info_roundtrip() {
+        let m = GroupMemberInfo {
+            agent_hash: "c3d4".to_string(),
+            role: "member".to_string(),
+            is_silent: true,
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        let parsed: GroupMemberInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, m);
+    }
+
+    #[test]
+    fn group_member_info_all_roles() {
+        for role in &["admin", "member", "owner"] {
+            let json = format!(
+                r#"{{"agent_hash": "hash", "role": "{}", "is_silent": false}}"#,
+                role
+            );
+            let m: GroupMemberInfo = serde_json::from_str(&json).unwrap();
+            assert_eq!(m.role, *role);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // GroupMessageInfo
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn group_message_info_deserialize_full() {
+        let json = r#"{
+            "id": "msg-001",
+            "sender_type": "agent",
+            "sender_hash": "a1b2c3",
+            "sender_name": "MyAgent",
+            "content": "Hello world",
+            "message_type": "text",
+            "attachments": [{"type": "image", "url": "http://example.com/img.png"}],
+            "created_at": 1700005000
+        }"#;
+        let m: GroupMessageInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(m.id, "msg-001");
+        assert_eq!(m.sender_type, "agent");
+        assert_eq!(m.sender_hash, Some("a1b2c3".to_string()));
+        assert_eq!(m.sender_name, Some("MyAgent".to_string()));
+        assert_eq!(m.content, "Hello world");
+        assert_eq!(m.message_type, "text");
+        assert!(m.attachments.is_some());
+        assert_eq!(m.created_at, 1700005000);
+    }
+
+    #[test]
+    fn group_message_info_optional_fields_missing() {
+        // sender_hash, sender_name, attachments are optional
+        let json = r#"{
+            "id": "msg-002",
+            "sender_type": "user",
+            "content": "Hi",
+            "message_type": "text",
+            "created_at": 1700006000
+        }"#;
+        let m: GroupMessageInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(m.id, "msg-002");
+        assert_eq!(m.sender_type, "user");
+        assert!(m.sender_hash.is_none());
+        assert!(m.sender_name.is_none());
+        assert!(m.attachments.is_none());
+        assert_eq!(m.content, "Hi");
+    }
+
+    #[test]
+    fn group_message_info_roundtrip() {
+        let m = GroupMessageInfo {
+            id: "msg-round".to_string(),
+            sender_type: "agent".to_string(),
+            sender_hash: Some("abcd".to_string()),
+            sender_name: Some("TestBot".to_string()),
+            content: "Test content".to_string(),
+            message_type: "text".to_string(),
+            attachments: None,
+            created_at: 1700010000,
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        let parsed: GroupMessageInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, m);
+    }
+
+    #[test]
+    fn group_message_info_empty_attachments_array() {
+        let json = r#"{
+            "id": "msg-003",
+            "sender_type": "user",
+            "content": "No attachments",
+            "message_type": "text",
+            "attachments": [],
+            "created_at": 1700011000
+        }"#;
+        let m: GroupMessageInfo = serde_json::from_str(json).unwrap();
+        assert!(m.attachments.is_some());
+        assert!(m.attachments.as_ref().unwrap().is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // create_group name validation (unit of the async command)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn create_group_empty_name_rejected_by_api() {
+        // We can't call the real command without a server, but we can verify
+        // the serde serialization of the request body matches expectations.
+        // Empty name is a server-side validation; locally we serialize normally.
+        let body = serde_json::json!({
+            "name": "",
+            "member_hashes": Vec::<String>::new(),
+        });
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains(r#""name":"""#));
+    }
+
+    #[test]
+    fn create_group_with_members_serializes_correctly() {
+        let body = serde_json::json!({
+            "name": "My Group",
+            "member_hashes": ["a1b2", "c3d4", "e5f6"],
+        });
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains(r#""member_hashes":["a1b2","c3d4","e5f6"]"#));
+    }
 }

@@ -4,7 +4,6 @@
 //! Calls the Engine's `/api/fehub/apps` endpoint to list published apps.
 
 use crate::config::Config;
-use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -36,11 +35,7 @@ fn load_token() -> Result<String, String> {
 
 /// Build an HTTP client.
 fn build_client() -> Result<reqwest::Client, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("build reqwest client: {e}"))?;
-    Ok(client)
+    Ok(crate::http_client::http_client().clone())
 }
 
 fn engine_url() -> String {
@@ -132,4 +127,139 @@ pub async fn open_miniapp<R: tauri::Runtime>(
         .map_err(|e| format!("打开小程序窗口失败：{e}"))?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------------------
+    // PublishInfo — full deserialization
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn publish_info_deserialize_full() {
+        let json = r#"{
+            "id": "pub-001",
+            "agent_hash": "a1b2c3d4",
+            "app_name": "my-miniapp",
+            "tag": "productivity",
+            "is_public": true,
+            "created_at": 1700000000
+        }"#;
+        let p: PublishInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(p.id, "pub-001");
+        assert_eq!(p.agent_hash, "a1b2c3d4");
+        assert_eq!(p.app_name, "my-miniapp");
+        assert_eq!(p.tag, "productivity");
+        assert!(p.is_public);
+        assert_eq!(p.created_at, 1700000000);
+    }
+
+    // ---------------------------------------------------------------------------
+    // PublishInfo — non-public flag
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn publish_info_is_public_false() {
+        let json = r#"{
+            "id": "pub-002",
+            "agent_hash": "x1y2",
+            "app_name": "private-app",
+            "tag": "test",
+            "is_public": false,
+            "created_at": 1700001000
+        }"#;
+        let p: PublishInfo = serde_json::from_str(json).unwrap();
+        assert!(!p.is_public);
+    }
+
+    // ---------------------------------------------------------------------------
+    // PublishInfo — missing optional tag
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn publish_info_tag_missing() {
+        // tag is a required String, not Option
+        let json = r#"{
+            "id": "pub-003",
+            "agent_hash": "hash3",
+            "app_name": "no-tag-app",
+            "is_public": true,
+            "created_at": 1700002000
+        }"#;
+        let result: Result<PublishInfo, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    // ---------------------------------------------------------------------------
+    // PublishInfo — round-trip
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn publish_info_roundtrip() {
+        let p = PublishInfo {
+            id: "pub-round".to_string(),
+            agent_hash: "round-hash".to_string(),
+            app_name: "roundtrip-app".to_string(),
+            tag: "utilities".to_string(),
+            is_public: false,
+            created_at: 1700012345,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let parsed: PublishInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, p);
+    }
+
+    #[test]
+    fn publish_info_public_roundtrip() {
+        let p = PublishInfo {
+            id: "pub-public".to_string(),
+            agent_hash: "public-hash".to_string(),
+            app_name: "public-app".to_string(),
+            tag: "social".to_string(),
+            is_public: true,
+            created_at: 1700020000,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let parsed: PublishInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.is_public, true);
+    }
+
+    // ---------------------------------------------------------------------------
+    // PublishInfo — debug and clone
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn publish_info_debug() {
+        let p = PublishInfo {
+            id: "pub-debug".to_string(),
+            agent_hash: "dbg".to_string(),
+            app_name: "debug-app".to_string(),
+            tag: "dev".to_string(),
+            is_public: false,
+            created_at: 0,
+        };
+        let debug = format!("{:?}", p);
+        assert!(debug.contains("pub-debug"));
+        assert!(debug.contains("debug-app"));
+    }
+
+    #[test]
+    fn publish_info_clone() {
+        let p = PublishInfo {
+            id: "pub-clone".to_string(),
+            agent_hash: "clone-hash".to_string(),
+            app_name: "clone-app".to_string(),
+            tag: "clone".to_string(),
+            is_public: true,
+            created_at: 1,
+        };
+        let _cloned = p.clone();
+        assert_eq!(cloned.id, "pub-clone");
+    }
 }

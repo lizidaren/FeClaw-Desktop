@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 /// Credentials persisted to `~/.feclaw/local-credentials`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -33,20 +32,14 @@ fn default_username() -> String {
 pub struct AuthManager {
     config: Config,
     creds_path: PathBuf,
-    client: reqwest::Client,
 }
 
 impl AuthManager {
     pub fn new(config: Config) -> Self {
         let creds_path = Config::config_dir().join("local-credentials");
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .expect("build reqwest client");
         Self {
             config,
             creds_path,
-            client,
         }
     }
 
@@ -144,7 +137,7 @@ impl AuthManager {
     /// Quick `GET /api/me` to verify the JWT is still valid.
     pub async fn verify_token(&self, token: &str) -> bool {
         let url = format!("{}/api/me", self.config.engine_url());
-        self.client
+        crate::http_client::http_client()
             .get(&url)
             .bearer_auth(token)
             .send()

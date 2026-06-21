@@ -398,11 +398,7 @@ pub async fn list_agents() -> Result<Vec<AgentInfo>, String> {
         .ok_or_else(|| "cloud_url 未配置".to_string())?;
     let url = format!("{}/api/desktop/agents", base_url.trim_end_matches('/'));
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .user_agent(concat!("FeClaw-Desktop/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+    let client = crate::http_client::http_client();
 
     let resp = client
         .get(&url)

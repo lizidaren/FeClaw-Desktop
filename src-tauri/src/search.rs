@@ -5,7 +5,6 @@
 //! when the app is logged in but has no network connectivity.
 
 use crate::config::Config;
-use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -97,10 +96,7 @@ pub async fn search_all(query: String) -> Result<SearchResult, String> {
     let url = format!("{}/api/user/search?q={}", engine_url(), urlencoding::encode(&query));
 
     let start = Instant::now();
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("build reqwest client: {e}"))?;
+    let client = crate::http_client::http_client();
 
     let resp = client
         .get(&url)
@@ -204,4 +200,270 @@ pub async fn search_local_chat(query: String) -> Result<Vec<SearchItem>, String>
     }
 
     Ok(items)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------------------
+    // SearchItem — full deserialization
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn search_item_deserialize_full() {
+        let json = r#"{
+            "id": "item-001",
+            "agentHash": "a1b2c3",
+            "agentName": "TestBot",
+            "snippet": "...matched text...",
+            "score": 0.95,
+            "timestamp": 1700000000,
+            "source": "chat",
+            "reference": "msg-123"
+        }"#;
+        let s: SearchItem = serde_json::from_str(json).unwrap();
+        assert_eq!(s.id, "item-001");
+        assert_eq!(s.agent_hash, Some("a1b2c3".to_string()));
+        assert_eq!(s.agent_name, Some("TestBot".to_string()));
+        assert_eq!(s.snippet, "...matched text...");
+        assert!((s.score - 0.95).abs() < f64::EPSILON);
+        assert_eq!(s.timestamp, 1700000000);
+        assert_eq!(s.source, "chat");
+        assert_eq!(s.reference, Some("msg-123".to_string()));
+    }
+
+    // ---------------------------------------------------------------------------
+    // SearchItem — minimal (only required fields)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn search_item_minimal() {
+        let json = r#"{
+            "id": "item-min",
+            "snippet": "just a snippet",
+            "score": 0.5,
+            "timestamp": 1700001000,
+            "source": "vfs"
+        }"#;
+        let s: SearchItem = serde_json::from_str(json).unwrap();
+        assert_eq!(s.id, "item-min");
+        assert!(s.agent_hash.is_none());
+        assert!(s.agent_name.is_none());
+        assert!(s.reference.is_none());
+        assert_eq!(s.source, "vfs");
+    }
+
+    // ---------------------------------------------------------------------------
+    // SearchItem — all source types
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn search_item_all_sources() {
+        for source in &["chat", "vfs", "moments", "textbook", "miniapps"] {
+            let json = format!(
+                r#"{{"id": "s{}", "snippet": "t", "score": 1.0, "timestamp": 1, "source": "{}"}}"#,
+                source,
+                source
+            );
+            let s: SearchItem = serde_json::from_str(&json).unwrap();
+            assert_eq!(s.source, *source);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // SearchItem — JSON serialization preserves fields
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn search_item_roundtrip() {
+        let s = SearchItem {
+            id: "round-item".to_string(),
+            agent_hash: Some("abcd".to_string()),
+            agent_name: Some("RoundBot".to_string()),
+            snippet: "roundtrip snippet text".to_string(),
+            score: 0.88,
+            timestamp: 1700010000,
+            source: "chat".to_string(),
+            reference: Some("ref-001".to_string()),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let parsed: SearchItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, s);
+    }
+
+    #[test]
+    fn search_item_roundtrip_minimal() {
+        let s = SearchItem {
+            id: "round-min".to_string(),
+            agent_hash: None,
+            agent_name: None,
+            snippet: "minimal snippet".to_string(),
+            score: 0.1,
+            timestamp: 0,
+            source: "vfs".to_string(),
+            reference: None,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let parsed: SearchItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, s);
+    }
+
+    // ---------------------------------------------------------------------------
+    // SourceResults
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn source_results_deserialize() {
+        let json = r#"{
+            "status": "ok",
+            "items": [
+                {"id": "i1", "snippet": "a", "score": 0.9, "timestamp": 1, "source": "chat"},
+                {"id": "i2", "snippet": "b", "score": 0.8, "timestamp": 2, "source": "vfs"}
+            ]
+        }"#;
+        let sr: SourceResults = serde_json::from_str(json).unwrap();
+        assert_eq!(sr.status, "ok");
+        assert_eq!(sr.items.len(), 2);
+        assert_eq!(sr.items[0].id, "i1");
+        assert_eq!(sr.items[1].id, "i2");
+    }
+
+    #[test]
+    fn source_results_empty_items() {
+        let json = r#"{"status": "ok", "items": []}"#;
+        let sr: SourceResults = serde_json::from_str(json).unwrap();
+        assert!(sr.items.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // SearchResult — empty results
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn search_result_empty() {
+        let json = r#"{
+            "query": "nonexistent term xyz",
+            "results": {},
+            "elapsed_ms": 5
+        }"#;
+        let r: SearchResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.query, "nonexistent term xyz");
+        assert!(r.results.is_empty());
+        assert_eq!(r.elapsed_ms, 5);
+    }
+
+    // ---------------------------------------------------------------------------
+    // SearchResult — multi-source
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn search_result_multi_source() {
+        let json = r#"{
+            "query": "test query",
+            "results": {
+                "chat": {
+                    "status": "ok",
+                    "items": [{"id": "c1", "snippet": "chat match", "score": 0.9, "timestamp": 1, "source": "chat"}]
+                },
+                "vfs": {
+                    "status": "ok",
+                    "items": [{"id": "v1", "snippet": "file match", "score": 0.7, "timestamp": 2, "source": "vfs"}]
+                }
+            },
+            "elapsed_ms": 12
+        }"#;
+        let r: SearchResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.query, "test query");
+        assert_eq!(r.results.len(), 2);
+        assert_eq!(r.results["chat"].items.len(), 1);
+        assert_eq!(r.results["vfs"].items.len(), 1);
+        assert_eq!(r.elapsed_ms, 12);
+    }
+
+    // ---------------------------------------------------------------------------
+    // SearchResult — round-trip
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn search_result_roundtrip() {
+        use std::collections::HashMap;
+        let mut results = HashMap::new();
+        results.insert(
+            "chat".to_string(),
+            SourceResults {
+                status: "ok".to_string(),
+                items: vec![SearchItem {
+                    id: "r1".to_string(),
+                    agent_hash: None,
+                    agent_name: None,
+                    snippet: "test".to_string(),
+                    score: 0.5,
+                    timestamp: 1700000000,
+                    source: "chat".to_string(),
+                    reference: None,
+                }],
+            },
+        );
+        let r = SearchResult {
+            query: "roundtrip query".to_string(),
+            results,
+            elapsed_ms: 42,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let parsed: SearchResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.query, "roundtrip query");
+        assert_eq!(parsed.elapsed_ms, 42);
+        assert_eq!(parsed.results["chat"].items[0].id, "r1");
+    }
+
+    // ---------------------------------------------------------------------------
+    // SearchItem — missing required fields
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn search_item_missing_id_fails() {
+        let json = r#"{"snippet": "s", "score": 1.0, "timestamp": 1, "source": "chat"}"#;
+        let result: Result<SearchItem, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn search_item_missing_source_fails() {
+        let json = r#"{"id": "i", "snippet": "s", "score": 1.0, "timestamp": 1}"#;
+        let result: Result<SearchItem, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Credentials struct (internal helper)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn credentials_parse() {
+        let json = r#"{"username": "testuser", "token": "jwt-token-here"}"#;
+        let creds: Credentials = serde_json::from_str(json).unwrap();
+        assert_eq!(creds.username, "testuser");
+        assert_eq!(creds.token, Some("jwt-token-here".to_string()));
+    }
+
+    #[test]
+    fn credentials_missing_token() {
+        let json = r#"{"username": "user", "token": null}"#;
+        let creds: Credentials = serde_json::from_str(json).unwrap();
+        assert_eq!(creds.username, "user");
+        assert!(creds.token.is_none());
+    }
+
+    #[test]
+    fn credentials_empty_username() {
+        let json = r#"{"username": "", "token": "tok"}"#;
+        let creds: Credentials = serde_json::from_str(json).unwrap();
+        assert_eq!(creds.username, "");
+        assert_eq!(creds.token, Some("tok".to_string()));
+    }
 }

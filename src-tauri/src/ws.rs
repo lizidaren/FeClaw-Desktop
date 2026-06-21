@@ -23,7 +23,7 @@ use crate::ws_types::{
     CommandExecPayload, CommandExecPayloadOut, CommandExecResponse, ConnectionStatus,
     FileDeletePayload, FileReadPayload, FileReadResponse, FileReadResponsePayload,
     FileWritePayload, FileWriteResponse, FileWriteResponsePayload, NotificationPayload,
-    WsRequest, WsSendGroupMessage,
+    
 };
 use tauri::Emitter;
 

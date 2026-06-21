@@ -24,9 +24,11 @@ mod engine;
 mod executor;
 mod fehub;
 mod file_bridge;
+mod file_index;
 mod file_manager;
 mod file_ops;
 mod group;
+mod http_client;
 mod local_setup;
 mod moments;
 mod right_click;
@@ -152,7 +154,6 @@ pub fn run() {
                 db::insert_chat_message,
                 db::delete_chat_message,
                 create::create_agent,
-                create::create_group_placeholder,
                 create::pick_local_file,
                 db::init_db,
                 db::check_legacy_chat_history,
@@ -205,6 +206,12 @@ pub fn run() {
                 fehub::open_miniapp,
                 search::search_all,
                 search::search_local_chat,
+                file_index::start_index,
+                file_index::get_index_status,
+                file_index::search_local_files,
+                file_index::add_index_directory,
+                file_index::remove_index_directory,
+                file_index::get_index_directories,
                 alt_space::register_search_shortcut,
                 alt_space::unregister_search_shortcut,
                 alt_space::is_search_shortcut_bound,

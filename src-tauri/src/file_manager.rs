@@ -118,10 +118,7 @@ fn engine_base_and_token() -> Result<(String, Option<String>), String> {
 
 /// Build a reqwest client with standard timeout.
 fn http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("build reqwest client: {e}"))
+    Ok(crate::http_client::http_client().clone())
 }
 
 /// Add Bearer auth header if token is present.

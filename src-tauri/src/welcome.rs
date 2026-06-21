@@ -154,11 +154,7 @@ pub async fn discover_well_known(url: String) -> Result<Option<String>, String> 
     }
     let probe = format!("{trimmed}/.well-known/feclaw-desktop");
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .user_agent(concat!("FeClaw-Desktop/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+    let client = crate::http_client::http_client();
 
     match client.get(&probe).send().await {
         Ok(resp) if resp.status().is_success() => match resp.text().await {
@@ -235,11 +231,7 @@ pub async fn get_permissions() -> Result<UserPermissions, String> {
         .ok_or_else(|| "cloud_url 未配置".to_string())?;
     let url = format!("{}/api/user/permissions", base_url.trim_end_matches('/'));
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .user_agent(concat!("FeClaw-Desktop/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+    let client = crate::http_client::http_client();
 
     let resp = client
         .get(&url)

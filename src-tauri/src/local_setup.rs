@@ -260,13 +260,7 @@ pub async fn start_feclaw(dest: String, port: u16) -> Result<String, String> {
 #[tauri::command]
 pub async fn check_engine_health(port: u16) -> bool {
     let url = format!("http://127.0.0.1:{port}/health");
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
+    let client = crate::http_client::http_client();
 
     match client.get(&url).send().await {
         Ok(resp) => resp.status().is_success(),
