@@ -165,6 +165,24 @@ pub async fn discover_well_known(url: String) -> Result<Option<String>, String> 
     }
 }
 
+/// Check cloud engine health by calling `GET /health`.
+#[tauri::command]
+pub async fn check_cloud_health() -> Result<String, String> {
+    let cfg = Config::load();
+    let base_url = cfg
+        .cloud_base_url()
+        .unwrap_or_else(|| "https://feclaw.lizidaren.cn".to_string());
+    let url = format!("{}/health", base_url.trim_end_matches('/'));
+
+    let client = crate::http_client::http_client();
+
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => Ok("healthy".to_string()),
+        Ok(resp) => Err(format!("health check failed: HTTP {}", resp.status())),
+        Err(e) => Err(format!("无法连接到服务器：{e}")),
+    }
+}
+
 /// Open the welcome window. Created once; subsequent calls just focus
 /// the existing window.
 #[tauri::command]

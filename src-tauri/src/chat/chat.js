@@ -87,9 +87,20 @@ function renderChatList(items) {
   const hint = $("empty-list-hint");
   if (!list) return;
   if (items.length === 0) {
-    if (hint) hint.style.display = "";
     list.innerHTML = "";
-    if (hint) list.appendChild(hint);
+    if (hint) {
+      hint.style.display = "";
+      // Ensure the create button exists inside the hint
+      if (!hint.querySelector(".btn-create-agent")) {
+        const btn = document.createElement("button");
+        btn.className = "btn btn-secondary btn-create-agent";
+        btn.type = "button";
+        btn.textContent = "创建新 Agent";
+        btn.addEventListener("click", () => void handleCreateAgent());
+        hint.appendChild(btn);
+      }
+      list.appendChild(hint);
+    }
     return;
   }
   if (hint) hint.style.display = "none";
@@ -304,6 +315,23 @@ async function sendMessage() {
     input.focus();
   }
 }
+async function handleCreateAgent() {
+  try {
+    const agent = await invoke("create_agent", {
+      name: "新助手",
+      agentType: "im"
+    });
+    const agents = await invoke("list_agents");
+    store.setAgents(agents);
+    renderChatList(store.chatItems);
+    if (agent?.hash) {
+      await selectChat(agent.hash);
+    }
+  } catch (e) {
+    console.error("create_agent failed:", e);
+  }
+}
+
 async function handlePaste(e) {
   const items = e.clipboardData?.items;
   if (!items) return;
@@ -409,6 +437,27 @@ function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 async function subscribeEvents() {
+  try {
+    await listen("connection-status", (e) => {
+      const dot = $("conn-dot");
+      const text = $("conn-text");
+      const status = e.payload;
+      if (dot) dot.className = "conn-dot";
+      if (text) text.className = "conn-text";
+      if (status === "Connected") {
+        if (dot) dot.classList.add("connected");
+        if (text) text.textContent = "已连接";
+      } else if (status === "Connecting" || status === "Reconnecting") {
+        if (dot) dot.classList.add("connecting");
+        if (text) text.textContent = "连接中…";
+      } else {
+        if (dot) dot.classList.add("disconnected");
+        if (text) text.textContent = "未连接";
+      }
+    });
+  } catch (e) {
+    console.error("listen connection-status:", e);
+  }
   try {
     await listen("chat-event", (e) => {
       const msg = e.payload;

@@ -120,6 +120,26 @@ function wire() {
     usernameEl.focus();
   }
 }
+async function checkCloudHealth() {
+  const dot = $("cloud-dot");
+  const text = $("cloud-status-text");
+  if (!dot || !text) return;
+  try {
+    const result = await invoke("check_cloud_health");
+    if (result === "healthy") {
+      dot.className = "status-dot connected";
+      text.textContent = "已连接";
+    } else {
+      dot.className = "status-dot error";
+      text.textContent = result || "连接失败";
+    }
+  } catch (e) {
+    dot.className = "status-dot error";
+    const msg = typeof e === "string" ? e : e?.message ?? "连接失败";
+    text.textContent = msg;
+  }
+}
 document.addEventListener("DOMContentLoaded", () => {
   wire();
+  void checkCloudHealth();
 });

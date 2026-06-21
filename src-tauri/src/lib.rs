@@ -139,6 +139,7 @@ pub fn run() {
                 welcome::check_first_launch,
                 welcome::save_welcome_config,
                 welcome::discover_well_known,
+                welcome::check_cloud_health,
                 welcome::open_welcome_window,
                 welcome::get_permissions,
                 chat::get_chat_history,
