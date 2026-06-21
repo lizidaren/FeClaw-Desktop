@@ -19,6 +19,7 @@ use std::time::Instant;
 use crate::consent::{ConsentManager, Decision};
 use crate::executor::CommandExecutor;
 use crate::file_bridge;
+use crate::ws_types::WsRequest;
 use crate::ws_types::{
     CommandExecPayload, CommandExecPayloadOut, CommandExecResponse, ConnectionStatus,
     FileDeletePayload, FileReadPayload, FileReadResponse, FileReadResponsePayload,

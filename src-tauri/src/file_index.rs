@@ -10,8 +10,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -249,7 +248,7 @@ fn index_directory(
 
         // Update current file
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            *current_file.write().await = name.to_string();
+            *current_file.write().unwrap() = name.to_string();
         }
 
         let file_path_str = path.to_string_lossy().to_string();
@@ -310,7 +309,7 @@ fn index_directory(
         )?;
 
         count += 1;
-        *indexed_counter.lock().await += 1;
+        *indexed_counter.lock().unwrap() += 1;
     }
 
     Ok(count)
@@ -369,9 +368,9 @@ pub async fn start_index() -> Result<String, String> {
     }
 
     INDEXING.store(true, Ordering::SeqCst);
-    *INDEX_TOTAL.write().await = 0;
-    *INDEX_INDEXED.lock().await = 0;
-    *INDEX_CURRENT.write().await = String::new();
+    *INDEX_TOTAL.write().unwrap() = 0;
+    *INDEX_INDEXED.lock().unwrap() = 0;
+    *INDEX_CURRENT.write().unwrap() = String::new();
 
     // Spawn background task
     tauri::async_runtime::spawn(async move {
@@ -386,8 +385,8 @@ pub async fn start_index() -> Result<String, String> {
                     return Ok(0usize);
                 }
 
-                *INDEX_TOTAL.write().await = total;
-                *INDEX_CURRENT.write().await = dir.to_string_lossy().to_string();
+                *INDEX_TOTAL.write().unwrap() = total;
+                *INDEX_CURRENT.write().unwrap() = dir.to_string_lossy().to_string();
 
                 match index_directory(dir, conn, &INDEX_INDEXED, &INDEX_INDEXED, &INDEX_CURRENT) {
                     Ok(count) => {
@@ -402,7 +401,7 @@ pub async fn start_index() -> Result<String, String> {
         });
 
         INDEXING.store(false, Ordering::SeqCst);
-        *INDEX_CURRENT.write().await = String::new();
+        *INDEX_CURRENT.write().unwrap() = String::new();
 
         match result {
             Ok(_) => tracing::info!("file_index: background scan complete"),
@@ -416,9 +415,9 @@ pub async fn start_index() -> Result<String, String> {
 /// Get current indexing status.
 #[tauri::command]
 pub async fn get_index_status() -> Result<IndexStatus, String> {
-    let total = *INDEX_TOTAL.read().await;
-    let indexed = *INDEX_INDEXED.lock().await;
-    let current = INDEX_CURRENT.read().await.clone();
+    let total = *INDEX_TOTAL.read().unwrap();
+    let indexed = *INDEX_INDEXED.lock().unwrap();
+    let current = INDEX_CURRENT.read().unwrap().clone();
     let is_indexing = is_indexing();
 
     Ok(IndexStatus {

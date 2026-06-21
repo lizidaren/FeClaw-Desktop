@@ -109,8 +109,7 @@ impl AuthManager {
     /// POST `/api/login` with `username` + `password`, return the JWT.
     pub async fn login(&self, username: &str, password: &str) -> Result<String> {
         let url = format!("{}/api/login", self.config.engine_url());
-        let resp = self
-            .client
+        let resp = crate::http_client::http_client()
             .post(&url)
             .json(&serde_json::json!({
                 "username": username,
