@@ -379,6 +379,11 @@ async function handlePaste(e) {
 }
 async function saveAndInsertImage(file) {
   if (!store.activeAgentHash) return;
+  // Reject images larger than 1MB
+  if (file.size > 1 * 1024 * 1024) {
+    alert("图片太大，请压缩到 1MB 以内再粘贴");
+    return;
+  }
   const reader = new FileReader();
   reader.onload = async (ev) => {
     const base64 = ev.target?.result;

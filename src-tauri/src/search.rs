@@ -149,19 +149,24 @@ pub async fn search_local_chat(query: String) -> Result<Vec<SearchItem>, String>
         [],
     ).map_err(|e| e.to_string())?;
 
-    // Simple LIKE-based search on content (FTS5 requires FTS queries)
-    let _fts_query = format!("\"{}\"", query.replace('"', "\"\""));
+    // Sync FTS5 content table with current data (idempotent)
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO chat_messages_fts (rowid, content) SELECT rowid, content FROM chat_messages",
+        [],
+    );
+
+    let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
 
     let mut stmt = conn.prepare(
-        "SELECT id, agent_hash, content, created_at
-         FROM chat_messages
-         WHERE content LIKE ?1
-         ORDER BY created_at DESC
+        "SELECT cm.id, cm.agent_hash, cm.content, cm.created_at
+         FROM chat_messages cm
+         JOIN chat_messages_fts fts ON cm.id = fts.rowid
+         WHERE chat_messages_fts MATCH ?1
+         ORDER BY rank
          LIMIT 50"
     ).map_err(|e| e.to_string())?;
 
-    let pattern = format!("%{}%", query);
-    let rows = stmt.query_map(params![pattern], |row| {
+    let rows = stmt.query_map(params![fts_query], |row| {
         let id: String = row.get(0)?;
         let agent_hash: Option<String> = row.get(1)?;
         let content: String = row.get(2)?;
