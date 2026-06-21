@@ -171,7 +171,7 @@ pub async fn check_cloud_health() -> Result<String, String> {
     let cfg = Config::load();
     let base_url = cfg
         .cloud_base_url()
-        .unwrap_or_else(|| "https://feclaw.lizidaren.cn".to_string());
+        .unwrap_or_else(|| "https://feclaw.lizidaren.cn");
     let url = format!("{}/health", base_url.trim_end_matches('/'));
 
     let client = crate::http_client::http_client();

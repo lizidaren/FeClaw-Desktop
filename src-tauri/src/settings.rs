@@ -372,9 +372,10 @@ pub async fn cloud_login(
         .await
         .map_err(|e| format!("兑换 FeClaw JWT 失败：{e}"))?;
 
-    if !exchange_resp.status().is_success() {
+    let exchange_status = exchange_resp.status();
+    if !exchange_status.is_success() {
         let body = exchange_resp.text().await.unwrap_or_default();
-        return Err(format!("兑换 FeClaw JWT 失败 ({}): {}", exchange_resp.status(), body));
+        return Err(format!("兑换 FeClaw JWT 失败 ({}): {}", exchange_status, body));
     }
 
     #[derive(serde::Deserialize)]

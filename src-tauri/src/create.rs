@@ -8,6 +8,7 @@
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use tauri::webview::WebviewWindowBuilder;
+use tauri::Manager;
 
 /// Request body for POST /api/desktop/agents.
 #[derive(Debug, Serialize)]
@@ -101,7 +102,8 @@ pub async fn open_agent_config(
     state: tauri::State<'_, crate::AppState>,
     agent_hash: String,
 ) -> Result<(), String> {
-    let config = state.config.read().map_err(|e| format!("读取配置失败: {e}"))?.clone();
+    let guard = state.config.read().await;
+    let config = guard.clone();
     let token = config.cloud_token.clone()
         .ok_or_else(|| "未登录".to_string())?;
     let base_url = config.cloud_base_url()
