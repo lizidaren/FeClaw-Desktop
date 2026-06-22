@@ -44,6 +44,8 @@ image = "0.25"
 winreg = "0.55"
 
 [features]
+default = ["privacy", "global-shortcut"]
+privacy = []
 global-shortcut = ["tauri-plugin-global-shortcut"]
 windows-hwnd = []
 custom-protocol = ["tauri/custom-protocol"]

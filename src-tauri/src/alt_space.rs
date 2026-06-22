@@ -53,9 +53,10 @@ fn save_shortcut_bound(bound: bool) -> std::io::Result<()> {
 
 // ---------------------------------------------------------------------------
 // Windows privacy API (SetWindowDisplayAffinity)
+// Gated behind "privacy" feature to avoid hard dependency on winuser.lib.
 // ---------------------------------------------------------------------------
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "privacy"))]
 mod privacy {
     use std::ffi::c_void;
 
@@ -105,6 +106,17 @@ mod privacy {
             // Minimal fallback using winapi directly
             None
         }
+    }
+}
+
+/// Fallback on Windows when privacy feature is disabled (no winuser.lib needed).
+#[cfg(all(windows, not(feature = "privacy")))]
+mod privacy {
+    pub fn apply_privacy_affinity(_hwnd_ptr: usize) -> Result<(), String> {
+        Ok(())
+    }
+    pub fn get_main_window_hwnd() -> Option<usize> {
+        None
     }
 }
 
