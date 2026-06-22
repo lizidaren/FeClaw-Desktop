@@ -73,6 +73,7 @@ pub async fn create_agent(
         avatar_url: None,
         permission_mode: None,
         is_online: true,
+        status: None,
     })
 }
 

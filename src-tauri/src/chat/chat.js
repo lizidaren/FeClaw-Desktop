@@ -29,7 +29,8 @@ var Store = class {
       last_message: "",
       last_time: "",
       unread: false,
-      active: a.hash === this.activeAgentHash
+      active: a.hash === this.activeAgentHash,
+      status: a.status ?? "active"
     }));
     this.notify();
   }
@@ -114,7 +115,7 @@ function renderChatList(items) {
     el.innerHTML = `
       <div class="chat-item-avatar">${item.avatar_letter}</div>
       <div class="chat-item-info">
-        <div class="chat-item-name">${escapeHtml(item.name)}</div>
+        <div class="chat-item-name">${escapeHtml(item.name)}${item.status === "pending" ? ' <span class="agent-pending-badge">继续配置 →</span>' : ""}</div>
         <div class="chat-item-preview">${escapeHtml(item.last_message)}</div>
       </div>
       <div class="chat-item-meta">
@@ -200,6 +201,11 @@ function finalizeStreaming(id, finalText) {
   }
 }
 async function selectChat(agentHash) {
+  const agent = store.agents.find((a) => a.hash === agentHash);
+  if (agent?.status === "pending") {
+    showPendingAgentMessage(agentHash, agent.name);
+    return;
+  }
   if (store.activeAgentHash) {
     const input2 = $("input");
     if (input2 && input2.value.trim()) {
@@ -462,7 +468,12 @@ async function initChat() {
     const agents = await invoke("list_agents");
     store.setAgents(agents);
     renderChatList(store.chatItems);
-    if (agents.length > 0) {
+    // Auto-select the first non-pending agent, if any.
+    const firstReady = agents.find((a) => a.status !== "pending");
+    if (firstReady) {
+      await selectChat(firstReady.hash);
+    } else if (agents.length > 0) {
+      // All agents are pending — show the pending message for the first one.
       await selectChat(agents[0].hash);
     }
   } catch (e) {

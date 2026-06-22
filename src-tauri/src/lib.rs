@@ -73,6 +73,18 @@ use tauri::Manager;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
 
+/// Errors returned by [`startup`].
+#[derive(Debug, thiserror::Error)]
+pub enum StartupError {
+    /// Cloud mode is active but no `cloud_token` is configured.
+    /// The caller should let the UI show the welcome page, not an error dialog.
+    #[error("not logged in")]
+    NeedsLogin,
+    /// A genuine startup failure (missing engine, auth failure, etc.).
+    #[error("{0:#}")]
+    Other(#[from] anyhow::Error),
+}
+
 /// Commands the UI can send into the async runtime.
 #[derive(Debug, Clone)]
 pub enum ControlMsg {
@@ -281,21 +293,30 @@ pub fn run() {
                     }
                     let handle_for_pending = handle.clone();
                     if let Err(e) = startup(handle).await {
-                        tracing::error!("startup failed: {e:#}");
-                        let err_msg = format!("{e:#}");
-                        let app_handle = app_handle_for_error.clone();
-                        std::thread::spawn(move || {
-                            let _ = rfd::MessageDialog::new()
-                                .set_title("FeClaw Desktop — 启动失败")
-                                .set_description(&err_msg)
-                                .set_buttons(rfd::MessageButtons::Ok)
-                                .set_level(rfd::MessageLevel::Error)
-                                .show();
-                        });
-                        // Open settings so user can configure cloud mode.
-                        tauri::async_runtime::spawn(async move {
-                            let _ = settings::open_settings_window(app_handle).await;
-                        });
+                        match e {
+                            StartupError::NeedsLogin => {
+                                // No token set — don't show an error dialog, just let the
+                                // welcome page / settings UI guide the user through login.
+                                tracing::info!("startup: cloud mode with no token; skipping error dialog");
+                            }
+                            StartupError::Other(err) => {
+                                tracing::error!("startup failed: {err:#}");
+                                let err_msg = format!("{err:#}");
+                                let app_handle = app_handle_for_error.clone();
+                                std::thread::spawn(move || {
+                                    let _ = rfd::MessageDialog::new()
+                                        .set_title("FeClaw Desktop — 启动失败")
+                                        .set_description(&err_msg)
+                                        .set_buttons(rfd::MessageButtons::Ok)
+                                        .set_level(rfd::MessageLevel::Error)
+                                        .show();
+                                });
+                                // Open settings so user can configure cloud mode.
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = settings::open_settings_window(app_handle).await;
+                                });
+                            }
+                        }
                         return;
                     }
 
@@ -340,7 +361,7 @@ pub fn run() {
     });
 }
 
-async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
+async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
     // 1. Load config.
     let mut config = Config::load();
     tracing::info!(
@@ -350,20 +371,28 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         config.mode
     );
 
-    // 2. Build the engine manager but DON'T start it yet — `start()` needs
+    // 2. Cloud mode: skip local engine entirely.
+    if config.mode == Mode::Cloud {
+        if let Some(token) = config.cloud_token.clone() {
+            tracing::info!("cloud mode: using stored cloud_token");
+            return Ok(token);
+        }
+        tracing::info!("cloud mode: no cloud_token configured");
+        return Err(StartupError::NeedsLogin);
+    }
+
+    // 3. Local mode: build the engine manager but DON'T start it yet — `start()` needs
     //    `consent`, `executor`, `status_tx`, and `shared_config` which all
     //    live behind AppState. We start in step 5 once those exist.
     let mut engine = EngineManager::new(config.clone());
 
-    // 3. Authenticate against the local engine's credentials cache.
-    //    In cloud mode this is skipped — the cloud token is read inside
-    //    `engine.start_cloud`.
+    // 4. Authenticate against the local engine's credentials cache.
     let mut auth = AuthManager::new(config.clone());
     let stdout_buffer = engine.stdout_buffer_handle();
     let token = auth.login_or_load(stdout_buffer).await?;
     tracing::info!("authenticated (token length={})", token.len());
 
-    // 4. Register AppState (must exist before tray builder reads it).
+    // 5. Register AppState (must exist before tray builder reads it).
     let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMsg>();
     let cancel_token = Arc::new(AtomicBool::new(false));
     let (status_tx, mut status_rx) = mpsc::channel(32);
@@ -387,7 +416,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
     engine.set_cancel_token(cancel_token.clone());
     app.manage(state);
 
-    // 5. Start the engine now that AppState exists. We hand `engine.start()`
+    // 6. Start the engine now that AppState exists. We hand `engine.start()`
     //    a clone of `status_tx` so the local-mode `WsClient` (constructed
     //    below) can still publish connection status updates on the same
     //    channel — in cloud mode the inner cloud_loop consumes the cloned
@@ -409,20 +438,20 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         tracing::info!("engine ready on port {port}");
     }
 
-    // 6. Build system tray.
+    // 7. Build system tray.
 #[cfg(feature = "desktop")]
     if let Err(e) = tray::build_tray(&app) {
         tracing::warn!("failed to build tray: {e:#}");
     }
 
-    // 6b. Alt+Space global shortcut — disabled in MVP (would conflict with IME).
+    // 7b. Alt+Space global shortcut — disabled in MVP (would conflict with IME).
     // Future: auto-bind on cloud login with conflict detection + user prompt.
 
-    // 6. Wire executor + WS (consent Arc is shared with AppState).
+    // 7. Wire executor + WS (consent Arc is shared with AppState).
     //    `executor` was created earlier (alongside AppState) and reused here.
     let ws = WsClient::new(
         config.ws_url(),
-        token,
+        token.clone(),
         status_tx,
         consent,
         executor,
@@ -430,7 +459,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         Some(app.clone()),
     );
 
-    // 7. Status pump — updates AppState + tray icon.
+    // 8. Status pump — updates AppState + tray icon.
     let app_for_status = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(status) = status_rx.recv().await {
@@ -451,7 +480,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         }
     });
 
-    // 8. Control message pump — drains tray menu events.
+    // 9. Control message pump — drains tray menu events.
     let mut control_rx = control_rx;
     let app_for_control = app.clone();
     let cancel_token_for_pump = cancel_token.clone();
@@ -499,12 +528,12 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         }
     });
 
-    // 9. WS task.
+    // 10. WS task.
     tauri::async_runtime::spawn(async move {
         ws.run().await;
     });
 
-    // 10. Idle watcher.
+    // 11. Idle watcher.
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         if !engine.is_running() {
