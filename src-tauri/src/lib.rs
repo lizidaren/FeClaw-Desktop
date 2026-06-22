@@ -367,14 +367,96 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
         config.mode
     );
 
-    // 2. Cloud mode: skip local engine entirely.
+    // 2. Cloud mode: skip local engine, but still create AppState + WS.
     if config.mode == Mode::Cloud {
-        if let Some(token) = config.cloud_token.clone() {
-            tracing::info!("cloud mode: using stored cloud_token");
-            return Ok(token);
-        }
-        tracing::info!("cloud mode: no cloud_token configured");
-        return Err(StartupError::NeedsLogin);
+        let token = config.cloud_token.clone()
+            .ok_or(StartupError::NeedsLogin)?;
+        tracing::info!("cloud mode: using stored cloud_token");
+
+        let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMsg>();
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        let (status_tx, mut status_rx) = mpsc::channel(32);
+        let consent = Arc::new(Mutex::new(ConsentManager::new()));
+        consent.lock().await.load_trusted();
+        let executor = Arc::new(CommandExecutor::new());
+        let shared_config = Arc::new(RwLock::new(config.clone()));
+        let state = AppState {
+            config: shared_config.clone(),
+            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
+            control_tx: control_tx.clone(),
+            cancel_token: cancel_token.clone(),
+            consent: consent.clone(),
+            ws_outgoing: Arc::new(RwLock::new(None)),
+            engine_running: Arc::new(RwLock::new(false)),
+        };
+        app.manage(state);
+
+        // Wire WS client (cloud).
+        let ws = WsClient::new(
+            config.ws_url(),
+            token.clone(),
+            status_tx.clone(),
+            consent,
+            executor,
+            cancel_token.clone(),
+            Some(app.clone()),
+        );
+        tauri::async_runtime::spawn(async move {
+            ws.run().await;
+        });
+
+        // Status pump
+        let app_for_status = app.clone();
+        tauri::async_runtime::spawn(async move {
+            while let Some(status) = status_rx.recv().await {
+                tracing::info!("ws status → {status:?}");
+                {
+                    let state = app_for_status.state::<AppState>();
+                    *state.status.write().await = status;
+                }
+                let status_label = format!("{:?}", status);
+                let _ = app_for_status.emit("ws-status", serde_json::json!({ "status": status_label }));
+                #[cfg(feature = "desktop")]
+                if let Some(tray_icon) = app_for_status.tray_by_id(tray::TRAY_ID) {
+                    let icon = tray::icon_for_status(status);
+                    let _ = tray_icon.set_icon(Some(icon));
+                    let _ = tray_icon.set_tooltip(Some(format!("FeClaw Desktop — {status:?}")));
+                }
+            }
+        });
+
+        // Control message pump
+        let app_for_control = app.clone();
+        tauri::async_runtime::spawn(async move {
+            while let Some(msg) = control_rx.recv().await {
+                match msg {
+                    ControlMsg::Reconnect => {
+                        tracing::info!("control: reconnect requested");
+                        // cancel + WS will auto-reconnect in WsClient
+                    }
+                    ControlMsg::SetMode(mode) => {
+                        tracing::info!("control: set mode {mode:?}");
+                        let state = app_for_control.state::<AppState>();
+                        let mut cfg = state.config.write().await;
+                        cfg.mode = mode;
+                        if let Err(e) = cfg.save() {
+                            tracing::warn!("failed to persist config: {e:#}");
+                        }
+                    }
+                    ControlMsg::ShowCloudLogin => {
+                        tracing::info!("control: show cloud login requested");
+                        if let Err(e) = settings::open_settings_window(app_for_control.clone()).await {
+                            tracing::error!("open settings window: {e}");
+                        }
+                        if let Err(e) = app_for_control.emit("navigate-settings", "cloud") {
+                            tracing::warn!("emit navigate-settings: {e}");
+                        }
+                    }
+                }
+            }
+        });
+
+        return Ok(token);
     }
 
     // 3. Local mode: build the engine manager but DON'T start it yet — `start()` needs
