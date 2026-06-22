@@ -292,17 +292,28 @@ pub fn run() {
                         return;
                     }
                     let handle_for_pending = handle.clone();
-                    if let Err(e) = startup(handle).await {
-                        tracing::warn!("startup failed: {e}; opening welcome window");
-                        let app_handle = app_handle_for_error.clone();
-                        // Open welcome page so user can re-pick mode (cloud/local) and log in.
-                        // This handles V2 config remnants, cloud mode with no token, etc.
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(e) = welcome::open_welcome_window(app_handle).await {
-                                tracing::error!("failed to open welcome fallback: {e:#}");
+                    let result = startup(handle).await;
+                    match result {
+                        Err(e) => {
+                            tracing::warn!("startup failed: {e}; opening welcome window");
+                            let app_handle = app_handle_for_error.clone();
+                            // Open welcome page so user can re-pick mode (cloud/local) and log in.
+                            // This handles V2 config remnants, cloud mode with no token, etc.
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) = welcome::open_welcome_window(app_handle).await {
+                                    tracing::error!("failed to open welcome fallback: {e:#}");
+                                }
+                            });
+                            return;
+                        }
+                        Ok(_token) => {
+                            // Startup succeeded — show the main chat window.
+                            // (In cloud mode the main window is hidden from tauri.conf.json;
+                            // in local mode the engine path also doesn't auto-show it.)
+                            if let Err(e) = chat::open_chat_window(app_handle_for_error.clone()).await {
+                                tracing::error!("failed to open chat window after startup: {e:#}");
                             }
-                        });
-                        return;
+                        }
                     }
 
                     // Check for pending right-click file (written by shell invocation)
