@@ -542,5 +542,5 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
         }
     }
     let _ = engine.stop().await;
-    Ok(())
+    Ok("".to_string())
 }
