@@ -248,6 +248,7 @@ async function sendMessage() {
   const input = $("input");
   const btn = $("btn-send");
   if (!input || !btn) return;
+  if (btn.disabled) return; // already sending, ignore duplicate call
   const text = input.value.trim();
   if (!text || !store.activeAgentHash) return;
   btn.disabled = true;
@@ -401,8 +402,27 @@ function switchTab(tabId) {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.tab === tabId);
   });
+  // Show/hide settings embedded panel instead of opening a separate window
+  const settingsTab = $("settingsTab");
+  if (settingsTab) {
+    settingsTab.style.display = tabId === "settings" ? "flex" : "none";
+  }
   if (tabId === "settings") {
-    void invoke("open_settings_window").catch((e) => console.error("open_settings:", e));
+    // Hide chat panel when in settings
+    const noChat = $("no-chat-state");
+    const activeChat = $("active-chat");
+    if (noChat) noChat.style.display = "none";
+    if (activeChat) activeChat.style.display = "none";
+  } else if (tabId === "chat") {
+    // Restore chat panel visibility when switching back to chat
+    if (store.activeAgentHash) {
+      showActiveChat();
+    } else {
+      const noChat = $("no-chat-state");
+      const activeChat = $("active-chat");
+      if (noChat) noChat.style.display = "";
+      if (activeChat) activeChat.style.display = "none";
+    }
   }
 }
 function showActiveChat() {
@@ -474,6 +494,18 @@ function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 async function subscribeEvents() {
+  // Listen for theme-changed events from the embedded settings iframe
+  try {
+    await listen("theme-changed", (e) => {
+      const theme = e.payload?.theme;
+      if (theme) {
+        document.documentElement.setAttribute("data-theme", theme);
+        document.body.setAttribute("data-theme", theme);
+      }
+    });
+  } catch (e) {
+    console.error("listen theme-changed:", e);
+  }
   try {
     await listen("ws-status", (e) => {
       const dot = $("conn-dot");

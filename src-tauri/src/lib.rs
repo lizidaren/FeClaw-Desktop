@@ -115,7 +115,6 @@ pub fn run() {
             .invoke_handler(tauri::generate_handler![
                 settings::load_settings,
                 settings::save_settings,
-                settings::open_settings_window,
                 settings::test_cloud_connection,
                 settings::get_cloud_session,
                 settings::cloud_login,
@@ -264,8 +263,17 @@ pub fn run() {
                         let pending_path = pending.path.clone();
                         let app_for_pending = handle_for_pending.clone();
                         tauri::async_runtime::spawn(async move {
-                            // Give the UI a moment to initialise before emitting the event
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            // Poll UI readiness (chat WebView window exists) before emitting the event.
+                            // The main window is created by startup(), so we wait for it to be available.
+                            let ui_ready = app_for_pending.get_webview_window("main").is_some();
+                            if !ui_ready {
+                                for _ in 0..50 {
+                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                    if app_for_pending.get_webview_window("main").is_some() {
+                                        break;
+                                    }
+                                }
+                            }
                             if let Err(e) = app_for_pending.emit("right-click-pending", &pending) {
                                 tracing::warn!("emit right-click-pending: {e}");
                             }
