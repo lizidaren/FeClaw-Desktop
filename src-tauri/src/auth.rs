@@ -149,15 +149,6 @@ impl AuthManager {
             .unwrap_or(false)
     }
 
-/// Load the local credential token from `~/.feclaw/local-credentials` JSON.
-/// Returns the token string if present, or `None` if the file is missing
-/// or the token field is absent / null.
-pub fn load_local_token() -> Option<String> {
-    let path = Config::config_dir().join("local-credentials");
-    let content = std::fs::read_to_string(path).ok()?;
-    let cred: serde_json::Value = serde_json::from_str(&content).ok()?;
-    cred.get("token")?.as_str().map(String::from)
-}
 
 /// Parse engine stdout looking for a random initial admin password.
     ///
@@ -192,6 +183,15 @@ pub fn load_local_token() -> Option<String> {
         }
         None
     }
+}
+/// Load the local credential token from `~/.feclaw/local-credentials` JSON.
+/// Returns the token string if present, or `None` if the file is missing
+/// or the token field is absent / null.
+pub fn load_local_token() -> Option<String> {
+    let path = Config::config_dir().join("local-credentials");
+    let content = std::fs::read_to_string(path).ok()?;
+    let cred: serde_json::Value = serde_json::from_str(&content).ok()?;
+    cred.get("token")?.as_str().map(String::from)
 }
 
 // ---------------------------------------------------------------------------
