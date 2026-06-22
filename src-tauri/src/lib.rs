@@ -401,6 +401,11 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
             cancel_token.clone(),
             Some(app.clone()),
         );
+        // Store the WS sender in AppState so send_chat_message can use it.
+        {
+            let state = app.state::<AppState>();
+            *state.ws_outgoing.write().await = Some(ws.sender());
+        }
         tauri::async_runtime::spawn(async move {
             ws.run().await;
         });
@@ -546,6 +551,11 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
         cancel_token.clone(),
         Some(app.clone()),
     );
+    // Store the WS sender in AppState so send_chat_message can use it.
+    {
+        let state = app.state::<AppState>();
+        *state.ws_outgoing.write().await = Some(ws.sender());
+    }
 
     // 8. Status pump — updates AppState + tray icon.
     let app_for_status = app.clone();
