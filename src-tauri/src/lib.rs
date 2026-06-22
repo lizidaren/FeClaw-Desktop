@@ -452,6 +452,16 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
                             tracing::warn!("emit navigate-settings: {e}");
                         }
                     }
+                    ControlMsg::AuthFailure { reason } => {
+                        tracing::warn!("control: auth failure (reason={reason})");
+                        if let Err(e) = app_for_control.emit("auth-failure", &reason) {
+                            tracing::warn!("emit auth-failure: {e}");
+                        }
+                    }
+                    ControlMsg::Quit => {
+                        tracing::info!("control: cloud mode quit requested");
+                        app_for_control.exit(0);
+                    }
                 }
             }
         });
