@@ -319,7 +319,7 @@ async function sendMessage() {
   if (list) renderMessageEl(list, msg);
   scrollToBottom();
   try {
-    await invoke("send_chat_message", { text });
+    await invoke("send_chat_message", { text, agentHash: store.activeAgentHash });
   } catch (e) {
     const errMsg = typeof e === "string" ? e : "\u53D1\u9001\u5931\u8D25";
     store.appendMessage({
@@ -595,14 +595,59 @@ async function subscribeEvents() {
     await listen("chat-event", (e) => {
       const msg = e.payload;
       if (!msg || !msg.id) return;
-      if (msg.agent_hash !== store.activeAgentHash) return;
+      // Distinguish streaming token events from persisted messages by checking for delta
+      if (msg.delta !== undefined && msg.delta !== null) {
+        // Streaming token event
+        const id = msg.id || `stream-${Date.now()}`;
+        const delta = msg.delta || "";
+        if (delta) appendStreamingMessage(id, delta);
+      } else {
+        // Persisted chat event message
+        if (msg.agent_hash !== store.activeAgentHash) return;
+        store.appendMessage(msg);
+        const list = $("messages");
+        if (list) renderMessageEl(list, msg);
+        scrollToBottom();
+      }
+    });
+  } catch (e) {
+    console.error("listen chat-event:", e);
+  }
+  try {
+    await listen("chat-reply", (e) => {
+      const payload = e.payload;
+      if (!payload || !payload.id) return;
+      const msg = {
+        id: payload.id,
+        channel: `im:${store.activeAgentHash}`,
+        agent_hash: payload.agent,
+        role: "assistant",
+        content: payload.text,
+        message_type: "text",
+        created_at: payload.timestamp ? Math.floor(Number(payload.timestamp)) : Math.floor(Date.now() / 1e3),
+        synced: false,
+        is_deleted: false,
+        timestamp: payload.timestamp ? formatTime(Math.floor(Number(payload.timestamp))) : formatTime(Math.floor(Date.now() / 1e3)),
+        agent: payload.agent,
+      };
       store.appendMessage(msg);
       const list = $("messages");
       if (list) renderMessageEl(list, msg);
       scrollToBottom();
     });
   } catch (e) {
-    console.error("listen chat-event:", e);
+    console.error("listen chat-reply:", e);
+  }
+  try {
+    await listen("chat-done", (e) => {
+      const ev = e.payload;
+      if (!ev) return;
+      const id = ev.id || `stream-${Date.now()}`;
+      const finalText = ev.final_text || "";
+      finalizeStreaming(id, finalText);
+    });
+  } catch (e) {
+    console.error("listen chat-done:", e);
   }
   try {
     await listen(

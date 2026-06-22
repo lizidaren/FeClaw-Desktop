@@ -16,6 +16,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use crate::chat::{ChatMessage, persist_and_emit};
 use crate::consent::{ConsentManager, Decision};
 use crate::executor::CommandExecutor;
 use crate::file_bridge;
@@ -365,16 +366,45 @@ impl WsClient {
                 tracing::info!(
                     agent = agent.as_deref(),
                     id = id.as_str(),
-                    "chat_reply received (length={}) — handled by persist_and_emit in a later PR",
+                    "chat_reply received (length={})",
                     text.len()
                 );
+                let msg = ChatMessage {
+                    id: id.clone(),
+                    role: "assistant".to_string(),
+                    content: text.clone(),
+                    timestamp: timestamp.clone(),
+                    agent: agent.clone(),
+                };
+                if let Some(ref handle) = self.app_handle {
+                    let _ = persist_and_emit(handle, msg.clone()).await;
+                    let _ = handle.emit("chat-reply", &serde_json::json!({
+                        "id": id,
+                        "text": text,
+                        "agent": agent,
+                        "timestamp": timestamp,
+                    }));
+                }
             }
-            WsRequest::ChatEvent { id, kind, data, timestamp } => {
-                tracing::info!(
-                    id = id.as_str(),
-                    kind = kind.as_str(),
-                    "chat_event received — streaming events not yet wired on desktop"
-                );
+            WsRequest::ChatEvent { id, kind, data, timestamp: _ } => {
+                tracing::debug!(id = id.as_str(), kind = kind.as_str(), "chat_event received");
+                if let Some(ref handle) = self.app_handle {
+                    if kind == "token" {
+                        let delta = data.as_ref().and_then(|d| d.get("delta")).and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let _ = handle.emit("chat-event", &serde_json::json!({
+                            "id": id,
+                            "kind": kind,
+                            "delta": delta,
+                        }));
+                    } else if kind == "done" {
+                        let session_id = data.as_ref().and_then(|d| d.get("session_id")).and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let _ = handle.emit("chat-done", &serde_json::json!({
+                            "id": id,
+                            "kind": kind,
+                            "session_id": session_id,
+                        }));
+                    }
+                }
             }
             WsRequest::FileOperationRequest { op_id, operation, path, level, reason, timestamp } => {
                 tracing::info!(

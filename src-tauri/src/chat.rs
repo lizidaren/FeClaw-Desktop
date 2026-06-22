@@ -129,6 +129,7 @@ pub async fn clear_chat_history() -> Result<(), String> {
 #[tauri::command]
 pub async fn send_chat_message(
     text: String,
+    agent_hash: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
     let trimmed = text.trim();
@@ -153,7 +154,7 @@ pub async fn send_chat_message(
             role: "user".to_string(),
             content: trimmed.to_string(),
             timestamp: Some(ts.clone()),
-            agent: None,
+            agent: agent_hash.clone(),
         },
         state.clone(),
     )
@@ -164,6 +165,7 @@ pub async fn send_chat_message(
         "type": "chat_message",
         "id": id,
         "text": trimmed,
+        "agent_hash": agent_hash,
         "timestamp": ts,
     });
     let json = serde_json::to_string(&envelope)
