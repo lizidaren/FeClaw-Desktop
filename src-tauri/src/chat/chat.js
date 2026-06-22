@@ -200,6 +200,32 @@ function finalizeStreaming(id, finalText) {
     if (body) body.textContent = finalText;
   }
 }
+function showPendingAgentMessage(agentHash, agentName) {
+  const list = $("messages");
+  const noChat = $("no-chat-state");
+  const activeChat = $("active-chat");
+  if (noChat) noChat.style.display = "none";
+  if (activeChat) activeChat.style.display = "flex";
+  const nameEl = $("chat-name");
+  const avatarEl = $("chat-avatar");
+  if (nameEl) nameEl.textContent = agentName ?? "Agent";
+  if (avatarEl) avatarEl.textContent = (agentName ?? "A").charAt(0).toUpperCase();
+  if (!list) return;
+  store.setActiveChat(agentHash);
+  renderChatList(store.chatItems);
+  list.innerHTML = `
+    <div class="pending-agent-state">
+      <div class="pending-icon" aria-hidden="true">!</div>
+      <h2>该 Agent 尚未完成配置</h2>
+      <p>点击下方按钮继续完成 Agent 配置。</p>
+      <button class="btn btn-primary btn-continue-config" type="button">继续配置</button>
+    </div>`;
+  list.querySelector(".btn-continue-config")?.addEventListener("click", () => {
+    void invoke("open_agent_config", { agentHash });
+  });
+  list.scrollTop = list.scrollHeight;
+}
+
 async function selectChat(agentHash) {
   const agent = store.agents.find((a) => a.hash === agentHash);
   if (agent?.status === "pending") {
