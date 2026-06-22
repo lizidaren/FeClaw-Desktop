@@ -293,30 +293,15 @@ pub fn run() {
                     }
                     let handle_for_pending = handle.clone();
                     if let Err(e) = startup(handle).await {
-                        match e {
-                            StartupError::NeedsLogin => {
-                                // No token set — don't show an error dialog, just let the
-                                // welcome page / settings UI guide the user through login.
-                                tracing::info!("startup: cloud mode with no token; skipping error dialog");
+                        tracing::warn!("startup failed: {e}; opening welcome window");
+                        let app_handle = app_handle_for_error.clone();
+                        // Open welcome page so user can re-pick mode (cloud/local) and log in.
+                        // This handles V2 config remnants, cloud mode with no token, etc.
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = welcome::open_welcome_window(app_handle).await {
+                                tracing::error!("failed to open welcome fallback: {e:#}");
                             }
-                            StartupError::Other(err) => {
-                                tracing::error!("startup failed: {err:#}");
-                                let err_msg = format!("{err:#}");
-                                let app_handle = app_handle_for_error.clone();
-                                std::thread::spawn(move || {
-                                    let _ = rfd::MessageDialog::new()
-                                        .set_title("FeClaw Desktop — 启动失败")
-                                        .set_description(&err_msg)
-                                        .set_buttons(rfd::MessageButtons::Ok)
-                                        .set_level(rfd::MessageLevel::Error)
-                                        .show();
-                                });
-                                // Open settings so user can configure cloud mode.
-                                tauri::async_runtime::spawn(async move {
-                                    let _ = settings::open_settings_window(app_handle).await;
-                                });
-                            }
-                        }
+                        });
                         return;
                     }
 
