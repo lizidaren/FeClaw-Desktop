@@ -15,7 +15,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-global-shortcut = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -44,6 +44,9 @@ image = "0.25"
 winreg = "0.55"
 
 [features]
+default = ["desktop"]
+desktop = ["tauri/tray-icon", "tauri-plugin-global-shortcut"]
 global-shortcut = ["tauri-plugin-global-shortcut"]
+mobile = []
 windows-hwnd = []
 custom-protocol = ["tauri/custom-protocol"]

@@ -12,30 +12,40 @@
 //! through [`ControlMsg`] (tray → runtime) or inbound WS messages
 //! (engine → runtime).
 
+#[cfg(feature = "desktop")]
 mod alt_space;
 mod auth;
+#[cfg(feature = "desktop")]
 mod autostart;
 mod chat;
 mod config;
 mod consent;
 mod create;
 mod db;
+#[cfg(feature = "desktop")]
 mod engine;
+#[cfg(feature = "desktop")]
 mod executor;
 mod fehub;
+#[cfg(feature = "desktop")]
 mod file_bridge;
+#[cfg(feature = "desktop")]
 mod file_index;
 mod file_manager;
+#[cfg(feature = "desktop")]
 mod file_ops;
 mod group;
 mod http_client;
+#[cfg(feature = "desktop")]
 mod local_setup;
 mod moments;
+#[cfg(feature = "desktop")]
 mod right_click;
 mod qr_upload;
 mod search;
 mod settings;
 mod side_panel;
+#[cfg(feature = "desktop")]
 mod tray;
 mod types;
 mod welcome;
@@ -44,12 +54,15 @@ mod ws_types;
 
 // Re-export handle_right_click_invocation so main.rs (which is part of the
 // same library crate) can call it before the Tauri app starts.
+#[cfg(feature = "desktop")]
 pub use right_click::handle_right_click_invocation;
 
 use crate::auth::AuthManager;
 use crate::config::{Config, Mode};
 use crate::consent::ConsentManager;
+#[cfg(feature = "desktop")]
 use crate::engine::EngineManager;
+#[cfg(feature = "desktop")]
 use crate::executor::CommandExecutor;
 use crate::ws::WsClient;
 use crate::ws_types::ConnectionStatus;
@@ -122,10 +135,15 @@ pub fn run() {
                 settings::set_theme,
                 settings::get_theme,
                 settings::get_app_version,
+#[cfg(feature = "desktop")]
                 file_ops::file_read,
+#[cfg(feature = "desktop")]
                 file_ops::file_write,
+#[cfg(feature = "desktop")]
                 file_ops::file_delete,
+#[cfg(feature = "desktop")]
                 file_ops::open_local_file,
+#[cfg(feature = "desktop")]
                 file_ops::cleanup_preview_temp,
                 file_manager::list_vfs_dir,
                 file_manager::get_vfs_preview_url,
@@ -166,16 +184,27 @@ pub fn run() {
                 db::get_prompt_templates,
                 db::save_prompt_template,
                 db::delete_prompt_template,
+#[cfg(feature = "desktop")]
                 local_setup::check_git_installed,
+#[cfg(feature = "desktop")]
                 local_setup::check_python_version,
+#[cfg(feature = "desktop")]
                 local_setup::clone_feclaw,
+#[cfg(feature = "desktop")]
                 local_setup::generate_env_template,
+#[cfg(feature = "desktop")]
                 local_setup::write_env_file,
+#[cfg(feature = "desktop")]
                 local_setup::install_dependencies,
+#[cfg(feature = "desktop")]
                 local_setup::start_feclaw,
+#[cfg(feature = "desktop")]
                 local_setup::check_engine_health,
+#[cfg(feature = "desktop")]
                 local_setup::save_local_engine_config,
+#[cfg(feature = "desktop")]
                 local_setup::default_engine_dest,
+#[cfg(feature = "desktop")]
                 local_setup::open_local_setup_window,
                 side_panel::get_agent_panel_info,
                 side_panel::update_agent_alias,
@@ -186,9 +215,13 @@ pub fn run() {
                 side_panel::list_agent_apps,
                 side_panel::open_config_window,
                 side_panel::open_file_manager_window,
+#[cfg(feature = "desktop")]
                 right_click::register_right_click,
+#[cfg(feature = "desktop")]
                 right_click::unregister_right_click,
+#[cfg(feature = "desktop")]
                 right_click::is_right_click_registered,
+#[cfg(feature = "desktop")]
                 right_click::get_executable_path,
                 group::list_groups,
                 group::get_group_detail,
@@ -208,15 +241,25 @@ pub fn run() {
                 fehub::open_miniapp,
                 search::search_all,
                 search::search_local_chat,
+#[cfg(feature = "desktop")]
                 file_index::start_index,
+#[cfg(feature = "desktop")]
                 file_index::get_index_status,
+#[cfg(feature = "desktop")]
                 file_index::search_local_files,
+#[cfg(feature = "desktop")]
                 file_index::add_index_directory,
+#[cfg(feature = "desktop")]
                 file_index::remove_index_directory,
+#[cfg(feature = "desktop")]
                 file_index::get_index_directories,
+#[cfg(feature = "desktop")]
                 alt_space::register_search_shortcut,
+#[cfg(feature = "desktop")]
                 alt_space::unregister_search_shortcut,
+#[cfg(feature = "desktop")]
                 alt_space::is_search_shortcut_bound,
+#[cfg(feature = "desktop")]
                 alt_space::apply_search_privacy,
             ])
             .setup(|app| {
@@ -257,6 +300,7 @@ pub fn run() {
                     }
 
                     // Check for pending right-click file (written by shell invocation)
+#[cfg(feature = "desktop")]
                     if let Ok(Some(pending)) = right_click::take_pending_right_click() {
                         tracing::info!("found pending right-click: mode={}, path={}", pending.mode, pending.path);
                         let pending_mode = pending.mode.clone();
@@ -366,6 +410,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
     }
 
     // 6. Build system tray.
+#[cfg(feature = "desktop")]
     if let Err(e) = tray::build_tray(&app) {
         tracing::warn!("failed to build tray: {e:#}");
     }
@@ -397,6 +442,7 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
             // Emit ws-status event so the chat UI can update conn-dot / conn-text.
             let status_label = format!("{:?}", status);
             let _ = app_for_status.emit("ws-status", serde_json::json!({ "status": status_label }));
+            #[cfg(feature = "desktop")]
             if let Some(tray_icon) = app_for_status.tray_by_id(tray::TRAY_ID) {
                 let icon = tray::icon_for_status(status);
                 let _ = tray_icon.set_icon(Some(icon));
