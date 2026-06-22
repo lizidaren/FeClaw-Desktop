@@ -439,6 +439,11 @@ function switchTab(tabId) {
   if (settingsTab) {
     settingsTab.style.display = tabId === "settings" ? "flex" : "none";
   }
+  // Sidebar — hide completely in settings/moments/fehub modes
+  const chatList = $("chat-list-panel");
+  if (chatList) {
+    chatList.style.display = (tabId === "chat" || tabId === "profile") ? "" : "none";
+  }
   if (tabId === "settings") {
     // Hide chat panel when in settings
     const noChat = $("no-chat-state");
@@ -702,6 +707,52 @@ function wire() {
   const newChat = $("btn-new-chat");
   if (newChat) {
     newChat.addEventListener("click", () => void openCreateDialog());
+  }
+  const chatMenu = $("btn-chat-menu");
+  if (chatMenu) {
+    chatMenu.addEventListener("click", () => {
+      // Toggle a simple context drop-down next to the button
+      const existing = document.getElementById("agent-context-menu");
+      if (existing) {
+        existing.remove();
+        return;
+      }
+      const menu = document.createElement("div");
+      menu.id = "agent-context-menu";
+      menu.className = "context-menu";
+      menu.innerHTML = `
+        <button data-action="config">⚙ 配置 Agent</button>
+        <button data-action="rename">✏ 重命名</button>
+        <button data-action="delete">🗑 删除</button>
+      `;
+      menu.style.cssText = "position:fixed;z-index:1000;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:4px 0;box-shadow:0 4px 12px rgba(0,0,0,0.15);";
+      const rect = chatMenu.getBoundingClientRect();
+      menu.style.left = (rect.right - 160) + "px";
+      menu.style.top = (rect.bottom + 4) + "px";
+      menu.querySelectorAll("button").forEach(b => {
+        b.style.cssText = "display:block;width:100%;padding:8px 16px;border:none;background:none;cursor:pointer;text-align:left;font-size:14px;color:var(--text-primary);";
+        b.addEventListener("mouseenter", () => b.style.background = "var(--bg-hover)");
+        b.addEventListener("mouseleave", () => b.style.background = "none");
+        b.addEventListener("click", () => {
+          menu.remove();
+          const action = b.dataset.action;
+          const hash = store.activeAgentHash;
+          if (action === "config" && hash) {
+            invoke("open_agent_config", { agentHash: hash });
+          } else if (action === "rename" && hash) {
+            // Future: rename dialog
+            console.log("rename", hash);
+          } else if (action === "delete" && hash) {
+            // Future: confirm + delete
+            console.log("delete", hash);
+          }
+        });
+      });
+      document.body.appendChild(menu);
+      // Close on click outside
+      const close = (ev) => { if (!menu.contains(ev.target) && ev.target !== chatMenu) { menu.remove(); document.removeEventListener("click", close); } };
+      setTimeout(() => document.addEventListener("click", close), 0);
+    });
   }
 }
 document.addEventListener("DOMContentLoaded", () => {
