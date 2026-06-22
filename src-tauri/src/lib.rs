@@ -362,15 +362,8 @@ async fn startup(app: tauri::AppHandle) -> anyhow::Result<()> {
         tracing::warn!("failed to build tray: {e:#}");
     }
 
-    // 6b. Register Alt+Space global shortcut if in cloud mode and previously bound.
-    if config.mode == crate::config::Mode::Cloud {
-        let app_for_shortcut = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = alt_space::register_if_needed(app_for_shortcut).await {
-                tracing::warn!("register_if_needed: {e}");
-            }
-        });
-    }
+    // 6b. Alt+Space global shortcut — disabled in MVP (would conflict with IME).
+    // Future: auto-bind on cloud login with conflict detection + user prompt.
 
     // 6. Wire executor + WS (consent Arc is shared with AppState).
     //    `executor` was created earlier (alongside AppState) and reused here.
