@@ -118,6 +118,13 @@ function renderCloudSession(session) {
         }
       }
     }
+    // Auto-detect Platform URL when server is the official one
+    if (!session.loginUrl && session.url === "https://feclaw.lizidaren.cn") {
+      const platformInput = $("cloud-platform-url");
+      if (platformInput && !platformInput.value) {
+        platformInput.value = "https://platform.firstentrance.lizidaren.cn";
+      }
+    }
   }
 }
 async function load() {

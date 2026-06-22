@@ -46,7 +46,11 @@ async function handleLogin() {
       return;
     }
     const serverUrl = session.url ?? "https://feclaw.lizidaren.cn";
-    const loginUrl = session.login_url ?? serverUrl;
+    // Auto-detect Platform URL when using the official server
+    const OFFICIAL_PLATFORM = "https://platform.firstentrance.lizidaren.cn";
+    const loginUrl = session.login_url ?? (
+      serverUrl === "https://feclaw.lizidaren.cn" ? OFFICIAL_PLATFORM : serverUrl
+    );
     const token = await invoke("cloud_login", {
       url: serverUrl,
       loginUrl,
