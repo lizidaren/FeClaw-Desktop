@@ -373,7 +373,7 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
             .ok_or(StartupError::NeedsLogin)?;
         tracing::info!("cloud mode: using stored cloud_token");
 
-        let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMsg>();
+        let (control_tx, mut control_rx) = mpsc::unbounded_channel::<ControlMsg>();
         let cancel_token = Arc::new(AtomicBool::new(false));
         let (status_tx, mut status_rx) = mpsc::channel(32);
         let consent = Arc::new(Mutex::new(ConsentManager::new()));
