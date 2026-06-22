@@ -139,22 +139,31 @@ impl WsClient {
     pub async fn connect_tls(url: &str, token: &str) -> Result<WsStream> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-        // Strip the scheme so we can resolve the TCP endpoint; keep the
-        // original URL for the HTTP Host header / request URI.
-        let host_port = url
-            .strip_prefix("ws://")
-            .or_else(|| url.strip_prefix("wss://"))
-            .unwrap_or(url);
+        // Append the JWT as a query parameter — the server reads
+        // `?token=xxx` on the WS upgrade endpoint.
+        let url_with_token = if token.is_empty() {
+            url.to_string()
+        } else {
+            let sep = if url.contains('?') { "&" } else { "?" };
+            format!("{url}{sep}token={token}")
+        };
 
-        // Build the upgrade request with the JWT. `IntoClientRequest` adds
-        // the standard WebSocket headers (Upgrade, Connection, Sec-WebSocket-Key/Version)
-        // for us — those are private in tungstenite 0.24 so we no longer
-        // call `generate_key` directly.
-        let mut req = url
+        // Extract host:port for TCP connection (strip scheme + path).
+        let host_port = url_with_token
+            .strip_prefix("wss://")
+            .or_else(|| url_with_token.strip_prefix("ws://"))
+            .unwrap_or(&url_with_token)
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .split('?')
+            .next()
+            .unwrap_or("");
+
+        // Build the upgrade request with the token-bearing URL.
+        let mut req = url_with_token
             .into_client_request()
             .map_err(|e| anyhow!("build ws request: {e}"))?;
-        req.headers_mut()
-            .insert("Authorization", format!("Bearer {}", token).parse().unwrap());
 
         // Establish the TCP connection first so the stream type is concrete
         // when handed to `client_async_tls` (passing `None` triggers a type
@@ -163,7 +172,7 @@ impl WsClient {
         // expects — and upgrades to TLS automatically when the URL is `wss://`.
         let tcp = TcpStream::connect(host_port)
             .await
-            .map_err(|e| anyhow!("ws tcp connect: {e}"))?;
+            .map_err(|e| anyhow!("ws tcp connect to {host_port}: {e}"))?;
         let (ws, _resp) = tokio_tungstenite::client_async_tls(req, tcp)
             .await
             .map_err(|e| anyhow!("ws connect: {e}"))?;
