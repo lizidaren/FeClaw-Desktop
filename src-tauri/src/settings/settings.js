@@ -22,6 +22,13 @@ function requireEl(id) {
 function applyTheme(value) {
   const next = THEME_VALUES.includes(value ?? "") ? value : "system";
   document.body.dataset.theme = next;
+  // Notify parent chat window so it can update its data-theme attribute
+  try {
+    const tauri = window.__TAURI__;
+    if (tauri?.event?.emit) {
+      tauri.event.emit("theme-changed", { theme: next }).catch(() => {});
+    }
+  } catch (_) {}
 }
 function readTheme() {
   const checked = document.querySelector(
