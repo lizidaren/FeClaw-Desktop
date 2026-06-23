@@ -105,6 +105,11 @@ pub enum WsRequest {
     },
     #[serde(rename = "pong")]
     Pong,
+    /// Engine acknowledged a desktop chat message (sent after dedup).
+    #[serde(rename = "chat_ack")]
+    ChatAck {
+        id: String,
+    },
     // ---- P0.6: chat protocol -------------------------------------
     /// Agent / engine reply to a `chat_message` sent earlier.
     #[serde(rename = "chat_reply")]

@@ -177,6 +177,13 @@ function renderMessageEl(parent, msg) {
   const agentLabel = msg.agent ? ` \xB7 ${msg.agent}` : "";
   meta.textContent = ts ? `${ts}${agentLabel}` : agentLabel;
   wrap.appendChild(meta);
+  // Show ⏳ spinner for pending user messages
+  if (msg.role === "user" && msg.status === "pending") {
+    const spinner = document.createElement("span");
+    spinner.className = "msg-spinner";
+    spinner.textContent = "\u23F3";
+    wrap.appendChild(spinner);
+  }
   parent.appendChild(wrap);
 }
 function appendStreamingMessage(id, chunk) {
@@ -305,7 +312,8 @@ async function sendMessage() {
     created_at: ts,
     synced: false,
     is_deleted: false,
-    timestamp: formatTime(ts)
+    timestamp: formatTime(ts),
+    status: "pending"
   };
   try {
     await invoke("insert_chat_message", {
@@ -646,6 +654,19 @@ async function subscribeEvents() {
     await listen("chat-reply", (e) => {
       const payload = e.payload;
       if (!payload || !payload.id) return;
+      // Mark the corresponding user message as done
+      const userMsg = store.messages.find(m => m.id === payload.id && m.role === "user");
+      if (userMsg) {
+        userMsg.status = "done";
+        // Re-render to remove spinner
+        const list = $("messages");
+        if (list) {
+          const el = list.querySelector(`[data-id="${userMsg.id}"]`);
+          if (el) {
+            el.querySelector(".msg-spinner")?.remove();
+          }
+        }
+      }
       const msg = {
         id: payload.id,
         channel: `im:${store.activeAgentHash}`,
@@ -668,6 +689,27 @@ async function subscribeEvents() {
     console.error("listen chat-reply:", e);
   }
   try {
+    await listen("chat-ack", (e) => {
+      const payload = e.payload;
+      if (!payload || !payload.id) return;
+      // Mark the user message as sent (ack received, waiting for reply)
+      const userMsg = store.messages.find(m => m.id === payload.id && m.role === "user");
+      if (userMsg) {
+        userMsg.status = "sent";
+        // Re-render to remove spinner
+        const list = $("messages");
+        if (list) {
+          const el = list.querySelector(`[data-id="${userMsg.id}"]`);
+          if (el) {
+            el.querySelector(".msg-spinner")?.remove();
+          }
+        }
+      }
+    });
+  } catch (e) {
+    console.error("listen chat-ack:", e);
+  }
+  try {
     await listen("chat-done", (e) => {
       const ev = e.payload;
       if (!ev) return;
@@ -676,6 +718,22 @@ async function subscribeEvents() {
     });
   } catch (e) {
     console.error("listen chat-done:", e);
+  }
+  try {
+    await listen("feclaw-agent-config-closed", () => {
+      // Agent config WebView closed — refresh agent list to pick up status changes
+      const agents = await invoke("list_agents");
+      if (agents) {
+        store.setAgents(agents);
+        renderChatList(store.chatItems);
+        // If the active agent is now initialized, re-render the chat area
+        if (store.activeAgentHash) {
+          showActiveChat();
+        }
+      }
+    });
+  } catch (e) {
+    console.error("listen feclaw-agent-config-closed:", e);
   }
   try {
     await listen(

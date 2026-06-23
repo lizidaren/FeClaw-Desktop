@@ -318,6 +318,128 @@ pub fn delete_chat_message(id: String) -> Result<(), String> {
     }).map_err(|e| format!("数据库错误：{e}"))
 }
 
+/// A message fetched from the Engine during history sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineMessage {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub message_type: Option<String>,
+    pub created_at: i64,
+    pub agent_hash: Option<String>,
+}
+
+/// Fetch incremental chat history from the Engine for all agents and persist
+/// to the local SQLite database. Called by the frontend on startup in cloud
+/// mode after the WebSocket connects.
+#[tauri::command]
+pub async fn sync_chat_history(app: tauri::AppHandle) -> Result<Vec<DbChatMessage>, String> {
+    let cfg = Config::load();
+    let token = cfg.cloud_token.clone()
+        .ok_or_else(|| "未登录：cloud_token 不存在".to_string())?;
+    let base_url = cfg.cloud_base_url()
+        .ok_or_else(|| "cloud_url 未配置".to_string())?;
+    let client = crate::http_client::http_client();
+
+    // 1. Get list of agents from Engine
+    let agents_url = format!("{}/api/desktop/agents", base_url.trim_end_matches('/'));
+    let resp = client
+        .get(&agents_url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("获取 Agent 列表失败：{e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("获取 Agent 列表失败 ({})", resp.status()));
+    }
+    #[derive(Deserialize)]
+    struct AgentSummary { hash: String }
+    let agents: Vec<AgentSummary> = resp.json().await
+        .map_err(|e| format!("解析 Agent 列表失败：{e}"))?;
+
+    let mut all_synced = Vec::new();
+
+    // 2. For each agent, get last local message ID and fetch incremental history
+    for agent in agents {
+        let channel = format!("im:{}", agent.hash);
+
+        // Get last message ID from local DB for this agent
+        let last_id: Option<String> = with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM chat_messages WHERE channel = ?1 ORDER BY created_at DESC LIMIT 1"
+            )?;
+            let result: Result<String, _> = stmt.query_row(params![channel], |row| row.get(0));
+            match result {
+                Ok(id) => Ok(Some(id)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        }).map_err(|e| format!("数据库错误：{e}"))?;
+
+        // Build the messages URL with optional after_id parameter
+        let messages_url = if let Some(ref after) = last_id {
+            format!("{}/api/desktop/messages?agent_hash={}&after_id={}", base_url.trim_end_matches('/'), agent.hash, after)
+        } else {
+            format!("{}/api/desktop/messages?agent_hash={}", base_url.trim_end_matches('/'), agent.hash)
+        };
+
+        let resp = client
+            .get(&messages_url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|e| format!("获取消息历史失败：{e}"))?;
+        if !resp.status().is_success() {
+            tracing::warn!("获取消息历史失败 for agent {}: {}", agent.hash, resp.status());
+            continue;
+        }
+
+        let messages: Vec<EngineMessage> = match resp.json().await {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                tracing::warn!("解析消息历史失败 for agent {}: {}", agent.hash, e);
+                continue;
+            }
+        };
+
+        // 3. Insert messages into local DB
+        for msg in &messages {
+            let msg_type = msg.message_type.clone().unwrap_or_else(|| "text".to_string());
+            let agent_hash = msg.agent_hash.clone().or_else(|| Some(agent.hash.clone()));
+            let created_at_ms = msg.created_at;
+
+            with_conn(|conn| {
+                conn.execute(
+                    "INSERT OR IGNORE INTO chat_messages
+                        (id, channel, agent_hash, role, content, message_type, created_at, synced, is_deleted)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 0)",
+                    params![msg.id, channel, agent_hash, msg.role, msg.content, msg_type, created_at_ms],
+                )?;
+                Ok(())
+            }).map_err(|e| format!("数据库错误：{e}"))?;
+
+            all_synced.push(DbChatMessage {
+                id: msg.id.clone(),
+                channel: channel.clone(),
+                agent_hash: agent_hash.clone().unwrap_or_default(),
+                role: msg.role.clone(),
+                content: msg.content.clone(),
+                message_type: msg_type.clone(),
+                created_at: created_at_ms,
+                synced: true,
+                is_deleted: false,
+            });
+        }
+    }
+
+    // 4. Emit synced messages to frontend for rendering
+    if !all_synced.is_empty() {
+        let _ = app.emit("chat-history-synced", &all_synced);
+    }
+
+    Ok(all_synced)
+}
+
 // ---------------------------------------------------------------------------
 // Screenshot / pasted image
 // ---------------------------------------------------------------------------

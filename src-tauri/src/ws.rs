@@ -492,6 +492,12 @@ impl WsClient {
                 }
             }
             WsRequest::Pong => {}
+            WsRequest::ChatAck { id } => {
+                tracing::debug!(id = id.as_str(), "chat_ack received");
+                if let Some(ref handle) = self.app_handle {
+                    let _ = handle.emit("chat-ack", &serde_json::json!({ "id": id }));
+                }
+            }
         }
         Ok(())
     }

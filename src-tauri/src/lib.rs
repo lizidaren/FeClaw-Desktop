@@ -196,6 +196,7 @@ pub fn run() {
                 db::get_prompt_templates,
                 db::save_prompt_template,
                 db::delete_prompt_template,
+                db::sync_chat_history,
 #[cfg(feature = "desktop")]
                 local_setup::check_git_installed,
 #[cfg(feature = "desktop")]
@@ -414,6 +415,8 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
 
         // Status pump
         let app_for_status = app.clone();
+        let sync_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sync_done_clone = sync_done.clone();
         tauri::async_runtime::spawn(async move {
             while let Some(status) = status_rx.recv().await {
                 tracing::info!("ws status → {status:?}");
@@ -428,6 +431,26 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
                     let icon = tray::icon_for_status(status);
                     let _ = tray_icon.set_icon(Some(icon));
                     let _ = tray_icon.set_tooltip(Some(format!("FeClaw Desktop — {status:?}")));
+                }
+                // Trigger incremental history sync once when WS connects
+                if status == ConnectionStatus::Connected && !sync_done_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                    sync_done_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                    tracing::info!("WS connected, triggering chat history sync");
+                    let app_for_sync = app_for_status.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match app_for_sync.invoke::<Result<Vec<db::DbChatMessage>, String>>("sync_chat_history", ()).await {
+                            Ok(msgs) => {
+                                if msgs.is_empty() {
+                                    tracing::debug!("sync_chat_history: no new messages");
+                                } else {
+                                    tracing::info!("sync_chat_history: synced {} messages", msgs.len());
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("sync_chat_history failed: {e}");
+                            }
+                        }
+                    });
                 }
             }
         });

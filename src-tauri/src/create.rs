@@ -107,9 +107,10 @@ pub async fn open_agent_config(
 
     let app_handle = app.clone();
     let url = configure_url.clone();
+    let hash_for_event = agent_hash.clone();
     tauri::async_runtime::spawn(async move {
         let bapp = app_handle.clone();
-        let napp = app_handle;
+        let napp = app_handle.clone();
         if let Ok(window) = WebviewWindowBuilder::new(
             &bapp,
             "agent-config",
@@ -128,6 +129,14 @@ pub async fn open_agent_config(
         })
         .build()
         {
+            // 监听 WebView 关闭 → 通知前端刷新 Agent 列表
+            let ah = hash_for_event.clone();
+            let emit_app = app_handle.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::Destroyed = event {
+                    let _ = emit_app.emit("feclaw-agent-config-closed", &ah);
+                }
+            });
             let _ = window;
         }
     });
