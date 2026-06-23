@@ -285,8 +285,6 @@ pub async fn save_local_engine_config(
 
     let mut cfg = Config::load();
     cfg.mode = crate::config::Mode::Local;
-    cfg.host = "127.0.0.1".to_string();
-    cfg.port = port;
     cfg.engine_path = Some(feclaw_path.to_string_lossy().to_string());
 
     // Persist the admin password as the local-mode credential so

@@ -141,9 +141,8 @@ impl EngineManager {
     /// Local engine startup — unchanged from the original implementation,
     /// just renamed to make the dispatch explicit.
     async fn start_local(&mut self) -> Result<u16> {
-        let port = Config::find_free_port(self.config.port)
+        let port = Config::find_free_port(8080)
             .context("no free port in 8080-8089 range")?;
-        self.config.port = port;
 
         let engine_path = self
             .config
@@ -153,7 +152,7 @@ impl EngineManager {
 
         let mut cmd = Command::new(&engine_path);
         cmd.arg("--host")
-            .arg(&self.config.host)
+            .arg("127.0.0.1")
             .arg("--port")
             .arg(port.to_string())
             .arg("--config")
@@ -166,7 +165,7 @@ impl EngineManager {
         tracing::info!(
             "starting engine: {} --host {} --port {} --config {}",
             engine_path,
-            self.config.host,
+            "127.0.0.1",
             port,
             Config::config_path().display()
         );

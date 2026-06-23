@@ -82,7 +82,7 @@ pub async fn open_miniapp<R: tauri::Runtime>(
 
     let config = Config::load();
     let url = if config.mode == crate::config::Mode::Local {
-        let port = config.port;
+        let port = 8080u16;
         format!("http://127.0.0.1:{}/apps/{}/", port, app_name)
     } else {
         format!(

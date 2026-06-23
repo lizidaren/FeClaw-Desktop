@@ -364,9 +364,7 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
     // 1. Load config.
     let mut config = Config::load();
     tracing::info!(
-        "loaded config: host={}, port={}, mode={:?}",
-        config.host,
-        config.port,
+        "loaded config: mode={:?}",
         config.mode
     );
 
@@ -525,7 +523,6 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
             shared_config.clone(),
         )
         .await?;
-    config.port = port;
     if let Err(e) = config.save() {
         tracing::warn!("failed to persist selected port to config.toml: {e:#}");
     }

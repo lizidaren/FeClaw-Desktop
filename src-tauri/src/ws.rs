@@ -172,7 +172,7 @@ impl WsClient {
         // inference failure in tungstenite 0.24). `client_async_tls` returns
         // `MaybeTlsStream<TcpStream>` — exactly the type the `WsStream` alias
         // expects — and upgrades to TLS automatically when the URL is `wss://`.
-        let tcp = TcpStream::connect(host_port)
+        let tcp = TcpStream::connect(host_port.clone())
             .await
             .map_err(|e| anyhow!("ws tcp connect to {host_port}: {e}"))?;
         let (ws, _resp) = tokio_tungstenite::client_async_tls(req, tcp)
