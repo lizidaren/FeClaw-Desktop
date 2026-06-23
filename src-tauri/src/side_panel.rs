@@ -17,7 +17,7 @@
 //!   permission_configs ADD COLUMN is_pinned INTEGER DEFAULT 0
 //!   permission_configs ADD COLUMN is_dnd INTEGER DEFAULT 0
 
-use crate::config::Config;
+use crate::config::{Config, Mode};
 use rusqlite::{params, Connection};
 use tauri::Manager;
 use serde::{Deserialize, Serialize};
@@ -487,6 +487,57 @@ pub async fn update_agent_settings(
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
         return Err(format!("更新失败: {}", text));
+    }
+    Ok(())
+}
+
+/// Update agent avatar on the Engine via PATCH /api/user/agents/{hash}/avatar.
+#[tauri::command]
+pub async fn update_agent_avatar(
+    agent_hash: String,
+    avatar_url: String,
+) -> Result<(), String> {
+    let cfg = Config::load();
+    let token = cfg.cloud_token.clone()
+        .ok_or_else(|| "未登录".to_string())?;
+    let base_url = match cfg.mode {
+        Mode::Local => cfg.engine_url(),
+        Mode::Cloud => cfg.cloud_base_url().unwrap_or("https://feclaw.lizidaren.cn").to_string(),
+    };
+    let url = format!("{}/api/user/agents/{}/avatar", base_url.trim_end_matches('/'), agent_hash);
+    let client = crate::http_client::http_client();
+    let resp = client
+        .patch(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({"avatar_url": avatar_url}))
+        .send()
+        .await
+        .map_err(|e| format!("网络请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("更新头像失败: {}", resp.text().await.unwrap_or_default()));
+    }
+    Ok(())
+}
+
+/// Delete an agent on the Engine via DELETE /api/user/agents/{hash}.
+#[tauri::command]
+pub async fn delete_agent(
+    agent_hash: String,
+) -> Result<(), String> {
+    let cfg = Config::load();
+    let token = cfg.cloud_token.clone()
+        .ok_or_else(|| "未登录".to_string())?;
+    let base_url = cloud_base(&cfg);
+    let url = format!("{}/api/user/agents/{}", base_url.trim_end_matches('/'), agent_hash);
+    let client = crate::http_client::http_client();
+    let resp = client
+        .delete(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("网络请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("删除失败: {}", resp.text().await.unwrap_or_default()));
     }
     Ok(())
 }

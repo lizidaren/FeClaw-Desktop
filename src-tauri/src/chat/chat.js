@@ -856,9 +856,21 @@ function wire() {
               })
               .catch(e => showToast("权限更新失败：" + e));
           } else if (action === "avatar") {
-            showToast("即将支持");
+            const url = prompt("输入头像图片URL（留空清除）:");
+            if (url === null) return;
+            invoke("update_agent_avatar", { agentHash: hash, avatarUrl: url })
+              .then(() => showToast("头像已更新"))
+              .catch(e => showToast("更新头像失败：" + e));
           } else if (action === "delete") {
-            showToast("即将支持");
+            if (!confirm("确定要删除此Agent吗？此操作不可撤销。")) return;
+            invoke("delete_agent", { agentHash: hash })
+              .then(() => {
+                store.chatItems = store.chatItems.filter(c => c.agent_hash !== hash);
+                if (store.activeAgentHash === hash) store.activeAgentHash = null;
+                store.notify();
+                renderChatList(store.chatItems);
+              })
+              .catch(e => showToast("删除失败：" + e));
           }
         });
       });
