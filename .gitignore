@@ -46,3 +46,4 @@ src-tauri/libnull.rmeta
 # Cargo bridge
 cargo_bridge.py
 cargo_bridge.sh
+claude-logs/
