@@ -680,6 +680,10 @@ async function subscribeEvents() {
             if (ev.id) finalizeStreaming(ev.id, null);
             renderEventPill("thinking", "\u601D\u8003\u4E2D\u2026");
             break;
+          case "reasoning":
+            if (ev.id) finalizeStreaming(ev.id, null);
+            renderEventPill("reasoning", "\uD83E\uDDE0 \u6DF1\u5EA6\u601D\u8003\u4E2D\u2026");
+            break;
           case "tool":
             renderEventPill("tool", `\u8C03\u7528\u5DE5\u5177: ${describeToolCall(ev.data)}`);
             break;

@@ -593,6 +593,7 @@ html, body {
 }
 
 .event-pill.thinking { color: var(--primary); }
+.event-pill.reasoning { color: var(--primary); font-style: italic; }
 .event-pill.tool { color: var(--warning); }
 .event-pill.done { color: var(--success); }
 
