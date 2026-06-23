@@ -403,6 +403,12 @@ impl WsClient {
                             "kind": kind,
                             "session_id": session_id,
                         }));
+                    } else if kind == "thinking" || kind == "tool" || kind == "tool_result" {
+                        let _ = handle.emit("chat-stream", &serde_json::json!({
+                            "id": id,
+                            "kind": kind,
+                            "data": data,
+                        }));
                     }
                 }
             }
