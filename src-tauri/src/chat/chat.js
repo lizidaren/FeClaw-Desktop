@@ -662,8 +662,7 @@ async function subscribeEvents() {
       const ev = e.payload;
       if (!ev) return;
       const id = ev.id || `stream-${Date.now()}`;
-      const finalText = ev.final_text || "";
-      finalizeStreaming(id, finalText);
+      finalizeStreaming(id, null);
     });
   } catch (e) {
     console.error("listen chat-done:", e);

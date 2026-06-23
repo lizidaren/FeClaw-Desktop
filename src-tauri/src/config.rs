@@ -9,12 +9,20 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
 
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
 /// Top-level FeClaw Desktop configuration persisted to `~/.feclaw/config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default, skip_serializing_if = "is_default")]
     pub port: u16,
+    #[serde(default, skip_serializing_if = "is_default")]
     pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_path: Option<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
     pub ws_path: String,
     pub mode: Mode,
     /// Cloud server base URL (e.g. `https://feclaw.example.com`).
@@ -73,7 +81,7 @@ impl Config {
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        home.join(".feclaw")
+        home.join(".feclaw-desktop")
     }
 
     /// Path to the persisted `config.toml` file.
