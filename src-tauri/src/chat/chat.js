@@ -26,6 +26,7 @@ var Store = class {
       agent_hash: a.hash,
       name: a.name,
       avatar_letter: a.name.charAt(0).toUpperCase(),
+      avatar_url: a.avatar_url || null,
       last_message: "",
       last_time: "",
       unread: false,
@@ -115,8 +116,11 @@ function renderChatList(items) {
     el.dataset.agentHash = item.agent_hash;
     el.setAttribute("role", "option");
     el.setAttribute("aria-selected", String(!!item.active));
+    const avatarContent = item.avatar_url
+        ? `<img class="avatar-img" src="${item.avatar_url}" alt="">`
+        : item.avatar_letter;
     el.innerHTML = `
-      <div class="chat-item-avatar">${item.avatar_letter}</div>
+      <div class="chat-item-avatar">${avatarContent}</div>
       <div class="chat-item-info">
         <div class="chat-item-name">${escapeHtml(item.name)}${item.status === "pending" ? ' <span class="agent-pending-badge">继续配置 →</span>' : ""}</div>
         <div class="chat-item-preview">${escapeHtml(item.last_message)}</div>
@@ -475,7 +479,13 @@ function showActiveChat() {
   const nameEl = $("chat-name");
   const avatarEl = $("chat-avatar");
   if (nameEl) nameEl.textContent = agent?.name ?? "Agent";
-  if (avatarEl) avatarEl.textContent = (agent?.name ?? "A").charAt(0).toUpperCase();
+  if (avatarEl) {
+    if (agent?.avatar_url) {
+      avatarEl.innerHTML = `<img class="avatar-img" src="${agent.avatar_url}" alt="">`;
+    } else {
+      avatarEl.textContent = (agent?.name ?? "A").charAt(0).toUpperCase();
+    }
+  }
 }
 async function initChat() {
   try {
@@ -745,6 +755,128 @@ function describeToolCall(data) {
   const args = data.args ? `(${JSON.stringify(data.args)})` : "";
   return `${name}${args}`;
 }
+
+// Avatar picker state
+let _pendingAvatarHash = null;
+let _pendingAvatarData = null;
+
+function openAvatarPicker(agentHash) {
+  _pendingAvatarHash = agentHash;
+  const fileInput = $("avatar-file-input");
+  if (fileInput) fileInput.click();
+}
+
+function closeAvatarModal() {
+  const modal = $("avatar-preview-modal");
+  if (modal) modal.style.display = "none";
+  _pendingAvatarHash = null;
+  _pendingAvatarData = null;
+}
+
+async function confirmAvatarUpload() {
+  if (!_pendingAvatarHash || !_pendingAvatarData) return;
+  const hash = _pendingAvatarHash;
+  closeAvatarModal();
+  try {
+    const avatarUrl = await invoke("upload_agent_avatar", {
+      agentHash: hash,
+      imageBase64: _pendingAvatarData
+    });
+    // Update the agent's avatar_url in store and re-render
+    const agent = store.agents.find(a => a.hash === hash);
+    if (agent) agent.avatar_url = avatarUrl;
+    const item = store.chatItems.find(c => c.agent_hash === hash);
+    if (item) item.avatar_url = avatarUrl;
+    store.notify();
+    renderChatList(store.chatItems);
+    // Refresh header avatar if this is the active chat
+    if (store.activeAgentHash === hash) {
+      showActiveChat();
+    }
+    showToast("头像已更新");
+  } catch (e) {
+    showToast("上传头像失败：" + e);
+  }
+}
+
+function wireAvatarModal() {
+  const fileInput = $("avatar-file-input");
+  const modal = $("avatar-preview-modal");
+  const previewImg = $("avatar-preview-img");
+  const oldBox = $("avatar-old-box");
+  const confirmBtn = $("avatar-confirm-btn");
+  const cancelBtn1 = $("avatar-cancel-btn");
+  const cancelBtn2 = $("avatar-cancel-btn-2");
+
+  // File selected → show preview modal
+  if (fileInput) {
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      if (file.size > 2 * 1024 * 1024) {
+        showToast("图片太大，请压缩到 2MB 以内");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result;
+        if (!dataUrl) return;
+
+        // Compress in-browser: resize to max 512px, JPEG 85%
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 512;
+          let w = img.width, h = img.height;
+          if (w > MAX || h > MAX) {
+            const r = Math.min(MAX / w, MAX / h);
+            w = Math.round(w * r);
+            h = Math.round(h * r);
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+          const compressed = canvas.toDataURL("image/jpeg", 0.85);
+
+          _pendingAvatarData = (compressed.split(",")[1] || "");
+
+          // Show old avatar in preview
+          const agent = store.agents.find(a => a.hash === _pendingAvatarHash);
+          if (oldBox) {
+            if (agent?.avatar_url) {
+              oldBox.innerHTML = `<img class="avatar-img" src="${agent.avatar_url}" alt="">`;
+            } else {
+              oldBox.innerHTML = `<div class="avatar-letter">${(agent?.name ?? "A").charAt(0).toUpperCase()}</div>`;
+            }
+          }
+          // Show compressed preview
+          if (previewImg) previewImg.src = compressed;
+          // Show modal
+          if (modal) modal.style.display = "flex";
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+      // Reset input so same file can be selected again
+      fileInput.value = "";
+    });
+  }
+
+  // Confirm button
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", () => void confirmAvatarUpload());
+  }
+
+  // Cancel buttons
+  if (cancelBtn1) {
+    cancelBtn1.addEventListener("click", closeAvatarModal);
+  }
+  if (cancelBtn2) {
+    cancelBtn2.addEventListener("click", closeAvatarModal);
+  }
+}
+
 function wire() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     const tab = btn.dataset.tab;
@@ -860,11 +992,7 @@ function wire() {
               })
               .catch(e => showToast("权限更新失败：" + e));
           } else if (action === "avatar") {
-            const url = prompt("输入头像图片URL（留空清除）:");
-            if (url === null) return;
-            invoke("update_agent_avatar", { agentHash: hash, avatarUrl: url })
-              .then(() => showToast("头像已更新"))
-              .catch(e => showToast("更新头像失败：" + e));
+            openAvatarPicker(hash);
           } else if (action === "delete") {
             if (!confirm("确定要删除此Agent吗？此操作不可撤销。")) return;
             invoke("delete_agent", { agentHash: hash })
@@ -884,6 +1012,8 @@ function wire() {
       setTimeout(() => document.addEventListener("click", close), 0);
     });
   }
+  // Wire avatar modal
+  wireAvatarModal();
 }
 document.addEventListener("DOMContentLoaded", () => {
   wire();

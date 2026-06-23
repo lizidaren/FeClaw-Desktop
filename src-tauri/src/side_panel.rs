@@ -491,6 +491,50 @@ pub async fn update_agent_settings(
     Ok(())
 }
 
+/// Upload agent avatar image to Engine via POST /api/desktop/agents/{hash}/avatar.
+#[tauri::command]
+pub async fn upload_agent_avatar(
+    agent_hash: String,
+    image_base64: String,
+) -> Result<String, String> {
+    let cfg = Config::load();
+    let base_url = match cfg.mode {
+        Mode::Local => cfg.engine_url(),
+        Mode::Cloud => cfg.cloud_base_url().unwrap_or("https://feclaw.lizidaren.cn").to_string(),
+    };
+    let url = format!("{}/api/desktop/agents/{}/avatar", base_url.trim_end_matches('/'), agent_hash);
+
+    // Decode base64 to bytes
+    let image_data = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &image_base64,
+    ).map_err(|e| format!("Invalid base64: {}", e))?;
+
+    // Build multipart form
+    let part = reqwest::multipart::Part::bytes(image_data)
+        .file_name("avatar.png".to_string())
+        .mime_str("image/png")
+        .map_err(|e| format!("Invalid mime type: {}", e))?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+
+    let client = crate::http_client::http_client();
+    let resp = client
+        .post(&url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("网络请求失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("上传头像失败: {}", resp.text().await.unwrap_or_default()));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct AvatarResponse { avatar_url: String }
+    let result: AvatarResponse = resp.json().await.map_err(|e| format!("解析响应失败: {}", e))?;
+    Ok(result.avatar_url)
+}
+
 /// Update agent avatar on the Engine via PATCH /api/user/agents/{hash}/avatar.
 #[tauri::command]
 pub async fn update_agent_avatar(

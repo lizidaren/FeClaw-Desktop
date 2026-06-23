@@ -226,6 +226,7 @@ pub fn run() {
                 side_panel::sync_agent_settings,
                 side_panel::update_agent_settings,
                 side_panel::update_agent_avatar,
+                side_panel::upload_agent_avatar,
                 side_panel::delete_agent,
                 side_panel::list_agent_apps,
                 side_panel::open_config_window,

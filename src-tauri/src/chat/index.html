@@ -195,6 +195,36 @@
   <!-- Moments toast notification -->
   <div class="moments-toast" id="moments-toast" style="opacity:0;">新动态</div>
 
+  <!-- Avatar upload: hidden file input -->
+  <input type="file" id="avatar-file-input" accept="image/*" hidden>
+
+  <!-- Avatar preview modal -->
+  <div id="avatar-preview-modal" class="avatar-modal-overlay" style="display:none;">
+    <div class="avatar-modal-card">
+      <div class="avatar-modal-header">
+        <h3>更换头像</h3>
+        <button class="modal-close" id="avatar-cancel-btn">✕</button>
+      </div>
+      <div class="avatar-compare">
+        <div class="avatar-compare-item">
+          <p class="avatar-compare-label">当前头像</p>
+          <div class="avatar-compare-box" id="avatar-old-box"></div>
+        </div>
+        <div class="avatar-arrow">→</div>
+        <div class="avatar-compare-item">
+          <p class="avatar-compare-label">新头像</p>
+          <div class="avatar-compare-box">
+            <img id="avatar-preview-img" src="" alt="预览">
+          </div>
+        </div>
+      </div>
+      <div class="avatar-modal-footer">
+        <button class="btn btn-secondary" id="avatar-cancel-btn-2">取消</button>
+        <button class="btn btn-primary" id="avatar-confirm-btn">确认</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="chat.js"></script>
 </body>
 </html>
