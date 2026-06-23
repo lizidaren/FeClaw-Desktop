@@ -618,6 +618,8 @@ async function subscribeEvents() {
         const id = msg.id || `stream-${Date.now()}`;
         const delta = msg.delta || "";
         if (delta) appendStreamingMessage(id, delta);
+      } else if (msg.kind === "thinking" || msg.kind === "tool" || msg.kind === "tool_result") {
+        // Tool/thinking events — already handled by chat-stream listener
       } else {
         // Persisted chat event message
         if (msg.agent_hash !== store.activeAgentHash) return;
@@ -674,6 +676,8 @@ async function subscribeEvents() {
         if (!ev) return;
         switch (ev.kind) {
           case "thinking":
+            // Finalize current stream so pills sit at the right timeline position
+            if (ev.id) finalizeStreaming(ev.id, null);
             renderEventPill("thinking", "\u601D\u8003\u4E2D\u2026");
             break;
           case "tool":
