@@ -159,10 +159,11 @@ impl WsClient {
             .unwrap_or("")
             .split('?')
             .next()
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_string();
 
         // Build the upgrade request with the token-bearing URL.
-        let mut req = url_with_token
+        let req = url_with_token
             .into_client_request()
             .map_err(|e| anyhow!("build ws request: {e}"))?;
 

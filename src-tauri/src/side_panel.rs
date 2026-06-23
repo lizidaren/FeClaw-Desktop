@@ -465,7 +465,7 @@ pub async fn update_agent_settings(
     let base_url = match cfg.mode {
         crate::config::Mode::Local => cfg.engine_url(),
         crate::config::Mode::Cloud => {
-            cfg.cloud_base_url().unwrap_or("https://feclaw.lizidaren.cn".to_string())
+            cfg.cloud_base_url().unwrap_or("https://feclaw.lizidaren.cn").to_string()
         }
     };
     let url = format!("{}/api/user/agents/{}/settings", base_url.trim_end_matches('/'), agent_hash);
@@ -527,7 +527,7 @@ pub async fn delete_agent(
     let cfg = Config::load();
     let token = cfg.cloud_token.clone()
         .ok_or_else(|| "未登录".to_string())?;
-    let base_url = cloud_base(&cfg);
+    let base_url = cfg.cloud_base_url().unwrap_or("https://feclaw.lizidaren.cn");
     let url = format!("{}/api/user/agents/{}", base_url.trim_end_matches('/'), agent_hash);
     let client = crate::http_client::http_client();
     let resp = client
