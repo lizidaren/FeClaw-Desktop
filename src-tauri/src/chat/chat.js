@@ -732,14 +732,11 @@ function renderEventPill(kind, label) {
 }
 function describeToolCall(data) {
   if (!data || typeof data !== "object") return "";
-  const obj = data;
-  if (!obj.name) return "";
-  try {
-    const args = obj.args ? JSON.stringify(obj.args) : "";
-    return args ? `${obj.name}(${args})` : obj.name;
-  } catch {
-    return obj.name;
-  }
+  // Engine sends {tool_name, content, ...}
+  const name = data.tool_name || data.name || "";
+  if (!name) return "";
+  const args = data.args ? `(${JSON.stringify(data.args)})` : "";
+  return `${name}${args}`;
 }
 function wire() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
