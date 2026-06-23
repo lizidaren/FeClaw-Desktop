@@ -825,7 +825,7 @@ function wireAvatarModal() {
         // Compress in-browser: resize to max 512px, JPEG 85%
         const img = new Image();
         img.onload = () => {
-          const MAX = 512;
+          const MAX = 1024;
           let w = img.width, h = img.height;
           if (w > MAX || h > MAX) {
             const r = Math.min(MAX / w, MAX / h);
