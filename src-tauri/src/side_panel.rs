@@ -448,6 +448,49 @@ pub async fn sync_agent_settings(agent_hash: String) -> Result<(), String> {
     sync_to_engine_internal(&agent_hash).await
 }
 
+/// Update agent settings on the Engine via PATCH /api/user/agents/{hash}/settings.
+/// Called directly from the 3-dot menu in the chat UI.
+#[tauri::command]
+pub async fn update_agent_settings(
+    agent_hash: String,
+    alias: Option<String>,
+    is_pinned: Option<bool>,
+    is_dnd: Option<bool>,
+    permission_mode: Option<String>,
+) -> Result<(), String> {
+    let cfg = Config::load();
+    let token = cfg.cloud_token.clone()
+        .ok_or_else(|| "未登录".to_string())?;
+
+    let base_url = match cfg.mode {
+        crate::config::Mode::Local => cfg.engine_url(),
+        crate::config::Mode::Cloud => {
+            cfg.cloud_base_url().unwrap_or("https://feclaw.lizidaren.cn".to_string())
+        }
+    };
+    let url = format!("{}/api/user/agents/{}/settings", base_url.trim_end_matches('/'), agent_hash);
+
+    let mut body = serde_json::json!({});
+    if let Some(v) = alias { body["alias"] = serde_json::json!(v); }
+    if let Some(v) = is_pinned { body["is_pinned"] = serde_json::json!(v); }
+    if let Some(v) = is_dnd { body["is_dnd"] = serde_json::json!(v); }
+    if let Some(v) = permission_mode { body["permission_mode"] = serde_json::json!(v); }
+
+    let client = crate::http_client::http_client();
+    let resp = client
+        .patch(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("网络请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("更新失败: {}", text));
+    }
+    Ok(())
+}
+
 /// Internal helper: read local settings from SQLite and PATCH them to Engine.
 async fn sync_to_engine_internal(agent_hash: &str) -> Result<(), String> {
     // Read local settings synchronously first

@@ -30,7 +30,10 @@ var Store = class {
       last_time: "",
       unread: false,
       active: a.hash === this.activeAgentHash,
-      status: a.status ?? "active"
+      status: a.status ?? "active",
+      is_pinned: false,
+      is_dnd: false,
+      permission_mode: "balanced"
     }));
     this.notify();
   }
@@ -535,6 +538,20 @@ function formatTime(ts) {
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+function showToast(msg, duration = 2000) {
+  const existing = document.getElementById("toast-msg");
+  if (existing) existing.remove();
+  const toast = document.createElement("div");
+  toast.id = "toast-msg";
+  toast.textContent = msg;
+  toast.style.cssText = "position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:8px 16px;border-radius:6px;font-size:14px;z-index:9999;opacity:0;transition:opacity 0.3s;";
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.style.opacity = "1");
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
 async function subscribeEvents() {
   // Listen for theme-changed events from the embedded settings iframe
   try {
@@ -766,9 +783,14 @@ function wire() {
       menu.id = "agent-context-menu";
       menu.className = "context-menu";
       menu.innerHTML = `
-        <button data-action="config">⚙ 配置 Agent</button>
+        <button data-action="config">⚙ 配置</button>
         <button data-action="rename">✏ 重命名</button>
-        <button data-action="delete">🗑 删除</button>
+        <button data-action="pin">📌 置顶</button>
+        <button data-action="dnd">🔇 免打扰</button>
+        <button data-action="permission">🛡 权限</button>
+        <hr style="margin:4px 0;border:none;border-top:1px solid var(--border);">
+        <button data-action="avatar">🖼 换头像</button>
+        <button data-action="delete" style="color:var(--danger, #e74c3c);">🗑 删除</button>
       `;
       menu.style.cssText = "position:fixed;z-index:1000;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:4px 0;box-shadow:0 4px 12px rgba(0,0,0,0.15);";
       const rect = chatMenu.getBoundingClientRect();
@@ -782,14 +804,61 @@ function wire() {
           menu.remove();
           const action = b.dataset.action;
           const hash = store.activeAgentHash;
-          if (action === "config" && hash) {
+          if (!hash) return;
+          if (action === "config") {
             invoke("open_agent_config", { agentHash: hash });
-          } else if (action === "rename" && hash) {
-            // Future: rename dialog
-            console.log("rename", hash);
-          } else if (action === "delete" && hash) {
-            // Future: confirm + delete
-            console.log("delete", hash);
+          } else if (action === "rename") {
+            const item = store.chatItems.find(c => c.agent_hash === hash);
+            const current = item?.name ?? "";
+            const next = prompt("输入新名称：", current);
+            if (!next || next === current) return;
+            invoke("update_agent_settings", { agentHash: hash, alias: next })
+              .then(() => {
+                if (item) {
+                  item.name = next;
+                  item.avatar_letter = next.charAt(0).toUpperCase();
+                }
+                store.notify();
+                renderChatList(store.chatItems);
+              })
+              .catch(e => showToast("重命名失败：" + e));
+          } else if (action === "pin") {
+            const item = store.chatItems.find(c => c.agent_hash === hash);
+            const newVal = !(item?.is_pinned ?? false);
+            invoke("update_agent_settings", { agentHash: hash, isPinned: newVal })
+              .then(() => {
+                if (item) item.is_pinned = newVal;
+                store.notify();
+                renderChatList(store.chatItems);
+              })
+              .catch(e => showToast("置顶失败：" + e));
+          } else if (action === "dnd") {
+            const item = store.chatItems.find(c => c.agent_hash === hash);
+            const newVal = !(item?.is_dnd ?? false);
+            invoke("update_agent_settings", { agentHash: hash, isDnd: newVal })
+              .then(() => {
+                if (item) item.is_dnd = newVal;
+                store.notify();
+                renderChatList(store.chatItems);
+              })
+              .catch(e => showToast("免打扰失败：" + e));
+          } else if (action === "permission") {
+            const item = store.chatItems.find(c => c.agent_hash === hash);
+            const modes = ["strict", "balanced", "relaxed", "full"];
+            const current = item?.permission_mode ?? "balanced";
+            const idx = modes.indexOf(current);
+            const next = modes[(idx + 1) % modes.length];
+            invoke("update_agent_settings", { agentHash: hash, permissionMode: next })
+              .then(() => {
+                if (item) item.permission_mode = next;
+                store.notify();
+                showToast("权限已更新为：" + next);
+              })
+              .catch(e => showToast("权限更新失败：" + e));
+          } else if (action === "avatar") {
+            showToast("即将支持");
+          } else if (action === "delete") {
+            showToast("即将支持");
           }
         });
       });
