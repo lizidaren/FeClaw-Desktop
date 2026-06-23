@@ -720,7 +720,7 @@ async function subscribeEvents() {
     console.error("listen chat-done:", e);
   }
   try {
-    await listen("feclaw-agent-config-closed", () => {
+    await listen("feclaw-agent-config-closed", async () => {
       // Agent config WebView closed — refresh agent list to pick up status changes
       const agents = await invoke("list_agents");
       if (agents) {
