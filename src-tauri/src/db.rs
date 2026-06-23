@@ -14,6 +14,7 @@
 use crate::config::Config;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -421,7 +422,7 @@ pub async fn sync_chat_history(app: tauri::AppHandle) -> Result<Vec<DbChatMessag
             all_synced.push(DbChatMessage {
                 id: msg.id.clone(),
                 channel: channel.clone(),
-                agent_hash: agent_hash.clone().unwrap_or_default(),
+                agent_hash: Some(agent.hash.clone()),
                 role: msg.role.clone(),
                 content: msg.content.clone(),
                 message_type: msg_type.clone(),

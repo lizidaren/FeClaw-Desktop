@@ -438,7 +438,7 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
                     tracing::info!("WS connected, triggering chat history sync");
                     let app_for_sync = app_for_status.clone();
                     tauri::async_runtime::spawn(async move {
-                        match app_for_sync.invoke::<Result<Vec<db::DbChatMessage>, String>>("sync_chat_history", ()).await {
+                        match db::sync_chat_history(app_for_sync).await {
                             Ok(msgs) => {
                                 if msgs.is_empty() {
                                     tracing::debug!("sync_chat_history: no new messages");

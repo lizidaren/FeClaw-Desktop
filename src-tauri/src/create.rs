@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::types::AgentInfo;
 use serde::{Deserialize, Serialize};
 use tauri::webview::WebviewWindowBuilder;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Request body for POST /api/desktop/agents.
 #[derive(Debug, Serialize)]
