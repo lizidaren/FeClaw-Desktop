@@ -1,6 +1,6 @@
 //! Configuration management for FeClaw Desktop.
 //!
-//! Reads/writes `~/.feclaw/config.toml`. Provides default port (8080) and
+//! Reads/writes `~/.feclaw-desktop/config.toml`. Provides default port (8080) and
 //! automatic port scanning (8080-8089) when the default is in use.
 
 use anyhow::{Context, Result};
@@ -13,17 +13,11 @@ fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
 }
 
-/// Top-level FeClaw Desktop configuration persisted to `~/.feclaw/config.toml`.
+/// Top-level FeClaw Desktop configuration persisted to `~/.feclaw-desktop/config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub port: u16,
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_path: Option<String>,
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub ws_path: String,
     pub mode: Mode,
     /// Cloud server base URL (e.g. `https://feclaw.example.com`).
     /// Only used when `mode == Mode::Cloud`. This is the WebSocket endpoint
@@ -60,10 +54,7 @@ pub enum Mode {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            port: 8080,
-            host: "127.0.0.1".to_string(),
             engine_path: None,
-            ws_path: "/ws/desktop".to_string(),
             mode: Mode::Local,
             cloud_url: None,
             cloud_login_url: None,
@@ -75,7 +66,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// `~/.feclaw` directory (or `%USERPROFILE%\.feclaw` on Windows).
+    /// `~/.feclaw-desktop` directory (or `%USERPROFILE%\.feclaw-desktop` on Windows).
     pub fn config_dir() -> PathBuf {
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
@@ -92,6 +83,22 @@ impl Config {
     /// Load configuration from disk, falling back to (and persisting) defaults
     /// if the file is missing or unparseable.
     pub fn load() -> Self {
+        // // Migration from old .feclaw/ dir (V2, never publicly released)
+        // let home = std::env::var_os("HOME")
+        //     .or_else(|| std::env::var_os("USERPROFILE"))
+        //     .map(PathBuf::from)
+        //     .unwrap_or_else(|| PathBuf::from("."));
+        // let old_dir = home.join(".feclaw");
+        // let new_dir = Self::config_dir();
+        // if old_dir.exists() && !new_dir.exists() {
+        //     tracing::info!("Migrating config from {old_dir:?} to {new_dir:?}");
+        //     for entry in std::fs::read_dir(&old_dir).map_err(|e| tracing::warn!("read old config dir: {e}")).unwrap_or_default() {
+        //         if let Ok(entry) = entry {
+        //             let _ = std::fs::copy(entry.path(), new_dir.join(entry.file_name()));
+        //         }
+        //     }
+        // }
+
         let path = Self::config_path();
         match fs::read_to_string(&path) {
             Ok(content) => match toml::from_str::<Config>(&content) {
@@ -111,7 +118,7 @@ impl Config {
         }
     }
 
-    /// Persist this configuration to `~/.feclaw/config.toml`.
+    /// Persist this configuration to `~/.feclaw-desktop/config.toml`.
     pub fn save(&self) -> Result<()> {
         let dir = Self::config_dir();
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
@@ -122,7 +129,7 @@ impl Config {
 
     /// Base URL for the engine REST API.
     ///
-    /// * `Local`  → `http://{host}:{port}` against the embedded engine.
+    /// * `Local`  → `http://127.0.0.1:8080` against the embedded engine.
     /// * `Cloud`  → `{cloud_url}` (trailing slash stripped) so all engine-side
     ///              API calls (chat, file index, settings, …) hit the remote
     ///              server instead of the local engine. Falls back to a
@@ -130,11 +137,11 @@ impl Config {
     ///              can't silently contact the wrong host.
     pub fn engine_url(&self) -> String {
         match self.mode {
-            Mode::Local => format!("http://{}:{}", self.host, self.port),
+            Mode::Local => "http://127.0.0.1:8080".to_string(),
             Mode::Cloud => self
                 .cloud_url
                 .as_deref()
-                .unwrap_or("http://127.0.0.1:8080")
+                .unwrap_or("https://feclaw.lizidaren.cn")
                 .trim_end_matches('/')
                 .to_string(),
         }
@@ -160,7 +167,7 @@ impl Config {
 
     /// WebSocket URL the engine manager should dial.
     ///
-    /// * `Local`  → `ws://{host}:{port}{ws_path}` against the embedded engine.
+    /// * `Local`  → `ws://127.0.0.1:8080/ws/desktop` against the embedded engine.
     /// * `Cloud`  → `wss://{cloud_url}/ws/desktop` (or `ws://` when the
     ///              server is plain HTTP, e.g. local-network dev boxes)
     ///              against the remote FeClaw server. `cloud_url` is required
@@ -168,7 +175,7 @@ impl Config {
     ///              always uses the matching scheme.
     pub fn ws_url(&self) -> String {
         match self.mode {
-            Mode::Local => format!("ws://{}:{}{}", self.host, self.port, self.ws_path),
+            Mode::Local => "ws://127.0.0.1:8080/ws/desktop".to_string(),
             Mode::Cloud => {
                 let base = self
                     .cloud_url
@@ -378,11 +385,11 @@ mod tests {
     }
 
     #[test]
-    fn config_dir_is_home_feclaw() {
+    fn config_dir_is_home_feclaw_desktop() {
         let dir = Config::config_dir();
         let expected = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(|h| PathBuf::from(h).join(".feclaw"))
+            .map(|h| PathBuf::from(h).join(".feclaw-desktop"))
             .unwrap();
         assert_eq!(dir, expected);
     }
