@@ -53,6 +53,51 @@ pub enum RiskLevel {
     L5 = 5, // code execution
 }
 
+/// File-operation risk level — the desktop-side handle for the three VFS
+/// operations the agent can request (`file_read_request`,
+/// `file_write_request`, `file_delete_request`).
+///
+/// Mirrors the lower three [`RiskLevel`] variants. We expose a separate
+/// type (rather than reusing `RiskLevel` directly) so callers in
+/// `ws.rs` / `file_ops.rs` can be explicit that the request is for a
+/// file operation, not a shell command. The dialog-side mapping is
+/// trivial: `L1 → read`, `L2 → write`, `L3 → delete`.
+///
+/// The integer discriminants match `RiskLevel` so a debug print of
+/// either reads the same way, but conversion is explicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    /// Silent read (L1). Currently short-circuits to allow; keeps the
+    /// code path uniform with write/delete so future policy changes
+    /// (audit, allow-list) apply uniformly.
+    L1,
+    /// Write — pops an L2 "info" dialog.
+    L2,
+    /// Delete — pops an L3 "warning" dialog.
+    L3,
+}
+
+impl Operation {
+    /// Map to the underlying [`RiskLevel`].
+    pub fn risk(self) -> RiskLevel {
+        match self {
+            Operation::L1 => RiskLevel::L1,
+            Operation::L2 => RiskLevel::L2,
+            Operation::L3 => RiskLevel::L3,
+        }
+    }
+
+    /// Human-readable name used in the dialog body
+    /// (e.g. "READ", "WRITE", "DELETE").
+    pub fn verb(self) -> &'static str {
+        match self {
+            Operation::L1 => "read",
+            Operation::L2 => "write",
+            Operation::L3 => "delete",
+        }
+    }
+}
+
 pub struct ConsentManager {
     session_trust: HashSet<String>,
     trust_file: PathBuf,
@@ -244,36 +289,32 @@ impl Default for ConsentManager {
 impl ConsentManager {
     /// Ask for consent to perform a VFS file operation.
     ///
-    /// - `"read"` → silently allow (L1).
-    /// - `"write"` → L2 dialog (info, Yes/No).
-    /// - `"delete"` → L3 dialog (warning, Yes/No).
+    /// - [`Operation::L1`] (read) → silently allow.
+    /// - [`Operation::L2`] (write) → info dialog, Yes/No.
+    /// - [`Operation::L3`] (delete) → warning dialog, Yes/No.
     ///
     /// The dialog description explicitly names the operation and the target
     /// file path so the user knows exactly what they're approving. Does NOT
     /// touch `session_trust` / `trusted-commands.json` — those track whole
     /// shell commands and would be polluted by file paths.
-    pub async fn request_operation(&mut self, operation: &str, path: &str) -> OperationOutcome {
-        let risk = match operation {
-            "read" => RiskLevel::L1,
-            "write" => RiskLevel::L2,
-            "delete" => RiskLevel::L3,
-            _ => RiskLevel::L3,
-        };
-
+    pub async fn request_operation(&mut self, op: Operation, path: &str) -> OperationOutcome {
+        let risk = op.risk();
         if risk == RiskLevel::L1 {
             return OperationOutcome::Allow;
         }
 
-        let description = match operation {
-            "write" => format!(
+        let description = match op {
+            Operation::L2 => format!(
                 "Agent wants to WRITE a file under your Desktop:\n\n  {path}\n\n\
                  This will create the file or overwrite the existing one."
             ),
-            "delete" => format!(
+            Operation::L3 => format!(
                 "Agent wants to DELETE a file under your Desktop:\n\n  {path}\n\n\
                  This action is permanent and cannot be undone."
             ),
-            _ => format!("Agent wants to {operation} file:\n\n  {path}"),
+            Operation::L1 => format!(
+                "Agent wants to READ a file under your Desktop:\n\n  {path}"
+            ),
         };
 
         self.show_consent_dialog(&description, risk).await

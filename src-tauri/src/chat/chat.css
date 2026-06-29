@@ -322,6 +322,181 @@ html, body {
   background: var(--bg-active);
 }
 
+/* ---- Create Dialog: Overlay & Dialog shell ---- */
+.cd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  animation: cdFadeIn 0.15s ease-out;
+}
+.cd-overlay[style*="display: flex"] { display: flex !important; }
+
+@keyframes cdFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.cd-dialog {
+  background: var(--bg-elev, #fff);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  min-width: 360px;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+  animation: cdSlideIn 0.15s ease-out;
+}
+
+@keyframes cdSlideIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.cd-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.cd-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cd-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+.cd-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.cd-body {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.cd-section-label {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.cd-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cd-radio-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  font-size: 14px;
+  color: var(--text);
+}
+.cd-radio-card:hover {
+  background: var(--bg-hover);
+  border-color: var(--primary);
+}
+.cd-radio-card input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.cd-radio-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.cd-radio-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.cd-radio-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.cd-radio-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.cd-radio-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.cd-input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.cd-input:focus {
+  border-color: var(--primary);
+}
+
+.cd-error {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--error);
+}
+
+.cd-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
 /* ---- Create Dialog: Group checkbox list ---- */
 .cd-checkbox-list {
   display: flex;
@@ -368,6 +543,77 @@ html, body {
   color: var(--text-muted);
   padding: 8px 0;
   text-align: center;
+}
+
+/* ---- "+" Button Dropdown Menu (WeChat-style) ------------------ */
+
+.plus-dropdown {
+  position: fixed;
+  z-index: 150;
+  min-width: 180px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  animation: plusDropdownIn 0.12s ease-out;
+}
+
+.plus-dropdown.open {
+  display: flex;
+}
+
+@keyframes plusDropdownIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.plus-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.1s;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: inherit;
+  background: transparent;
+  border: none;
+  text-align: left;
+  width: 100%;
+}
+
+.plus-dropdown-item:hover,
+.plus-dropdown-item:focus {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.plus-dropdown-item:active {
+  background: var(--bg-active);
+}
+
+.plus-dropdown-icon {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.plus-dropdown-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- Right: Chat Window Panel ------------------------------- */
@@ -418,6 +664,42 @@ html, body {
 .no-chat-state p {
   margin: 0;
   font-size: 14px;
+}
+
+/* Placeholder page (FE Hub / Plaza) */
+.placeholder-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--text-muted);
+  padding: 40px;
+  gap: 14px;
+  background: var(--bg);
+}
+
+.placeholder-icon {
+  font-size: 56px;
+  line-height: 1;
+  opacity: 0.85;
+  margin-bottom: 4px;
+}
+
+.placeholder-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.placeholder-subtitle {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 360px;
+  line-height: 1.5;
 }
 
 /* Active chat */
@@ -1033,6 +1315,260 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-top: 1px;
+}
+
+/* ---- Permission row (in drawer) — opens separate modal ---- */
+
+.sp-perm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-soft);
+  cursor: pointer;
+  transition: background 0.15s;
+  border-radius: 6px;
+  margin-top: 4px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.sp-perm-row:hover {
+  background: var(--bg-hover);
+}
+
+.sp-perm-row:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.sp-perm-label-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sp-perm-current {
+  font-size: 12px;
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.sp-btn-primary {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.sp-btn-primary:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+  color: white;
+}
+
+/* ---- Permission modal (centered dialog) ---- */
+
+.perm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+  z-index: 200;
+  padding: 20px;
+}
+
+.perm-overlay.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.perm-modal {
+  width: 100%;
+  max-width: 420px;
+  max-height: calc(100vh - 40px);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: scale(0.94) translateY(8px);
+  opacity: 0;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.perm-modal.open {
+  transform: scale(1) translateY(0);
+  opacity: 1;
+}
+
+.perm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.perm-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.perm-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.perm-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.perm-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.perm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.perm-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+
+.perm-option:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.perm-option:active {
+  transform: scale(0.99);
+}
+
+.perm-option.selected {
+  background: var(--bg-active);
+  border-color: var(--primary);
+}
+
+.perm-option-radio {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  flex-shrink: 0;
+  margin-top: 2px;
+  position: relative;
+  transition: border-color 0.15s;
+}
+
+.perm-option.selected .perm-option-radio {
+  border-color: var(--primary);
+}
+
+.perm-option.selected .perm-option-radio::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+.perm-option-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.perm-option-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.perm-option.selected .perm-option-label {
+  color: var(--primary);
+}
+
+.perm-option-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.perm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.perm-btn {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 16px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.perm-btn:hover {
+  background: var(--bg-hover);
+}
+
+.perm-btn-cancel:hover {
+  border-color: var(--text-muted);
+}
+
+.perm-btn-confirm {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.perm-btn-confirm:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
 }
 
 /* ---- Phase 2D: Message attachment cards ------------------------------- */

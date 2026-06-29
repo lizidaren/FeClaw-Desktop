@@ -1,41 +1,52 @@
 // =========================================================
-// FeClaw Desktop — Agent Side Panel (Phase 0c + 2C V3)
+// FeClaw Desktop — Agent Side Panel + Permission Modal
 // =========================================================
 //
-// Sliding panel from the right edge of the chat window.
-// Shows agent avatar, editable alias, pin/dnd toggles,
-// permission mode dropdown, config manager, file manager,
-// and app list.
+// Redesign of the 3-dot menu: a WeChat-style right-side drawer
+// (side panel) with toggle switches for Pin / Do Not Disturb,
+// and a SEPARATE centered modal for Permission Level.
 //
-// Layout:
+// Layout (drawer):
 //   ┌─── side-overlay (full-screen dim) ────────────────┐
 //   │  ┌─── side-panel (300px from right) ──────────┐  │
-//   │  │ [✕]  Agent Settings              [header] │  │
-//   │  │                                          │  │
-//   │  │   ┌─────┐                               │  │
-//   │  │   │  A  │  ← avatar (initials circle)  │  │
-//   │  │   └─────┘                               │  │
-//   │  │                                          │  │
-//   │  │   [Editable alias field]                 │  │
-//   │  │                                          │  │
-//   │  │   📌 置顶聊天            [toggle switch]│  │
-//   │  │   🔕 免打扰              [toggle switch]│  │
-//   │  │                                          │  │
-//   │  │   📂 文件管理器         [打开]           │  │ ← Phase 2C
-//   │  │   ⚙️ 配置管理           [打开]           │  │ ← Phase 2C
-//   │  │                                          │  │
-//   │  │   🛡️ 权限模式                         │  │
-//   │  │   [dropdown: 禁止/严格/平衡/宽松/完全]  │  │ ← Phase 2C write-back
-//   │  │                                          │  │
-//   │  │   🏪 小程序                          │  │ ← Phase 2C
-//   │  │   ├── 复习计划生成器                  │  │
-//   │  │   └── 错题分析器                     │  │
-//   │  │                                          │  │
-//   │  └──────────────────────────────────────────┘  │
+//   │  │ [✕]  Agent 设置              [header]      │  │
+//   │  │                                            │  │
+//   │  │   ┌─────┐                                  │  │
+//   │  │   │  A  │  ← avatar (initials circle)      │  │
+//   │  │   └─────┘                                  │  │
+//   │  │                                            │  │
+//   │  │   备注名:  [editable input]                │  │
+//   │  │                                            │  │
+//   │  │   📌 置顶聊天              [toggle switch] │  │
+//   │  │   🔕 免打扰                [toggle switch] │  │
+//   │  │                                            │  │
+//   │  │   📂 文件管理器           [打开]           │  │
+//   │  │   ⚙️ 配置管理             [打开]           │  │
+//   │  │   🛡️ 安全权限等级  L2 (平衡)  [切换]       │  │  ← opens modal
+//   │  │                                            │  │
+//   │  │   🏪 小程序                                │  │
+//   │  │   ├── 复习计划生成器                       │  │
+//   │  │   └── 错题分析器                          │  │
+//   │  └────────────────────────────────────────────┘  │
+//   └────────────────────────────────────────────────┘
+//
+// Permission modal (centered, opens on top of the drawer):
+//   ┌─── perm-overlay (full-screen dim) ──────────────┐
+//   │   ┌─── perm-modal (centered) ───────────────┐  │
+//   │   │ 🛡️ 安全权限等级              [✕]       │  │
+//   │   │                                         │  │
+//   │   │   ( L0 ) 禁止                          │  │
+//   │   │   ( L1 ) 严格                          │  │
+//   │   │   ( L2 ) 平衡         ← selected        │  │
+//   │   │   ( L3 ) 宽松                          │  │
+//   │   │   ( L4 ) 完全授权                      │  │
+//   │   │                                         │  │
+//   │   │   [取消]                  [确定]        │  │
+//   │   └─────────────────────────────────────────┘  │
 //   └───────────────────────────────────────────────┘
 //
 // Public API:
-//   openSidePanel(agentHash: string) — open the panel for an agent
+//   openSidePanel(agentHash: string) — open the drawer for an agent
 
 import { store } from "../store";
 
@@ -71,33 +82,39 @@ interface AppInfo {
   icon_url: string | null;
 }
 
-const PERMISSION_LABELS: Record<string, string> = {
-  disabled: "禁止 (L0)",
-  strict: "严格 (L1)",
-  balanced: "平衡 (L2)",
-  relaxed: "宽松 (L3)",
-  full: "完全授权 (L4)",
-};
+interface PermissionOption {
+  value: string;
+  label: string;
+  desc: string;
+}
 
-const PERMISSION_OPTIONS = [
-  { value: "disabled", label: "禁止 (L0)" },
-  { value: "strict", label: "严格 (L1)" },
-  { value: "balanced", label: "平衡 (L2)" },
-  { value: "relaxed", label: "宽松 (L3)" },
-  { value: "full", label: "完全授权 (L4)" },
+const PERMISSION_OPTIONS: PermissionOption[] = [
+  { value: "disabled", label: "禁止 (L0)", desc: "完全禁用工具调用" },
+  { value: "strict", label: "严格 (L1)", desc: "只读操作，每次需确认" },
+  { value: "balanced", label: "平衡 (L2)", desc: "常用操作自动放行" },
+  { value: "relaxed", label: "宽松 (L3)", desc: "大多数操作无需确认" },
+  { value: "full", label: "完全授权 (L4)", desc: "无限制执行" },
 ];
+
+const PERMISSION_LABEL: Record<string, string> = Object.fromEntries(
+  PERMISSION_OPTIONS.map((o) => [o.value, o.label]),
+);
 
 // ---- DOM IDs -----------------------------------------------------
 
 const OVERLAY_ID = "side-overlay";
 const PANEL_ID = "side-panel";
+const PERM_OVERLAY_ID = "perm-overlay";
+const PERM_MODAL_ID = "perm-modal";
 
 // ---- State -------------------------------------------------------
 
 let currentAgentHash: string | null = null;
 let isPanelOpen = false;
+let isPermModalOpen = false;
+let pendingPermissionMode: string | null = null;
 
-// ---- Panel DOM ---------------------------------------------------
+// ---- Drawer DOM --------------------------------------------------
 
 function buildPanel(): void {
   if (document.getElementById(PANEL_ID)) return;
@@ -156,13 +173,12 @@ function buildPanel(): void {
         <button type="button" class="sp-btn" id="sp-open-config">打开</button>
       </div>
 
-      <div class="sp-field" style="margin-top:16px;">
-        <label class="sp-label">🛡️ 权限模式</label>
-        <select class="sp-select" id="sp-permission-select">
-          ${PERMISSION_OPTIONS.map(
-            (o) => `<option value="${o.value}">${o.label}</option>`,
-          ).join("")}
-        </select>
+      <div class="sp-perm-row" id="sp-perm-row" role="button" tabindex="0">
+        <div class="sp-perm-label-wrap">
+          <span class="sp-btn-label">🛡️ 安全权限等级</span>
+          <span class="sp-perm-current" id="sp-perm-current">—</span>
+        </div>
+        <button type="button" class="sp-btn sp-btn-primary" id="sp-open-perm">切换</button>
       </div>
 
       <div class="sp-section" id="sp-apps-section">
@@ -198,36 +214,108 @@ function buildPanel(): void {
     void toggleDndAndSync();
   });
 
-  // Permission mode select → Phase 2C write-back
-  document.getElementById("sp-permission-select")!.addEventListener("change", () => {
-    if (!currentAgentHash) return;
-    const select = document.getElementById("sp-permission-select") as HTMLSelectElement;
-    void setPermissionModeAndSync(select.value);
+  // Permission row → open centered modal
+  const permRow = document.getElementById("sp-perm-row")!;
+  permRow.addEventListener("click", openPermissionModal);
+  permRow.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openPermissionModal();
+    }
+  });
+  document.getElementById("sp-open-perm")!.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openPermissionModal();
   });
 
-  // File manager button → Phase 2C
+  // File manager button
   document.getElementById("sp-open-file-manager")!.addEventListener("click", () => {
     if (!currentAgentHash) return;
     void openFileManager();
   });
 
-  // Config button → Phase 2C
+  // Config button
   document.getElementById("sp-open-config")!.addEventListener("click", () => {
     if (!currentAgentHash) return;
     void openConfig();
   });
 
-  // ESC to close
+  // ESC to close (drawer first, then modal on top of drawer)
   document.addEventListener("keydown", handleEscKey);
 }
 
-function handleEscKey(e: KeyboardEvent): void {
-  if (e.key === "Escape" && isPanelOpen) {
-    closeSidePanel();
-  }
+// ---- Permission modal DOM ---------------------------------------
+
+function buildPermissionModal(): void {
+  if (document.getElementById(PERM_MODAL_ID)) return;
+
+  const overlay = document.createElement("div");
+  overlay.id = PERM_OVERLAY_ID;
+  overlay.className = "perm-overlay";
+  // Clicks on overlay (but not on modal itself) close the modal
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closePermissionModal();
+  });
+
+  const modal = document.createElement("div");
+  modal.id = PERM_MODAL_ID;
+  modal.className = "perm-modal";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-label", "安全权限等级");
+
+  modal.innerHTML = `
+    <div class="perm-header">
+      <span class="perm-title">🛡️ 安全权限等级</span>
+      <button type="button" class="perm-close" id="perm-close" aria-label="关闭">✕</button>
+    </div>
+    <div class="perm-body">
+      <div class="perm-list" id="perm-list">
+        ${PERMISSION_OPTIONS.map(
+          (o) => `
+          <button type="button" class="perm-option" data-value="${o.value}">
+            <div class="perm-option-radio" aria-hidden="true"></div>
+            <div class="perm-option-text">
+              <div class="perm-option-label">${o.label}</div>
+              <div class="perm-option-desc">${o.desc}</div>
+            </div>
+          </button>`,
+        ).join("")}
+      </div>
+    </div>
+    <div class="perm-footer">
+      <button type="button" class="perm-btn perm-btn-cancel" id="perm-cancel">取消</button>
+      <button type="button" class="perm-btn perm-btn-confirm" id="perm-confirm">确定</button>
+    </div>
+  `;
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  // Wire option clicks (radio-style selection)
+  modal.querySelectorAll<HTMLButtonElement>(".perm-option").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const value = btn.getAttribute("data-value");
+      if (value) selectPermissionOption(value);
+    });
+  });
+
+  // Footer buttons
+  document.getElementById("perm-close")!.addEventListener("click", closePermissionModal);
+  document.getElementById("perm-cancel")!.addEventListener("click", closePermissionModal);
+  document.getElementById("perm-confirm")!.addEventListener("click", () => {
+    void confirmPermissionSelection();
+  });
 }
 
-// ---- Open / Close ------------------------------------------------
+function selectPermissionOption(value: string): void {
+  pendingPermissionMode = value;
+  document.querySelectorAll<HTMLButtonElement>(".perm-option").forEach((btn) => {
+    btn.classList.toggle("selected", btn.getAttribute("data-value") === value);
+  });
+}
+
+// ---- Open / Close drawer ----------------------------------------
 
 async function openSidePanelImpl(info: AgentPanelInfo, agentHash: string): Promise<void> {
   buildPanel();
@@ -249,14 +337,12 @@ async function openSidePanelImpl(info: AgentPanelInfo, agentHash: string): Promi
   const dndToggle = document.getElementById("sp-toggle-dnd") as HTMLInputElement;
   dndToggle.checked = info.is_dnd;
 
-  const permSelect = document.getElementById("sp-permission-select") as HTMLSelectElement;
-  permSelect.value = PERMISSION_OPTIONS.some((o) => o.value === info.permission_mode)
-    ? info.permission_mode
-    : "balanced";
+  // Update permission level label in drawer
+  updatePermLabel(info.permission_mode);
 
   currentAgentHash = agentHash;
 
-  // Show
+  // Show drawer
   overlay.classList.add("open");
   panel.classList.add("open");
   isPanelOpen = true;
@@ -264,11 +350,21 @@ async function openSidePanelImpl(info: AgentPanelInfo, agentHash: string): Promi
   // Focus alias input for quick editing
   aliasInput.focus();
 
-  // Load apps from Engine → Phase 2C
+  // Load apps from Engine
   void loadApps(agentHash);
 }
 
+function updatePermLabel(mode: string): void {
+  const el = document.getElementById("sp-perm-current");
+  if (el) el.textContent = PERMISSION_LABEL[mode] ?? mode;
+}
+
 function closeSidePanel(): void {
+  // If the permission modal is open, close that first
+  if (isPermModalOpen) {
+    closePermissionModal();
+    return;
+  }
   const overlay = document.getElementById(OVERLAY_ID);
   const panel = document.getElementById(PANEL_ID);
   if (overlay) overlay.classList.remove("open");
@@ -277,7 +373,71 @@ function closeSidePanel(): void {
   currentAgentHash = null;
 }
 
-// ---- App list (Phase 2C) ----------------------------------------
+// ---- Open / Close permission modal ------------------------------
+
+function openPermissionModal(): void {
+  if (!currentAgentHash) return;
+  buildPermissionModal();
+
+  const overlay = document.getElementById(PERM_OVERLAY_ID)!;
+  const modal = document.getElementById(PERM_MODAL_ID)!;
+
+  // Determine current value: read from drawer label, fallback to balanced
+  const currentLabelEl = document.getElementById("sp-perm-current");
+  let currentValue = "balanced";
+  if (currentLabelEl?.textContent) {
+    const match = PERMISSION_OPTIONS.find(
+      (o) => o.label === currentLabelEl.textContent,
+    );
+    if (match) currentValue = match.value;
+  }
+  pendingPermissionMode = currentValue;
+  selectPermissionOption(currentValue);
+
+  overlay.classList.add("open");
+  // Defer to next frame for transition
+  requestAnimationFrame(() => modal.classList.add("open"));
+  isPermModalOpen = true;
+}
+
+function closePermissionModal(): void {
+  const overlay = document.getElementById(PERM_OVERLAY_ID);
+  const modal = document.getElementById(PERM_MODAL_ID);
+  if (modal) modal.classList.remove("open");
+  if (overlay) {
+    // Wait for transition before hiding pointer events
+    setTimeout(() => {
+      if (!isPermModalOpen) overlay.classList.remove("open");
+    }, 180);
+  }
+  isPermModalOpen = false;
+  pendingPermissionMode = null;
+}
+
+async function confirmPermissionSelection(): Promise<void> {
+  if (!currentAgentHash || !pendingPermissionMode) {
+    closePermissionModal();
+    return;
+  }
+  const value = pendingPermissionMode;
+  closePermissionModal();
+  // Update the drawer's label immediately for responsiveness
+  updatePermLabel(value);
+  await setPermissionModeAndSync(value);
+}
+
+function handleEscKey(e: KeyboardEvent): void {
+  if (e.key !== "Escape") return;
+  if (isPermModalOpen) {
+    e.preventDefault();
+    closePermissionModal();
+  } else if (isPanelOpen) {
+    e.preventDefault();
+    closeSidePanel();
+  }
+}
+
+// ---- App list ----------------------------------------------------
 
 async function loadApps(agentHash: string): Promise<void> {
   const loadingEl = document.getElementById("sp-apps-loading");
@@ -330,7 +490,7 @@ async function openApp(appId: string): Promise<void> {
   }
 }
 
-// ---- API calls (Phase 0c + 2C sync) ----------------------------
+// ---- API calls ---------------------------------------------------
 
 async function saveAlias(alias: string): Promise<void> {
   if (!currentAgentHash) return;
@@ -426,7 +586,7 @@ async function openFileManager(): Promise<void> {
   }
 }
 
-// ---- Public API ---------------------------------------------------
+// ---- Public API --------------------------------------------------
 
 export async function openSidePanel(agentHash: string): Promise<void> {
   try {

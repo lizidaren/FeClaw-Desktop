@@ -9,7 +9,7 @@
 //! File system calls run inside `tokio::task::spawn_blocking` so we don't
 //! stall the async runtime on disk I/O.
 
-use crate::consent::OperationOutcome;
+use crate::consent::{Operation, OperationOutcome};
 use crate::file_bridge;
 use crate::AppState;
 use std::path::PathBuf;
@@ -84,7 +84,7 @@ pub async fn file_read(
 ) -> Result<String, String> {
     let outcome = {
         let mut guard = state.consent.lock().await;
-        guard.request_operation("read", &path).await
+        guard.request_operation(Operation::L1, &path).await
     };
     match outcome {
         OperationOutcome::Allow => {}
@@ -118,7 +118,7 @@ pub async fn file_write(
 ) -> Result<(), String> {
     let outcome = {
         let mut guard = state.consent.lock().await;
-        guard.request_operation("write", &path).await
+        guard.request_operation(Operation::L2, &path).await
     };
     match outcome {
         OperationOutcome::Allow => {}
@@ -155,7 +155,7 @@ pub async fn file_delete(
 ) -> Result<(), String> {
     let outcome = {
         let mut guard = state.consent.lock().await;
-        guard.request_operation("delete", &path).await
+        guard.request_operation(Operation::L3, &path).await
     };
     match outcome {
         OperationOutcome::Allow => {}

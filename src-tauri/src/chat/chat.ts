@@ -366,6 +366,11 @@ function finalizeStreaming(id: string, finalText?: string): void {
 // ---- Actions ----------------------------------------------------
 
 async function selectChat(agentHash: string): Promise<void> {
+  // If we're on Moments/FE Hub tab, switch back to chat tab first
+  if (store.currentTab !== "chat") {
+    switchTab("chat");
+  }
+
   // Save current draft before switching
   if (store.activeAgentHash) {
     const input = $<HTMLTextAreaElement>("input");
@@ -420,6 +425,11 @@ async function loadChatHistory(agentHash: string): Promise<void> {
 }
 
 async function selectGroup(groupId: string): Promise<void> {
+  // If we're on Moments/FE Hub tab, switch back to chat tab first
+  if (store.currentTab !== "chat") {
+    switchTab("chat");
+  }
+
   // Save current draft before switching
   if (store.activeAgentHash) {
     const input = $<HTMLTextAreaElement>("input");
@@ -658,20 +668,56 @@ function switchTab(tabId: "chat" | "moments" | "profile" | "settings" | "fehub")
   if (tabId === "settings") {
     void invoke("open_settings_window").catch((e) => console.error("open_settings:", e));
   } else if (tabId === "moments") {
-    hideActiveChat();
+    // Plaza: show "coming soon" placeholder in main area, keep contacts list visible
     hideFehubTab();
-    showMomentsFeed();
+    showPlaceholder("🌐", "广场", "功能开发中，敬请期待…");
   } else if (tabId === "fehub") {
-    hideActiveChat();
+    // FE Hub: show "coming soon" placeholder in main area, keep contacts list visible
     hideMomentsFeed();
-    showFehubTab();
+    showPlaceholder("🔧", "FE 中心", "功能开发中，敬请期待…");
   } else if (tabId === "chat") {
     hideMomentsFeed();
     hideFehubTab();
+    hidePlaceholder();
     if (store.activeAgentHash || store.activeGroupId) {
       showActiveChat();
+    } else {
+      // No active chat — show default empty state
+      const noChat = $<HTMLDivElement>("no-chat-state");
+      const activeChat = $<HTMLDivElement>("active-chat");
+      if (noChat) noChat.style.display = "";
+      if (activeChat) activeChat.style.display = "none";
     }
   }
+}
+
+// ---- Placeholder page (FE Hub / Plaza) ---------------------------
+
+function showPlaceholder(icon: string, title: string, subtitle: string): void {
+  const page = $<HTMLDivElement>("placeholder-page");
+  const iconEl = $<HTMLDivElement>("placeholder-icon");
+  const titleEl = $<HTMLDivElement>("placeholder-title");
+  const subtitleEl = $<HTMLDivElement>("placeholder-subtitle");
+  if (!page || !iconEl || !titleEl || !subtitleEl) return;
+
+  iconEl.textContent = icon;
+  titleEl.textContent = title;
+  subtitleEl.textContent = subtitle;
+
+  // Hide the chat window content; placeholder takes over
+  const noChat = $<HTMLDivElement>("no-chat-state");
+  const activeChat = $<HTMLDivElement>("active-chat");
+  if (noChat) noChat.style.display = "none";
+  if (activeChat) activeChat.style.display = "none";
+  page.style.display = "flex";
+}
+
+function hidePlaceholder(): void {
+  const page = $<HTMLDivElement>("placeholder-page");
+  if (page) page.style.display = "none";
+  // Restore no-chat-state so the chat panel isn't empty when no chat is selected
+  const noChat = $<HTMLDivElement>("no-chat-state");
+  if (noChat) noChat.style.display = "";
 }
 
 // ---- Show active chat panel -------------------------------------
@@ -1070,6 +1116,142 @@ function describeToolCall(data: unknown): string {
 
 // ---- Wire -------------------------------------------------------
 
+// ---- Plus button dropdown (WeChat-style) -----------------------
+//
+// Clicking the "+" button in the chat list panel shows a small
+// dropdown menu with two options:
+//   🤖 创建 AI 助理  → openCreateDialog() (default: classic agent)
+//   👥 发起群聊      → openCreateDialog() (group mode pre-selected
+//                     in the dialog if a pre-select API exists;
+//                     otherwise just opens the dialog)
+//
+// The dropdown is positioned just below the trigger button (flipped
+// above if there's no room below) and is appended to <body> to escape
+// any overflow:hidden containers. Clicking outside or pressing ESC
+// closes it.
+
+const PLUS_DROPDOWN_ID = "plus-dropdown";
+const PLUS_DROPDOWN_MARGIN = 8;
+const PLUS_DROPDOWN_GAP = 6;
+
+let activePlusDropdown: HTMLElement | null = null;
+let activePlusTrigger: HTMLElement | null = null;
+
+function showPlusDropdown(trigger: HTMLElement): void {
+  // Toggle behavior: if already open for this trigger, close it.
+  if (activePlusDropdown && activePlusTrigger === trigger) {
+    hidePlusDropdown();
+    return;
+  }
+  hidePlusDropdown();
+
+  const dropdown = document.createElement("div");
+  dropdown.id = PLUS_DROPDOWN_ID;
+  dropdown.className = "plus-dropdown open";
+  dropdown.setAttribute("role", "menu");
+  dropdown.setAttribute("aria-label", "新建聊天");
+
+  dropdown.innerHTML = `
+    <button type="button" class="plus-dropdown-item" data-action="agent" role="menuitem">
+      <span class="plus-dropdown-icon" aria-hidden="true">🤖</span>
+      <span class="plus-dropdown-text">创建 AI 助理</span>
+    </button>
+    <button type="button" class="plus-dropdown-item" data-action="group" role="menuitem">
+      <span class="plus-dropdown-icon" aria-hidden="true">👥</span>
+      <span class="plus-dropdown-text">发起群聊</span>
+    </button>
+  `;
+
+  document.body.appendChild(dropdown);
+
+  // Measure after insertion to know dropdown size.
+  const rect = trigger.getBoundingClientRect();
+  const ddRect = dropdown.getBoundingClientRect();
+
+  // Default: place below trigger, right edge aligned with trigger.
+  let top = rect.bottom + PLUS_DROPDOWN_GAP;
+  let left = rect.right - ddRect.width;
+
+  // Flip above if not enough room below.
+  if (top + ddRect.height > window.innerHeight - PLUS_DROPDOWN_MARGIN) {
+    top = rect.top - ddRect.height - PLUS_DROPDOWN_GAP;
+  }
+  // If flipping above also doesn't fit (very small viewport), clamp
+  // to the top edge so the dropdown remains visible.
+  if (top < PLUS_DROPDOWN_MARGIN) {
+    top = PLUS_DROPDOWN_MARGIN;
+  }
+
+  // Clamp horizontal position to viewport.
+  if (left < PLUS_DROPDOWN_MARGIN) {
+    left = PLUS_DROPDOWN_MARGIN;
+  }
+  if (left + ddRect.width > window.innerWidth - PLUS_DROPDOWN_MARGIN) {
+    left = window.innerWidth - ddRect.width - PLUS_DROPDOWN_MARGIN;
+  }
+
+  dropdown.style.top = `${top}px`;
+  dropdown.style.left = `${left}px`;
+
+  // Wire item clicks.
+  dropdown.querySelectorAll<HTMLElement>(".plus-dropdown-item").forEach((item) => {
+    item.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const action = item.dataset.action;
+      hidePlusDropdown();
+      // Both options open the create dialog. The dialog already
+      // supports radio-button type selection (classic / im / group).
+      if (action === "agent" || action === "group") {
+        openCreateDialog();
+      }
+    });
+  });
+
+  activePlusDropdown = dropdown;
+  activePlusTrigger = trigger;
+
+  // Defer attaching document-level listeners so the click that opened
+  // the dropdown doesn't immediately close it.
+  setTimeout(() => {
+    document.addEventListener("click", onPlusDocClick, true);
+    document.addEventListener("keydown", onPlusDocKey, true);
+    window.addEventListener("resize", hidePlusDropdown);
+    window.addEventListener("scroll", hidePlusDropdown, true);
+  }, 0);
+}
+
+function hidePlusDropdown(): void {
+  if (activePlusDropdown && activePlusDropdown.parentNode) {
+    activePlusDropdown.parentNode.removeChild(activePlusDropdown);
+  }
+  activePlusDropdown = null;
+  activePlusTrigger = null;
+  document.removeEventListener("click", onPlusDocClick, true);
+  document.removeEventListener("keydown", onPlusDocKey, true);
+  window.removeEventListener("resize", hidePlusDropdown);
+  window.removeEventListener("scroll", hidePlusDropdown, true);
+}
+
+function onPlusDocClick(ev: MouseEvent): void {
+  if (!activePlusDropdown) return;
+  const target = ev.target as Node | null;
+  // Close if click is outside both the dropdown and the trigger.
+  if (
+    target &&
+    !activePlusDropdown.contains(target) &&
+    activePlusTrigger !== target &&
+    !(activePlusTrigger && activePlusTrigger.contains(target))
+  ) {
+    hidePlusDropdown();
+  }
+}
+
+function onPlusDocKey(ev: KeyboardEvent): void {
+  if (ev.key === "Escape") {
+    hidePlusDropdown();
+  }
+}
+
 function wire(): void {
   // Set up the extended input box (file cards, attachment button, image paste)
   setupInputBox();
@@ -1163,11 +1345,12 @@ function wire(): void {
     send.addEventListener("click", () => void sendMessage());
   }
 
-  // New chat button → open create dialog
+  // New chat button → show dropdown with create options
   const newChat = $<HTMLButtonElement>("btn-new-chat");
   if (newChat) {
-    newChat.addEventListener("click", () => {
-      openCreateDialog();
+    newChat.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      showPlusDropdown(newChat);
     });
   }
 

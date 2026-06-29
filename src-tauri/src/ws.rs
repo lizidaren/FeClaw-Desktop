@@ -17,15 +17,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::chat::{ChatMessage, persist_and_emit};
-use crate::consent::{ConsentManager, Decision};
+use crate::consent::{ConsentManager, Decision, Operation, OperationOutcome};
 use crate::executor::CommandExecutor;
 use crate::file_bridge;
 use crate::ws_types::WsRequest;
 use crate::ws_types::{
     CommandExecPayload, CommandExecPayloadOut, CommandExecResponse, ConnectionStatus,
-    FileDeletePayload, FileReadPayload, FileReadResponse, FileReadResponsePayload,
+    ConsentDecision, ConsentResponse, FileDeletePayload, FileDeleteResponse,
+    FileDeleteResponsePayload, FileReadPayload, FileReadResponse, FileReadResponsePayload,
     FileWritePayload, FileWriteResponse, FileWriteResponsePayload, NotificationPayload,
-    
 };
 use tauri::Emitter;
 
@@ -233,14 +233,13 @@ impl WsClient {
     }
 
     async fn run_inner(&mut self) -> Result<()> {
+        // IMPORTANT: 先连接再 take receiver。如果 connect_tls 失败返回 Err，
+        // receiver 不会被丢掉，后续重试还能用——否则 ws_outgoing 发送端永久死亡。
+        let mut ws = Self::connect_tls(&self.url, &self.token).await?;
         let mut outgoing_rx = self
             .outgoing_rx
             .take()
             .ok_or_else(|| anyhow!("ws inner loop started without outgoing_rx"))?;
-
-        // Same logic as the public `connect_tls` helper; kept inline here so
-        // the failure is reported in the context of the reconnect loop.
-        let mut ws = Self::connect_tls(&self.url, &self.token).await?;
         self.set_status(ConnectionStatus::Connected).await;
         tracing::info!("ws connected to {}", self.url);
         *self.last_pong_at.lock().unwrap() = Some(Instant::now());
@@ -358,7 +357,7 @@ impl WsClient {
                 self.handle_file_write(id, payload).await;
             }
             WsRequest::FileDelete { id, timestamp: _, payload } => {
-                self.handle_file_delete_not_implemented(id, payload);
+                self.handle_file_delete(id, payload).await;
             }
             WsRequest::Notification { payload, .. } => {
                 self.show_native_notification(&payload);
@@ -413,13 +412,82 @@ impl WsClient {
                     }
                 }
             }
-            WsRequest::FileOperationRequest { op_id, operation, path, level, reason, timestamp } => {
-                tracing::info!(
-                    op_id = op_id.as_str(),
-                    operation = operation.as_str(),
-                    path = path.as_str(),
-                    "file_operation_request received — consent prompts are P1.2"
-                );
+            WsRequest::FileOperationRequest { op_id, operation, path, level: _level, reason, timestamp: _timestamp } => {
+                // Inline consent channel: the engine is asking the desktop
+                // to surface a confirm dialog for a *future* file operation.
+                // The actual I/O will arrive later as a separate
+                // `file_read_request` / `file_write_request` /
+                // `file_delete_request` and is gated on its own. Here we
+                // show the preview dialog and report the decision back
+                // over the WS as a `consent_response` envelope.
+                //
+                // We spawn the dialog so a slow / absent user doesn't
+                // stall the WS read loop (the 30s heartbeat would fire
+                // and drop the connection).
+                let consent = self.consent.clone();
+                let outgoing_tx = self.outgoing_tx.clone();
+                let op_id_for_task = op_id.clone();
+                let operation_for_task = operation.clone();
+                let path_for_task = path.clone();
+                let reason_for_task = reason.clone();
+                async_runtime::spawn(async move {
+                    // Map the wire-format operation string to the typed
+                    // `Operation` enum. Unknown verbs are conservatively
+                    // treated as L3 — better to pop a confirmation dialog
+                    // for a typo'd "delte" than to silently allow.
+                    let op = match operation_for_task.as_str() {
+                        "read" => Operation::L1,
+                        "write" => Operation::L2,
+                        "delete" => Operation::L3,
+                        _ => Operation::L3,
+                    };
+                    let outcome = {
+                        let mut guard = consent.lock().await;
+                        guard.request_operation(op, &path_for_task).await
+                    };
+                    let (decision_out, reason_out) = match outcome {
+                        OperationOutcome::Allow => (ConsentDecision::Allow, None),
+                        OperationOutcome::Timeout => (
+                            ConsentDecision::Deny,
+                            Some("consent dialog timed out".to_string()),
+                        ),
+                        OperationOutcome::Denied => (
+                            ConsentDecision::Deny,
+                            Some(
+                                reason_for_task
+                                    .unwrap_or_else(|| "denied by user".to_string()),
+                            ),
+                        ),
+                    };
+                    tracing::info!(
+                        op_id = op_id_for_task.as_str(),
+                        operation = operation_for_task.as_str(),
+                        path = path_for_task.as_str(),
+                        ?decision_out,
+                        "file_operation_request consent decision"
+                    );
+                    let resp = ConsentResponse {
+                        id: op_id_for_task.clone(),
+                        decision: decision_out,
+                        reason: reason_out,
+                    };
+                    let mut value = serde_json::to_value(&resp).unwrap_or_else(|_| {
+                        serde_json::json!({
+                            "id": op_id_for_task,
+                            "decision": "deny",
+                            "reason": "serialize failed",
+                        })
+                    });
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert(
+                            "type".to_string(),
+                            serde_json::Value::String("consent_response".to_string()),
+                        );
+                    }
+                    if let Ok(s) = serde_json::to_string(&value) {
+                        let _ = outgoing_tx.send(s);
+                    }
+                });
             }
             WsRequest::GroupMessage { group_id, message } => {
                 tracing::info!(
@@ -508,6 +576,33 @@ impl WsClient {
             payload.path
         );
         let ts = crate::ws_types::current_timestamp();
+
+        // Consent gate (L1: silent read). `request_operation` short-circuits
+        // to `Allow` for reads today, but going through the same code path
+        // means any future policy change (audit, allow-list, etc.) applies
+        // uniformly to file ops.
+        {
+            let mut guard = self.consent.lock().await;
+            let outcome = guard.request_operation(Operation::L1, &payload.path).await;
+            if !outcome.is_allowed() {
+                let reason = match outcome {
+                    OperationOutcome::Denied => "denied by user",
+                    OperationOutcome::Timeout => "consent dialog timed out",
+                    OperationOutcome::Allow => "allowed",
+                };
+                tracing::info!("file_read denied (id={id}): {reason}");
+                let resp = FileReadResponse {
+                    id,
+                    status: "error".to_string(),
+                    timestamp: Some(ts),
+                    payload: FileReadResponsePayload {
+                        content: None,
+                        error: Some(format!("file read not permitted: {reason}")),
+                    },
+                };
+                return self.send_file_response(&resp, "file_read_response");
+            }
+        }
 
         // Resolve the VFS path → local path. The bridge enforces the
         // `/mnt/desktop/` prefix and blocks `..` traversal, so any escape
@@ -611,6 +706,34 @@ impl WsClient {
             payload.content.len()
         );
         let ts = crate::ws_types::current_timestamp();
+
+        // Consent gate (L2: write — info dialog, Yes/No). Pops a native
+        // dialog so the user can deny the operation before any bytes hit
+        // disk. Mirrors the `request()` flow used by `spawn_command_exec`.
+        {
+            let mut guard = self.consent.lock().await;
+            let outcome = guard.request_operation(Operation::L2, &payload.path).await;
+            if !outcome.is_allowed() {
+                let reason = match outcome {
+                    OperationOutcome::Denied => "denied by user",
+                    OperationOutcome::Timeout => "consent dialog timed out",
+                    OperationOutcome::Allow => "allowed",
+                };
+                tracing::info!("file_write denied (id={id}): {reason}");
+                let resp = FileWriteResponse {
+                    id,
+                    status: "error".to_string(),
+                    timestamp: Some(ts),
+                    payload: FileWriteResponsePayload {
+                        success: false,
+                        error: Some(format!("file write not permitted: {reason}")),
+                        content_length: None,
+                        hash: None,
+                    },
+                };
+                return self.send_file_response(&resp, "file_write_response");
+            }
+        }
 
         // Resolve the VFS path → local path.
         let resolved = match file_bridge::resolve_desktop_path(&payload.path) {
@@ -722,19 +845,92 @@ impl WsClient {
         self.send_file_response(&resp, "file_write_response");
     }
 
-    fn handle_file_delete_not_implemented(&self, id: String, payload: FileDeletePayload) {
+    async fn handle_file_delete(&self, id: String, payload: FileDeletePayload) {
         tracing::info!(
-            "file_delete_request received but file bridge is V2 (id={id}, path={})",
+            "file_delete_request id={id} path={}",
             payload.path
         );
         let ts = crate::ws_types::current_timestamp();
-        self.send_json(&serde_json::json!({
-            "type": "file_delete_response",
-            "id": id,
-            "status": "error",
-            "timestamp": ts,
-            "payload": { "error": "file bridge not implemented in MVP" },
-        }));
+
+        // Consent gate (L3: delete — warning dialog, Yes/No). The dialog
+        // explicitly warns that the operation is permanent; we treat any
+        // non-Allow outcome (Denied / Timeout) as a hard stop.
+        {
+            let mut guard = self.consent.lock().await;
+            let outcome = guard.request_operation(Operation::L3, &payload.path).await;
+            if !outcome.is_allowed() {
+                let reason = match outcome {
+                    OperationOutcome::Denied => "denied by user",
+                    OperationOutcome::Timeout => "consent dialog timed out",
+                    OperationOutcome::Allow => "allowed",
+                };
+                tracing::info!("file_delete denied (id={id}): {reason}");
+                let resp = FileDeleteResponse {
+                    id,
+                    status: "error".to_string(),
+                    timestamp: Some(ts),
+                    payload: FileDeleteResponsePayload {
+                        error: Some(format!("file delete not permitted: {reason}")),
+                    },
+                };
+                return self.send_file_response(&resp, "file_delete_response");
+            }
+        }
+
+        // Resolve the VFS path → local path. Re-uses the same sandboxing
+        // rules as read/write (`/mnt/desktop/...`, no `..` traversal).
+        let resolved = match file_bridge::resolve_desktop_path(&payload.path) {
+            Ok(p) => p,
+            Err(e) => {
+                let resp = FileDeleteResponse {
+                    id,
+                    status: "error".to_string(),
+                    timestamp: Some(ts),
+                    payload: FileDeleteResponsePayload {
+                        error: Some(format!("invalid path: {e}")),
+                    },
+                };
+                return self.send_file_response(&resp, "file_delete_response");
+            }
+        };
+
+        // Delete on a blocking task so a slow disk / AV scan can't stall
+        // the WS run loop.
+        let path_for_err = resolved.clone();
+        let result = async_runtime::spawn_blocking(move || -> Result<()> {
+            std::fs::remove_file(&resolved)
+                .map_err(|e| anyhow!("delete {}: {e}", resolved.display()))
+        })
+        .await;
+
+        let resp = match result {
+            Ok(Ok(())) => FileDeleteResponse {
+                id,
+                status: "ok".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileDeleteResponsePayload { error: None },
+            },
+            Ok(Err(e)) => FileDeleteResponse {
+                id,
+                status: "error".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileDeleteResponsePayload {
+                    error: Some(format!("{e}")),
+                },
+            },
+            Err(e) => FileDeleteResponse {
+                id,
+                status: "error".to_string(),
+                timestamp: Some(crate::ws_types::current_timestamp()),
+                payload: FileDeleteResponsePayload {
+                    error: Some(format!(
+                        "delete task panicked: {e} (path={})",
+                        path_for_err.display()
+                    )),
+                },
+            },
+        };
+        self.send_file_response(&resp, "file_delete_response");
     }
 
     fn show_native_notification(&self, payload: &NotificationPayload) {

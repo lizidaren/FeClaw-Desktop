@@ -289,7 +289,29 @@ pub fn run() {
                 // auto-save), so we must check existence BEFORE calling load().
                 let is_first = !crate::config::Config::config_path().exists();
                 let _ = crate::config::Config::load(); // ensure default config exists
+
+                // 同步注册 AppState，防止 Tauri 命令在异步 startup 完成前竞态
+                // 命令使用 State<AppState> 时，必须在 .setup() 闭包内同步调用 .manage()
+                let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMsg>();
+                let cancel_token = Arc::new(AtomicBool::new(false));
+                let (status_tx, status_rx) = mpsc::channel(32);
+                let consent = Arc::new(Mutex::new(ConsentManager::new()));
+                let executor = Arc::new(CommandExecutor::new());
+                let shared_config = Arc::new(RwLock::new(Config::load()));
+                app.manage(AppState {
+                    config: shared_config.clone(),
+                    status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
+                    control_tx: control_tx.clone(),
+                    cancel_token: cancel_token.clone(),
+                    consent: consent.clone(),
+                    ws_outgoing: Arc::new(RwLock::new(None)),
+                    engine_running: Arc::new(RwLock::new(false)),
+                });
+
                 tauri::async_runtime::spawn(async move {
+                    // 填充 consent（需 async）
+                    consent.lock().await.load_trusted();
+
                     if is_first {
                         if let Err(e) = welcome::open_welcome_window(handle.clone()).await {
                             tracing::warn!("failed to open welcome window on first launch: {e}");
@@ -297,7 +319,17 @@ pub fn run() {
                         return;
                     }
                     let handle_for_pending = handle.clone();
-                    let result = startup(handle).await;
+                    let result = startup(
+                        handle,
+                        control_tx,
+                        control_rx,
+                        cancel_token,
+                        status_tx,
+                        status_rx,
+                        consent,
+                        executor,
+                        shared_config,
+                    ).await;
                     match result {
                         Err(e) => {
                             tracing::warn!("startup failed: {e}; opening welcome window");
@@ -362,7 +394,17 @@ pub fn run() {
     });
 }
 
-async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
+async fn startup(
+    app: tauri::AppHandle,
+    control_tx: mpsc::UnboundedSender<ControlMsg>,
+    mut control_rx: mpsc::UnboundedReceiver<ControlMsg>,
+    cancel_token: Arc<AtomicBool>,
+    status_tx: mpsc::Sender<ConnectionStatus>,
+    mut status_rx: mpsc::Receiver<ConnectionStatus>,
+    consent: Arc<Mutex<ConsentManager>>,
+    executor: Arc<CommandExecutor>,
+    shared_config: Arc<RwLock<Config>>,
+) -> Result<String, StartupError> {
     // 1. Load config.
     let mut config = Config::load();
     tracing::info!(
@@ -376,31 +418,15 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
             .ok_or(StartupError::NeedsLogin)?;
         tracing::info!("cloud mode: using stored cloud_token");
 
-        let (control_tx, mut control_rx) = mpsc::unbounded_channel::<ControlMsg>();
-        let cancel_token = Arc::new(AtomicBool::new(false));
-        let (status_tx, mut status_rx) = mpsc::channel(32);
-        let consent = Arc::new(Mutex::new(ConsentManager::new()));
-        consent.lock().await.load_trusted();
-        let executor = Arc::new(CommandExecutor::new());
-        let shared_config = Arc::new(RwLock::new(config.clone()));
-        let state = AppState {
-            config: shared_config.clone(),
-            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
-            control_tx: control_tx.clone(),
-            cancel_token: cancel_token.clone(),
-            consent: consent.clone(),
-            ws_outgoing: Arc::new(RwLock::new(None)),
-            engine_running: Arc::new(RwLock::new(false)),
-        };
-        app.manage(state);
+        // AppState、control_tx、consent、executor、shared_config 已在 .setup() 中同步注册
 
         // Wire WS client (cloud).
         let ws = WsClient::new(
             config.ws_url(),
             token.clone(),
             status_tx.clone(),
-            consent,
-            executor,
+            consent.clone(),
+            executor.clone(),
             cancel_token.clone(),
             Some(app.clone()),
         );
@@ -510,29 +536,9 @@ async fn startup(app: tauri::AppHandle) -> Result<String, StartupError> {
     let token = auth.login_or_load(stdout_buffer).await?;
     tracing::info!("authenticated (token length={})", token.len());
 
-    // 5. Register AppState (must exist before tray builder reads it).
-    let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMsg>();
-    let cancel_token = Arc::new(AtomicBool::new(false));
-    let (status_tx, mut status_rx) = mpsc::channel(32);
-    // Consent is created here (before AppState) so we can hand the same Arc
-    // to both AppState and WsClient — both the Tauri commands and the WS
-    // file handlers must share one consent gate.
-    let consent = Arc::new(Mutex::new(ConsentManager::new()));
-    consent.lock().await.load_trusted();
-    let executor = Arc::new(CommandExecutor::new());
-    let shared_config = Arc::new(RwLock::new(config.clone()));
-    let state = AppState {
-        config: shared_config.clone(),
-        status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
-        control_tx: control_tx.clone(),
-        cancel_token: cancel_token.clone(),
-        consent: consent.clone(),
-        ws_outgoing: Arc::new(RwLock::new(None)),
-        engine_running: Arc::new(RwLock::new(false)),
-    };
+    // 5. AppState、control_tx、consent、executor、shared_config 已在 .setup() 中同步注册
     engine.set_ui_tx(control_tx.clone());
     engine.set_cancel_token(cancel_token.clone());
-    app.manage(state);
 
     // 6. Start the engine now that AppState exists. We hand `engine.start()`
     //    a clone of `status_tx` so the local-mode `WsClient` (constructed

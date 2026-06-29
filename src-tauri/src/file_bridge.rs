@@ -84,6 +84,13 @@ pub async fn file_write(vfs_path: &str, content: &str) -> Result<()> {
 }
 
 /// Delete the file at the given VFS path.
+///
+/// NOTE: Consent is handled at the WS layer (`WsClient::handle_file_delete`
+/// in `ws.rs`), which gates the call with `ConsentManager::request_operation`
+/// at L3 (warning dialog, Yes/No). We deliberately do **not** prompt here
+/// so non-WS callers (tests, Tauri commands invoked directly from the
+/// frontend) can opt into their own policy instead of being forced through
+/// the Engine-driven flow.
 pub async fn file_delete(vfs_path: &str) -> Result<()> {
     let resolved = resolve_desktop_path(vfs_path)?;
     tokio::fs::remove_file(&resolved)
