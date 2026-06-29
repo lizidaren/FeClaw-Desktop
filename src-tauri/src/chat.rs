@@ -61,7 +61,7 @@ fn history_path() -> PathBuf {
 #[tauri::command]
 pub async fn get_chat_history() -> Result<ChatHistory, String> {
     let path = history_path();
-    let messages = match tokio::fs::read_to_string(&path).await {
+    let mut messages = match tokio::fs::read_to_string(&path).await {
         Ok(content) => match serde_json::from_str::<Vec<ChatMessage>>(&content) {
             Ok(list) => list,
             Err(e) => {
@@ -72,6 +72,12 @@ pub async fn get_chat_history() -> Result<ChatHistory, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(format!("读取聊天历史失败：{e}")),
     };
+    // Phase 5 / 8.1 A — sort ASC by created_at defensively. The DB query
+    // in db.rs::get_chat_history_by_agent already orders, but this JSON
+    // fallback has no ORDER BY and message ordering can drift if entries
+    // were appended out of order. The frontend sorts again as belt-and-
+    // suspenders, but doing it here too saves one allocation per render.
+    messages.sort_by_key(|m| m.created_at);
     Ok(ChatHistory {
         messages,
         path: path.display().to_string(),
@@ -304,6 +310,45 @@ pub async fn open_chat_window<R: tauri::Runtime>(
         .min_inner_size(640.0, 480.0)
         .resizable(true)
         .center()
+        // Phase 2 / D5 A: intercept `target=_blank` clicks (e.g. from
+        // rendered markdown links) and open them as new Tauri windows
+        // rather than spawning an OS browser. We still validate the URL
+        // scheme — anything other than http/https is denied.
+        .on_new_window_request(|app, request| {
+            let url_str = request.url().to_string();
+            // Only allow http(s) — block file://, javascript:, data:,
+            // and anything else that could reach local resources.
+            let allowed = url_str.starts_with("http://") || url_str.starts_with("https://");
+            if !allowed {
+                tracing::warn!(
+                    "blocked on_new_window_request for non-http url: {}",
+                    url_str
+                );
+                return;
+            }
+            // Use a stable-ish label so re-clicking the same link doesn't
+            // pile up windows. For unique URLs the OS label rules will
+            // dedupe by appending an index on the Rust side.
+            let label = format!(
+                "ext-{}",
+                url_str
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric())
+                    .take(32)
+                    .collect::<String>()
+            );
+            if let Err(e) = tauri::WebviewWindowBuilder::new(
+                app,
+                &label,
+                tauri::WebviewUrl::External(request.url().clone()),
+            )
+            .title("外部链接")
+            .inner_size(900.0, 640.0)
+            .build()
+            {
+                tracing::warn!("failed to open external window: {e:#}");
+            }
+        })
         .build()
         .map_err(|e| format!("创建聊天窗口失败：{e}"))?;
     Ok(())

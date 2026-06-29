@@ -92,8 +92,6 @@ pub enum ControlMsg {
     /// (For MVP the WS client already auto-reconnects; this is exposed
     /// via the tray menu for manual intervention.)
     Reconnect,
-    /// Persist a mode change (`~/.feclaw/config.toml`).
-    SetMode(Mode),
     /// Open the Settings window on the cloud tab and tell the UI to focus
     /// the login form. Emitted by `EngineManager::cloud_loop` whenever
     /// the cloud token is missing or rejected (4001/4002 close codes).
@@ -124,9 +122,10 @@ pub struct AppState {
     /// envelopes without holding the WS stream.
     pub ws_outgoing: Arc<RwLock<Option<mpsc::UnboundedSender<String>>>>,
     /// Handle to the running engine process (when in local mode). Stored
-    /// so chat-side consent/file ops can pause/resume engine work.
-    #[allow(dead_code)]
-    pub engine_running: Arc<RwLock<bool>>,
+    /// so the watchdog task in lib.rs can poll `is_running()` and sync
+    /// the tray icon + ws-status event when the engine exits.
+    /// `None` in cloud mode (no local engine process exists).
+    pub engine: Arc<Mutex<Option<EngineManager>>>,
 }
 
 /// Tauri application entry point.
@@ -144,6 +143,7 @@ pub fn run() {
                 settings::get_cloud_session,
                 settings::cloud_login,
                 settings::cloud_disconnect,
+                settings::refresh_cloud_token,
                 settings::set_theme,
                 settings::get_theme,
                 settings::get_app_version,
@@ -305,7 +305,7 @@ pub fn run() {
                     cancel_token: cancel_token.clone(),
                     consent: consent.clone(),
                     ws_outgoing: Arc::new(RwLock::new(None)),
-                    engine_running: Arc::new(RwLock::new(false)),
+                    engine: Arc::new(Mutex::new(None)),
                 });
 
                 tauri::async_runtime::spawn(async move {
@@ -490,20 +490,11 @@ async fn startup(
                         tracing::info!("control: reconnect requested");
                         // cancel + WS will auto-reconnect in WsClient
                     }
-                    ControlMsg::SetMode(mode) => {
-                        tracing::info!("control: set mode {mode:?}");
-                        let state = app_for_control.state::<AppState>();
-                        let mut cfg = state.config.write().await;
-                        cfg.mode = mode;
-                        if let Err(e) = cfg.save() {
-                            tracing::warn!("failed to persist config: {e:#}");
-                        }
-                    }
                     ControlMsg::ShowCloudLogin => {
                         tracing::info!("control: show cloud login requested");
-                        if let Err(e) = settings::open_settings_window(app_for_control.clone()).await {
-                            tracing::error!("open settings window: {e}");
-                        }
+                        // Settings is now an embedded iframe inside the chat
+                        // window (Phase 5 / 1.2 B). We just emit the navigation
+                        // event and let the iframe's listener switch tabs.
                         if let Err(e) = app_for_control.emit("navigate-settings", "cloud") {
                             tracing::warn!("emit navigate-settings: {e}");
                         }
@@ -559,6 +550,42 @@ async fn startup(
     if port != 0 {
         engine.wait_healthy().await?;
         tracing::info!("engine ready on port {port}");
+        // Clone the status_tx so the watchdog can publish a Disconnected
+        // update when the local engine process dies (Phase 5 / 8.2 A).
+        // WsClient also gets a clone below; mpsc::Sender::clone is cheap.
+        let watchdog_status_tx = status_tx.clone();
+        // Hand the running engine to AppState so the watchdog task can
+        // poll is_running() and sync the tray icon when the engine exits.
+        {
+            let state = app.state::<AppState>();
+            *state.engine.lock().await = Some(engine);
+        }
+        // Phase 5 / 8.2 A — engine-exit watchdog. Polls every 2 s; when
+        // the local engine process dies unexpectedly we synthesise a
+        // Disconnected status update so the tray icon and the chat
+        // conn-dot both reflect reality without waiting for the WS
+        // client's own retry loop.
+        let watchdog_app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            use std::time::Duration;
+            loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let mut guard = watchdog_app.state::<AppState>().engine.lock().await;
+                let Some(eng) = guard.as_mut() else {
+                    // Engine was cleared (mode switch / shutdown) — stop watching.
+                    break;
+                };
+                if !eng.is_running() {
+                    tracing::warn!("engine watchdog: process exited; emitting Disconnected");
+                    drop(guard);
+                    let _ = watchdog_status_tx.send(ConnectionStatus::Disconnected).await;
+                    // Clear the handle so future polls short-circuit.
+                    let mut g = watchdog_app.state::<AppState>().engine.lock().await;
+                    *g = None;
+                    break;
+                }
+            }
+        });
     }
 
     // 7. Build system tray.
@@ -619,20 +646,11 @@ async fn startup(
                     tracing::info!("control: reconnect requested");
                     cancel_token_for_pump.store(true, Ordering::SeqCst);
                 }
-                ControlMsg::SetMode(mode) => {
-                    tracing::info!("control: set mode {mode:?}");
-                    let state = app_for_control.state::<AppState>();
-                    let mut cfg = state.config.write().await;
-                    cfg.mode = mode;
-                    if let Err(e) = cfg.save() {
-                        tracing::warn!("failed to persist config: {e:#}");
-                    }
-                }
                 ControlMsg::ShowCloudLogin => {
                     tracing::info!("control: show cloud login requested");
-                    if let Err(e) = settings::open_settings_window(app_for_control.clone()).await {
-                        tracing::error!("open settings window: {e}");
-                    }
+                    // Settings is now an embedded iframe inside the chat
+                    // window (Phase 5 / 1.2 B). We just emit the navigation
+                    // event and let the iframe's listener switch tabs.
                     if let Err(e) = app_for_control.emit("navigate-settings", "cloud") {
                         tracing::warn!("emit navigate-settings: {e}");
                     }

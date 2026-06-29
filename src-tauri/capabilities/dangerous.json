@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dangerous",
+  "description": "Phase 3 / D7 C: dangerous commands. Each of these is gated by an in-app consent dialog (see consent.rs) and is intentionally listed in its own capability file so security audits can review them in one place. Add a window to `windows` only after a deliberate UX review.",
+  "windows": ["chat"],
+  "permissions": [
+    "delete_agent",
+    "file_delete",
+    "vfs_rm"
+  ]
+}

@@ -10,7 +10,7 @@
 
 // ---- Types ----------------------------------------------------
 
-export type TabId = "chat" | "moments" | "profile" | "settings" | "fehub";
+export type TabId = "chat" | "moments" | "settings" | "fehub";
 
 export type AgentInfo = {
   hash: string;
@@ -37,6 +37,8 @@ export type ChatMessage = {
   message_type?: string;
   created_at: number;
   synced?: boolean;
+  /** Last send error, if any. The UI uses this to render a retry button. */
+  error?: string;
   is_deleted?: boolean;
   timestamp?: string;
   agent?: string;
@@ -52,6 +54,7 @@ export type ChatItem = {
   agent_hash: string;
   name: string;
   avatar_letter: string;
+  avatar_url?: string | null;
   last_message: string;
   last_time: string;
   unread: boolean;
@@ -59,6 +62,11 @@ export type ChatItem = {
   // Group chat support
   is_group?: boolean;
   group_id?: string;
+  // Per-agent chrome (Phase 5 / 7.2 A — pin / dnd / online icons)
+  is_pinned?: boolean;
+  is_dnd?: boolean;
+  is_online?: boolean;
+  status?: "active" | "pending" | "offline" | string;
 };
 
 export type GroupInfo = {
@@ -162,10 +170,15 @@ class Store {
       agent_hash: a.hash,
       name: a.name,
       avatar_letter: a.name.charAt(0).toUpperCase(),
+      avatar_url: a.avatar_url ?? null,
       last_message: "",
       last_time: "",
       unread: false,
       active: a.hash === this.activeAgentHash,
+      is_pinned: false,
+      is_dnd: false,
+      is_online: !!a.is_online,
+      status: a.status ?? (a.is_online ? "active" : "offline"),
     }));
     this.notify();
   }
@@ -209,6 +222,22 @@ class Store {
   appendMessage(msg: ChatMessage): void {
     this.messages.push(msg);
     this.notify();
+  }
+
+  /**
+   * Patch a message in place by `id`. Only the supplied keys are updated.
+   * Used by the send-failure flow (2.3 A) to mark the original optimistic
+   * message as `synced:false` + `error`, and by retry (2.1 B) to clear
+   * `error` and re-send without duplicating the bubble.
+   */
+  updateMessage(id: string, patch: Partial<ChatMessage>): void {
+    let changed = false;
+    this.messages = this.messages.map((m) => {
+      if (m.id !== id) return m;
+      changed = true;
+      return { ...m, ...patch };
+    });
+    if (changed) this.notify();
   }
 
   setDraft(text: string): void {

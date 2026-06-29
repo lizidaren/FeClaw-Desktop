@@ -153,35 +153,6 @@ pub async fn save_settings(settings: HashMap<String, String>) -> Result<(), Stri
     Ok(())
 }
 
-/// Open the Settings window. If the window is already open it is focused
-/// instead of spawned a second time.
-#[tauri::command]
-pub async fn open_settings_window<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-) -> Result<(), String> {
-    use tauri::Manager;
-    use tauri::WebviewUrl;
-    use tauri::WebviewWindowBuilder;
-
-    const WIN: &str = "settings";
-
-    if let Some(existing) = app.get_webview_window(WIN) {
-        let _ = existing.unminimize();
-        let _ = existing.set_focus();
-        return Ok(());
-    }
-
-    WebviewWindowBuilder::new(&app, WIN, WebviewUrl::App("settings/index.html".into()))
-        .title("FeClaw Desktop 设置")
-        .inner_size(640.0, 720.0)
-        .min_inner_size(520.0, 480.0)
-        .resizable(true)
-        .center()
-        .build()
-        .map_err(|e| format!("创建设置窗口失败：{e}"))?;
-    Ok(())
-}
-
 /// Probe a cloud server URL with an optional bearer token. Returns `Ok(true)`
 /// for any 2xx/3xx response, `Ok(false)` for 4xx/5xx, and an `Err` for
 /// network-level failures (DNS, TCP, TLS, timeout).
@@ -397,11 +368,14 @@ pub async fn cloud_login(
     // ---- Persist to config.toml -------------------------------------
     // Load the existing config so we don't clobber unrelated fields
     // (port, host, ws_path, etc.). The password is never written.
+    // Both tokens are persisted: the Platform JWT so the WS reconnect path
+    // can refresh without re-prompting, and the FeClaw JWT for actual use.
     let mut cfg = Config::load();
     cfg.cloud_url = Some(url_trimmed.trim_end_matches('/').to_string());
     cfg.cloud_login_url = Some(login_base.trim_end_matches('/').to_string());
     cfg.cloud_username = Some(username_owned);
     cfg.cloud_token = Some(feclaw_token.clone());
+    cfg.platform_token = Some(platform_token);
     cfg.mode = crate::config::Mode::Cloud;
     cfg.save().map_err(|e| format!("保存配置失败：{e:#}"))?;
 
@@ -416,6 +390,7 @@ pub async fn cloud_login(
 pub async fn cloud_disconnect() -> Result<(), String> {
     let mut cfg = Config::load();
     cfg.cloud_token = None;
+    cfg.platform_token = None;
     cfg.cloud_username = None;
     // Keep cloud_url AND cloud_login_url so the user doesn't have to retype
     // either on next sign-in.
@@ -423,6 +398,146 @@ pub async fn cloud_disconnect() -> Result<(), String> {
     cfg.save().map_err(|e| format!("保存配置失败：{e:#}"))?;
     tracing::info!("cloud session disconnected");
     Ok(())
+}
+
+/// Refresh the FeClaw JWT by asking Platform for a new token and re-exchanging.
+///
+/// Path A refresh flow:
+///   1. POST `{login_url}/api/auth/refresh` with the stored Platform JWT → new Platform JWT.
+///   2. POST `{cloud_url}/api/desktop/auth_exchange` with the new Platform JWT → new FeClaw JWT.
+///   3. Persist both to `config.toml`.
+///
+/// Called by the WS reconnect path on auth-failure close codes (4001/4002/4003)
+/// before falling back to clearing the token and forcing a manual re-login.
+/// Also exposed as a Tauri command so the frontend can trigger a proactive
+/// refresh (e.g. before a long-running operation).
+///
+/// Errors are returned as user-facing Chinese strings so the UI can surface
+/// them directly. Returns the new FeClaw JWT on success.
+#[tauri::command]
+pub async fn refresh_cloud_token() -> Result<String, String> {
+    let cfg = Config::load();
+
+    // ---- Preconditions ------------------------------------------------
+    if cfg.mode != crate::config::Mode::Cloud {
+        return Err("当前不在云端模式".to_string());
+    }
+    let url = cfg
+        .cloud_url
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "cloud_url 未配置".to_string())?;
+    let login_base = cfg
+        .cloud_login_base_url()
+        .ok_or_else(|| "cloud_login_url 未配置".to_string())?;
+    let platform_token = cfg
+        .platform_token
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "未找到 Platform JWT，请重新登录".to_string())?;
+
+    let client = crate::http_client::http_client();
+
+    // ---- 1. Platform refresh ----------------------------------------
+    let refresh_endpoint = format!("{}/api/auth/refresh", login_base.trim_end_matches('/'));
+    tracing::info!("refreshing Platform JWT at {refresh_endpoint}");
+
+    let refresh_resp = client
+        .post(&refresh_endpoint)
+        .bearer_auth(platform_token)
+        .send()
+        .await
+        .map_err(|e| format!("刷新请求失败：{e}"))?;
+
+    let refresh_status = refresh_resp.status();
+    if !refresh_status.is_success() {
+        let body = refresh_resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "Platform refresh 失败 ({}): {}",
+            refresh_status,
+            format_login_error_body(&body)
+        ));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RefreshResponse {
+        #[serde(default, alias = "access_token")]
+        token: String,
+    }
+    let refresh_body: RefreshResponse = refresh_resp
+        .json()
+        .await
+        .map_err(|e| format!("解析 refresh 响应失败：{e}"))?;
+    let new_platform_token = refresh_body.token;
+    if new_platform_token.trim().is_empty() {
+        return Err("服务器响应中未找到新 token".to_string());
+    }
+
+    // ---- 2. Re-exchange at FeClaw -----------------------------------
+    let exchange_url = format!(
+        "{}/api/desktop/auth_exchange",
+        url.trim_end_matches('/')
+    );
+    tracing::info!("re-exchanging Platform JWT for FeClaw JWT at {exchange_url}");
+
+    let exchange_resp = client
+        .post(&exchange_url)
+        .json(&serde_json::json!({
+            "platform_token": &new_platform_token,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("兑换 FeClaw JWT 失败：{e}"))?;
+
+    let exchange_status = exchange_resp.status();
+    if !exchange_status.is_success() {
+        let body = exchange_resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "FeClaw auth_exchange 失败 ({}): {}",
+            exchange_status, body
+        ));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ExchangeResponse {
+        token: String,
+    }
+    let exchange_body: ExchangeResponse = exchange_resp
+        .json()
+        .await
+        .map_err(|e| format!("解析 FeClaw JWT 兑换响应失败：{e}"))?;
+
+    let new_feclaw_token = exchange_body.token;
+
+    // ---- 3. Persist --------------------------------------------------
+    let mut cfg = Config::load();
+    cfg.platform_token = Some(new_platform_token);
+    cfg.cloud_token = Some(new_feclaw_token.clone());
+    cfg.save().map_err(|e| format!("保存刷新后的 token 失败：{e:#}"))?;
+
+    tracing::info!(
+        "cloud token refresh succeeded; new feclaw token length={}",
+        new_feclaw_token.len()
+    );
+    Ok(new_feclaw_token)
+}
+
+/// Best-effort body parsing for non-JSON login error responses. Falls back to
+/// the raw text so the UI always has *something* to show.
+fn format_login_error_body(body: &str) -> String {
+    if body.is_empty() {
+        return "服务器未返回详细信息".to_string();
+    }
+    if let Ok(json) = serde_json::from_str::<Value>(body) {
+        if let Some(detail) = json
+            .get("detail")
+            .or_else(|| json.get("message"))
+            .and_then(|v| v.as_str())
+        {
+            return detail.to_string();
+        }
+    }
+    body.to_string()
 }
 
 /// Persist the user's theme preference to `~/.feclaw/config.toml`. The
@@ -476,4 +591,48 @@ fn format_login_error(status: u16, body: &str) -> String {
         body.to_string()
     };
     format!("登录失败 ({}): {}", status, detail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_rejects_local_mode() {
+        // refresh_cloud_token should bail out cleanly when we're in local
+        // mode (no cloud_url / platform_token to refresh).
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(refresh_cloud_token());
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        // Either "not in cloud mode" or "missing platform token" — both are
+        // valid reasons to refuse the refresh in a default-config environment.
+        assert!(
+            msg.contains("云端") || msg.contains("Platform") || msg.contains("cloud"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn format_login_error_body_extracts_detail() {
+        let body = r#"{"detail":"Invalid credentials"}"#;
+        assert_eq!(format_login_error_body(body), "Invalid credentials");
+    }
+
+    #[test]
+    fn format_login_error_body_falls_back_to_message() {
+        let body = r#"{"message":"nope"}"#;
+        assert_eq!(format_login_error_body(body), "nope");
+    }
+
+    #[test]
+    fn format_login_error_body_handles_empty() {
+        assert_eq!(format_login_error_body(""), "服务器未返回详细信息");
+    }
+
+    #[test]
+    fn format_login_error_body_handles_plain_text() {
+        // Non-JSON bodies should be passed through verbatim.
+        assert_eq!(format_login_error_body("upstream timeout"), "upstream timeout");
+    }
 }

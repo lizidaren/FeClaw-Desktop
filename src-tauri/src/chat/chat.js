@@ -112,21 +112,31 @@ function renderChatList(items) {
   list.innerHTML = "";
   for (const item of items) {
     const el = document.createElement("div");
-    el.className = "chat-item" + (item.active ? " active" : "");
+    el.className = "chat-item" + (item.active ? " active" : "") + (item.is_pinned ? " pinned" : "") + (item.is_dnd ? " dnd" : "");
     el.dataset.agentHash = item.agent_hash;
     el.setAttribute("role", "option");
     el.setAttribute("aria-selected", String(!!item.active));
     const avatarContent = item.avatar_url
         ? `<img class="avatar-img" src="${item.avatar_url}" alt="">`
         : item.avatar_letter;
+    // Phase 5 / 7.2 A — online dot overlays the avatar circle.
+    const onlineDot = !item.is_group && item.is_online
+        ? `<span class="chat-item-online-dot" aria-hidden="true"></span>`
+        : "";
+    // Phase 5 / 7.2 A — pin (📌) and DND (🔕) icons live in the meta column
+    // so the visual order matches WeChat: time on top, status icons below,
+    // unread badge at the bottom.
+    const pinIcon = item.is_pinned ? '<span class="chat-item-pin-icon" title="置顶" aria-hidden="true">📌</span>' : "";
+    const dndIcon = item.is_dnd ? '<span class="chat-item-dnd-icon" title="免打扰" aria-hidden="true">🔕</span>' : "";
     el.innerHTML = `
-      <div class="chat-item-avatar">${avatarContent}</div>
+      <div class="chat-item-avatar">${avatarContent}${onlineDot}</div>
       <div class="chat-item-info">
         <div class="chat-item-name">${escapeHtml(item.name)}${item.status === "pending" ? ' <span class="agent-pending-badge">继续配置 →</span>' : ""}</div>
         <div class="chat-item-preview">${escapeHtml(item.last_message)}</div>
       </div>
       <div class="chat-item-meta">
         ${item.last_time ? `<span class="chat-item-time">${item.last_time}</span>` : ""}
+        <span class="chat-item-icons">${pinIcon}${dndIcon}</span>
         ${item.unread ? '<span class="chat-item-badge"></span>' : ""}
       </div>
     `;
@@ -147,11 +157,62 @@ function renderMessages(messages) {
       </div>`;
     return;
   }
-  for (const msg of messages) {
+  // Phase 5 / 8.1 A — sort by created_at ASC defensively. The DB query
+  // already orders but JSON fallback (legacy get_chat_history) doesn't,
+  // and we want the day separator to be deterministic regardless.
+  const ordered = [...messages].sort((a, b) => {
+    const ta = typeof a.created_at === "number" ? a.created_at : 0;
+    const tb = typeof b.created_at === "number" ? b.created_at : 0;
+    return ta - tb;
+  });
+  // Phase 5 / 8.1 A — insert a date separator bubble between days so the
+  // user can scan history without staring at timestamps. Day boundary is
+  // local time (matches the timestamp rendered on each bubble).
+  let lastDayKey = null;
+  for (const msg of ordered) {
     if (msg.is_deleted) continue;
+    const dayKey = dayKeyOf(msg.created_at);
+    if (dayKey && dayKey !== lastDayKey) {
+      const sep = document.createElement("div");
+      sep.className = "day-separator";
+      sep.textContent = formatDayLabel(msg.created_at);
+      list.appendChild(sep);
+      lastDayKey = dayKey;
+    }
     renderMessageEl(list, msg);
   }
   scrollToBottom();
+}
+
+// YYYY-MM-DD key for the LOCAL timezone — used to compare consecutive
+// messages and decide when to drop a separator. Returns null if the
+// timestamp is missing / NaN so we never render a bogus separator.
+function dayKeyOf(ts) {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return null;
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Render a friendly label for the date. Phase 5 / 8.1 A.
+// Today / Yesterday are self-explanatory; anything older shows the date.
+function formatDayLabel(ts) {
+  const d = new Date(ts * 1000);
+  const today = new Date();
+  const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const diffDays = Math.round((startOfDay(today) - startOfDay(d)) / 86400000);
+  if (diffDays === 0) return "今天";
+  if (diffDays === 1) return "昨天";
+  if (diffDays === 2) return "前天";
+  if (diffDays > 2 && diffDays < 7) return `${diffDays} 天前`;
+  // Older: show MM-DD for current year, full date for previous years.
+  if (d.getFullYear() === today.getFullYear()) {
+    return `${d.getMonth() + 1}\u6708${d.getDate()}\u65E5`;
+  }
+  return `${d.getFullYear()}\u5E74${d.getMonth() + 1}\u6708${d.getDate()}\u65E5`;
 }
 function renderMessageEl(parent, msg) {
   const wrap = document.createElement("div");
@@ -457,16 +518,31 @@ function switchTab(tabId) {
   // Sidebar — hide completely in settings/moments/fehub modes
   const chatList = $("chat-list-panel");
   if (chatList) {
-    chatList.style.display = (tabId === "chat" || tabId === "profile") ? "" : "none";
+    chatList.style.display = (tabId === "chat") ? "" : "none";
   }
   if (tabId === "settings") {
-    // Hide chat panel when in settings
+    // Settings is an embedded iframe (Phase 5 / 1.2 B). The settings iframe's
+    // listen("navigate-settings") handler is wired up in settings.ts.
+    // Hide chat panel when in settings.
     const noChat = $("no-chat-state");
     const activeChat = $("active-chat");
     if (noChat) noChat.style.display = "none";
     if (activeChat) activeChat.style.display = "none";
+  } else if (tabId === "moments") {
+    // Phase 5 / 1.1 B — render the moments feed instead of a placeholder.
+    if (typeof hideFehubTab === "function") hideFehubTab();
+    if (typeof hidePlaceholder === "function") hidePlaceholder();
+    if (typeof showMomentsFeed === "function") showMomentsFeed();
+  } else if (tabId === "fehub") {
+    // Phase 5 / 1.1 B — render the FeHub panel instead of a placeholder.
+    if (typeof hideMomentsFeed === "function") hideMomentsFeed();
+    if (typeof hidePlaceholder === "function") hidePlaceholder();
+    if (typeof showFehubTab === "function") showFehubTab();
   } else if (tabId === "chat") {
     // Restore chat panel visibility when switching back to chat
+    if (typeof hideMomentsFeed === "function") hideMomentsFeed();
+    if (typeof hideFehubTab === "function") hideFehubTab();
+    if (typeof hidePlaceholder === "function") hidePlaceholder();
     if (store.activeAgentHash) {
       showActiveChat();
     } else {

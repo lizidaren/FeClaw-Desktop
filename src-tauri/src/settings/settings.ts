@@ -70,6 +70,20 @@ function applyTheme(value: string | undefined): void {
     ? (value as Theme)
     : "system";
   document.body.dataset.theme = next;
+  // Notify parent chat window so it can update its data-theme attribute
+  // (Phase 5 / 7.1 A — live theme switching across the embedded iframe).
+  // Uses window.__TAURI__ because the iframe's bundle sets
+  // `withGlobalTauri: true` and the same object survives across reloads.
+  try {
+    const tauri = (window as unknown as {
+      __TAURI__?: { event?: { emit: (name: string, payload: unknown) => Promise<unknown> } };
+    }).__TAURI__;
+    if (tauri?.event?.emit) {
+      void tauri.event.emit("theme-changed", { theme: next }).catch(() => {});
+    }
+  } catch (_) {
+    /* not running inside Tauri — devtools only */
+  }
 }
 
 // Read the currently checked theme radio. Falls back to "system" when
@@ -373,6 +387,14 @@ async function cloudLogin(): Promise<void> {
 
 // ---- Cloud disconnect --------------------------------------------
 async function cloudDisconnect(): Promise<void> {
+  // Phase 1 / D1 A: confirm before tearing down the cloud session.
+  // Disconnecting also flips `mode` to Local, which only takes effect
+  // on the next app launch — call this out explicitly so the user
+  // doesn't think the button is broken.
+  const ok = window.confirm(
+    "切换 mode 将断开当前连接，下次启动生效。\n确定要继续吗？",
+  );
+  if (!ok) return;
   try {
     await invoke("cloud_disconnect");
     showLoginForm();

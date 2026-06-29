@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local-setup",
+  "description": "Capabilities for the local-engine setup window. Engine bootstrapping (git clone, pip install, write .env). Network access here is intentional — that's the whole point of this window.",
+  "windows": ["local-setup"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "check_git_installed",
+    "check_python_version",
+    "clone_feclaw",
+    "generate_env_template",
+    "write_env_file",
+    "install_dependencies",
+    "start_feclaw",
+    "check_engine_health",
+    "save_local_engine_config",
+    "default_engine_dest",
+    "open_chat_window"
+  ]
+}

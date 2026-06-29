@@ -3,12 +3,11 @@
 //! The tray icon is generated at runtime as a coloured RGBA bitmap so the
 //! colour can change with the WebSocket connection status (green /
 //! yellow / red / gray). The menu has fixed entries (open / reconnect /
-//! mode / quit) that route through the [`ControlMsg`] channel into the
+//! quit) that route through the [`ControlMsg`] channel into the
 //! async runtime.
 
-use crate::config::Mode;
 use crate::ws_types::ConnectionStatus;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -23,17 +22,7 @@ pub const TRAY_ID: &str = "main";
 pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let open_item = MenuItem::with_id(app, "open", "打开控制台", true, None::<&str>)?;
     let reconnect_item = MenuItem::with_id(app, "reconnect", "重新连接", true, None::<&str>)?;
-    let mode_local = MenuItem::with_id(app, "mode_local", "本地模式", true, None::<&str>)?;
-    let mode_cloud = MenuItem::with_id(app, "mode_cloud", "云模式", true, None::<&str>)?;
-    let mode_menu = Submenu::with_id_and_items(
-        app,
-        "mode",
-        "模式",
-        true,
-        &[&mode_local, &mode_cloud],
-    )?;
     let sep1 = PredefinedMenuItem::separator(app)?;
-    let sep2 = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
     let menu = Menu::with_items(
@@ -42,8 +31,6 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             &open_item,
             &reconnect_item,
             &sep1,
-            &mode_menu,
-            &sep2,
             &quit_item,
         ],
     )?;
@@ -80,16 +67,6 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
         "open" => open_console(app.clone()),
         "reconnect" => {
             let _ = state.control_tx.send(crate::ControlMsg::Reconnect);
-        }
-        "mode_local" => {
-            let _ = state
-                .control_tx
-                .send(crate::ControlMsg::SetMode(Mode::Local));
-        }
-        "mode_cloud" => {
-            let _ = state
-                .control_tx
-                .send(crate::ControlMsg::SetMode(Mode::Cloud));
         }
         "quit" => {
             let _ = state.control_tx.send(crate::ControlMsg::Quit);

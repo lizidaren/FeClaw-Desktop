@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "welcome",
+  "description": "Capabilities for the first-launch Welcome window. Limited to login + window-opening — no chat or VFS access.",
+  "windows": ["welcome"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "check_cloud_health",
+    "check_first_launch",
+    "discover_well_known",
+    "get_cloud_session",
+    "cloud_login",
+    "cloud_disconnect",
+    "save_welcome_config",
+    "open_local_setup_window",
+    "open_chat_window",
+    "get_permissions"
+  ]
+}

@@ -37,6 +37,12 @@ pub struct Config {
     /// so subsequent launches don't have to re-prompt for credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_token: Option<String>,
+    /// Platform-side JWT (the OAuth host's `access_token`). Persisted alongside
+    /// the FeClaw token so the desktop can refresh the FeClaw JWT without
+    /// forcing the user back through the password flow. Cleared by
+    /// `cloud_disconnect` along with `cloud_token`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_token: Option<String>,
     /// UI theme preference (`light` | `dark` | `system`). Set via the
     /// Settings → Appearance tab and applied immediately on every change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -60,6 +66,7 @@ impl Default for Config {
             cloud_login_url: None,
             cloud_username: None,
             cloud_token: None,
+            platform_token: None,
             theme: None,
         }
     }
@@ -462,6 +469,7 @@ mod tests {
         assert!(cfg.cloud_login_url.is_none());
         assert!(cfg.cloud_username.is_none());
         assert!(cfg.cloud_token.is_none());
+        assert!(cfg.platform_token.is_none());
     }
 
     #[test]
@@ -501,6 +509,33 @@ mod tests {
         );
         assert_eq!(decoded.cloud_username.as_deref(), Some("alice"));
         assert_eq!(decoded.cloud_token.as_deref(), Some("jwt.payload.sig"));
+    }
+
+    #[test]
+    fn toml_roundtrip_with_platform_token() {
+        // platform_token is the OAuth host's access_token; persisted alongside
+        // cloud_token so we can refresh without forcing a password re-entry.
+        let cfg = Config {
+            mode: Mode::Cloud,
+            cloud_url: Some("https://feclaw.example.com".to_string()),
+            cloud_token: Some("feclaw.jwt.payload.sig".to_string()),
+            platform_token: Some("platform.jwt.payload.sig".to_string()),
+            ..Default::default()
+        };
+        let encoded = toml::to_string(&cfg).unwrap();
+        assert!(encoded.contains("platform_token"));
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.platform_token.as_deref(), Some("platform.jwt.payload.sig"));
+        assert_eq!(decoded.cloud_token.as_deref(), Some("feclaw.jwt.payload.sig"));
+    }
+
+    #[test]
+    fn platform_token_omitted_when_none() {
+        // Don't leak the field name with `platform_token = ""` when no
+        // cloud session is active.
+        let cfg = Config::default();
+        let encoded = toml::to_string(&cfg).unwrap();
+        assert!(!encoded.contains("platform_token"));
     }
 
     #[test]

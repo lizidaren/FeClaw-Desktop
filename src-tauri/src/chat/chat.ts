@@ -14,6 +14,7 @@
 import { store, type AgentInfo, type ChatMessage, type ChatItem, type Attachment, type GroupInfo, type GroupMessage, type MomentInfo } from "./store";
 import { openCreateDialog } from "./components/create-dialog";
 import { openSidePanel } from "./components/side-panel";
+import { renderMarkdown, decorateMarkdownRoot } from "./components/markdown";
 import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImageCards, clearImageCards } from "./components/input-box";
 import { openSendDialog, type PendingFile } from "./components/send-dialog";
 import { showMomentsFeed, hideMomentsFeed, addMomentCard, wireMomentsFeed, refreshMoments } from "./components/moments-feed";
@@ -69,7 +70,7 @@ function renderChatList(items: ChatItem[]): void {
 
   for (const item of items) {
     const el = document.createElement("div");
-    el.className = "chat-item" + (item.active ? " active" : "") + (item.is_group ? " group-item" : "");
+    el.className = "chat-item" + (item.active ? " active" : "") + (item.is_group ? " group-item" : "") + (item.is_pinned ? " pinned" : "") + (item.is_dnd ? " dnd" : "");
     if (item.is_group) {
       el.dataset.groupId = item.group_id;
     } else {
@@ -77,14 +78,29 @@ function renderChatList(items: ChatItem[]): void {
     }
     el.setAttribute("role", "option");
     el.setAttribute("aria-selected", String(!!item.active));
+    // Phase 5 / 7.2 A — render avatar (image or initial), optional online dot
+    // overlay, and pin/DND icons in the meta column.
+    const avatarContent = item.avatar_url
+      ? `<img class="avatar-img" src="${item.avatar_url}" alt="">`
+      : item.is_group ? "👥" : item.avatar_letter;
+    const onlineDot = !item.is_group && item.is_online
+      ? `<span class="chat-item-online-dot" aria-hidden="true"></span>`
+      : "";
+    const pinIcon = item.is_pinned
+      ? '<span class="chat-item-pin-icon" title="置顶" aria-hidden="true">📌</span>'
+      : "";
+    const dndIcon = item.is_dnd
+      ? '<span class="chat-item-dnd-icon" title="免打扰" aria-hidden="true">🔕</span>'
+      : "";
     el.innerHTML = `
-      <div class="chat-item-avatar">${item.is_group ? "👥" : item.avatar_letter}</div>
+      <div class="chat-item-avatar">${avatarContent}${onlineDot}</div>
       <div class="chat-item-info">
-        <div class="chat-item-name">${escapeHtml(item.name)}</div>
+        <div class="chat-item-name">${escapeHtml(item.name)}${item.status === "pending" ? ' <span class="agent-pending-badge">继续配置 →</span>' : ""}</div>
         <div class="chat-item-preview">${escapeHtml(item.last_message)}</div>
       </div>
       <div class="chat-item-meta">
         ${item.last_time ? `<span class="chat-item-time">${item.last_time}</span>` : ""}
+        <span class="chat-item-icons">${pinIcon}${dndIcon}</span>
         ${item.unread ? '<span class="chat-item-badge"></span>' : ""}
       </div>
     `;
@@ -115,11 +131,64 @@ function renderMessages(messages: ChatMessage[]): void {
     return;
   }
 
-  for (const msg of messages) {
+  // Phase 5 / 8.1 A — sort by created_at ASC defensively. The DB query
+  // already orders, but the JSON fallback (legacy get_chat_history) and
+  // optimistic local echoes can arrive out of order. Sorting here keeps
+  // the day separator deterministic regardless of caller.
+  const ordered = [...messages].sort((a, b) => {
+    const ta = typeof a.created_at === "number" ? a.created_at : 0;
+    const tb = typeof b.created_at === "number" ? b.created_at : 0;
+    return ta - tb;
+  });
+
+  // Phase 5 / 8.1 A — drop a date separator bubble when the day changes.
+  // Day boundary is local time so it lines up with the timestamp rendered
+  // on each bubble.
+  let lastDayKey: string | null = null;
+  for (const msg of ordered) {
     if (msg.is_deleted) continue;
+    const dayKey = dayKeyOf(msg.created_at);
+    if (dayKey && dayKey !== lastDayKey) {
+      const sep = document.createElement("div");
+      sep.className = "day-separator";
+      sep.textContent = formatDayLabel(msg.created_at);
+      list.appendChild(sep);
+      lastDayKey = dayKey;
+    }
     renderMessageEl(list, msg);
   }
   scrollToBottom();
+}
+
+// YYYY-MM-DD key for the LOCAL timezone — used to compare consecutive
+// messages and decide when to drop a separator. Returns null if the
+// timestamp is missing / NaN so we never render a bogus separator.
+function dayKeyOf(ts: number | undefined): string | null {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return null;
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Render a friendly label for the date. Phase 5 / 8.1 A.
+// Today / Yesterday / Day-before-yesterday are self-explanatory; anything
+// within a week shows "N 天前"; older entries show the date itself.
+function formatDayLabel(ts: number): string {
+  const d = new Date(ts * 1000);
+  const today = new Date();
+  const startOfDay = (x: Date): Date => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const diffDays = Math.round((startOfDay(today).getTime() - startOfDay(d).getTime()) / 86400000);
+  if (diffDays === 0) return "今天";
+  if (diffDays === 1) return "昨天";
+  if (diffDays === 2) return "前天";
+  if (diffDays > 2 && diffDays < 7) return `${diffDays} 天前`;
+  if (d.getFullYear() === today.getFullYear()) {
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  }
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 function renderMessageEl(parent: HTMLElement, msg: ChatMessage): void {
@@ -128,14 +197,42 @@ function renderMessageEl(parent: HTMLElement, msg: ChatMessage): void {
   wrap.dataset.id = msg.id;
 
   // Image message (legacy single-image type)
-  if (msg.message_type === "image" || msg.content.startsWith("data:image/")) {
+  // Block SVG explicitly: even when loaded via <img src>, defense-in-depth
+  // matters because the same string can be reused elsewhere (fullscreen,
+  // new window) where SVG scripts would execute.
+  const safeImageSrc = pickSafeImageSrc(msg.content);
+  if ((msg.message_type === "image" || msg.content.startsWith("data:image/")) && safeImageSrc) {
     const imgWrap = document.createElement("div");
     imgWrap.className = "bubble-image";
     const img = document.createElement("img");
-    img.src = msg.content;
+    img.src = safeImageSrc;
     img.alt = "图片";
     imgWrap.appendChild(img);
     wrap.appendChild(imgWrap);
+  } else if (msg.message_type === "image") {
+    // Image was claimed but payload was unsafe (e.g. SVG). Fall back to
+    // a text body so the user still sees something.
+    const body = document.createElement("div");
+    body.className = "bubble-body";
+    body.textContent = "[图片类型不支持预览]";
+    wrap.appendChild(body);
+  } else if (msg.role === "assistant") {
+    // Phase 2 / 2.2 B: render assistant messages as sanitised markdown
+    // so code blocks, lists, tables, links and inline formatting all
+    // survive. User messages stay as plain text — we never trust the
+    // local input as markdown source.
+    const body = document.createElement("div");
+    body.className = "bubble-body bubble-markdown";
+    try {
+      body.innerHTML = renderMarkdown(msg.content);
+      decorateMarkdownRoot(body);
+    } catch (e) {
+      // Vendor scripts missing — fall back to textContent so the
+      // bubble still renders something legible.
+      console.warn("markdown render failed, falling back to plain text:", e);
+      body.textContent = msg.content;
+    }
+    wrap.appendChild(body);
   } else {
     const body = document.createElement("div");
     body.className = "bubble-body";
@@ -166,7 +263,72 @@ function renderMessageEl(parent: HTMLElement, msg: ChatMessage): void {
   meta.textContent = ts ? `${ts}${agentLabel}` : agentLabel;
   wrap.appendChild(meta);
 
+  // Phase 2 / 2.1 B + 2.3 A: failed sends (synced:false + error) get a
+  // retry affordance directly on the bubble. Click re-issues the WS
+  // call without re-typing; no intermediate "sending…" state.
+  if (msg.error) {
+    wrap.classList.add("bubble-failed");
+    const actions = document.createElement("div");
+    actions.className = "bubble-actions";
+
+    const errorLabel = document.createElement("span");
+    errorLabel.className = "bubble-error";
+    errorLabel.textContent = `发送失败：${msg.error}`;
+    actions.appendChild(errorLabel);
+
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.className = "bubble-retry";
+    retryBtn.textContent = "重试";
+    retryBtn.addEventListener("click", () => {
+      void retryMessage(msg.id);
+    });
+    actions.appendChild(retryBtn);
+
+    wrap.appendChild(actions);
+  }
+
   parent.appendChild(wrap);
+}
+
+/**
+ * Re-issue a previously failed send.
+ *
+ * Phase 2 / 2.1 B: no transient "sending" indicator — we just clear the
+ * `error` patch optimistically, fire the WS call, then mark the bubble
+ * either back to clean (synced:true) or back to failed (synced:false)
+ * depending on the result.
+ */
+async function retryMessage(msgId: string): Promise<void> {
+  const list = $<HTMLDivElement>("messages");
+  if (!list) return;
+  const target = store.messages.find((m) => m.id === msgId);
+  if (!target) return;
+  const isGroup = target.channel.startsWith("group:");
+  const targetId = target.agent_hash;
+  if (!targetId) return;
+
+  // Optimistically clear the error so the button disappears right away.
+  store.updateMessage(msgId, { error: undefined, synced: false });
+  renderMessages(store.messages);
+
+  try {
+    if (isGroup) {
+      await invoke<string>("send_group_message", {
+        group_id: targetId,
+        content: target.content,
+        mentions: null,
+        attachments: null,
+      });
+    } else {
+      await invoke<string>("send_chat_message", { text: target.content });
+    }
+    store.updateMessage(msgId, { synced: true });
+  } catch (e) {
+    const errMsg = typeof e === "string" ? e : "重试失败";
+    store.updateMessage(msgId, { error: errMsg, synced: false });
+  }
+  renderMessages(store.messages);
 }
 
 // ---- Attachment rendering ---------------------------------------------------
@@ -187,9 +349,11 @@ async function renderAttachment(
 
     // Load image based on source
     if (att.source === "data" && att.data) {
-      img.src = att.data;
+      const safe = pickSafeImageSrc(att.data);
+      if (safe) img.src = safe;
     } else if (att.source === "url" && att.url) {
-      img.src = att.url;
+      const safe = pickSafeImageSrc(att.url);
+      if (safe) img.src = safe;
     } else if (att.source === "vfs" && att.path && agentHash) {
       img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect fill='%23334155' width='80' height='80' rx='8'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' fill='%2394a3b8' font-size='12'%3E加载中…%3C/text%3E%3C/svg%3E";
       try {
@@ -541,6 +705,12 @@ async function sendMessage(): Promise<void> {
   const targetId = isGroup ? store.activeGroupId! : store.activeAgentHash;
   const channel = isGroup ? `group:${targetId}` : `im:${targetId}`;
 
+  // Track the optimistic messages so we can update them once the WS
+  // send either succeeds (clear error) or fails (set error). Keeps the
+  // retry button bound to the actual bubble the user typed into.
+  const sentImageIds: string[] = [];
+  let textMsgId = "";
+
   // Send image messages first (each as its own bubble)
   for (const img of imgCards) {
     const imgId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -571,6 +741,7 @@ async function sendMessage(): Promise<void> {
       console.error("insert_chat_message (image) failed:", e);
     }
     store.appendMessage(imgMsg);
+    sentImageIds.push(imgId);
     const list = $<HTMLDivElement>("messages");
     if (list) renderMessageEl(list, imgMsg);
   }
@@ -580,6 +751,7 @@ async function sendMessage(): Promise<void> {
   // Optimistic local echo for text message (only if there's text)
   if (text) {
     const id = `msg-${Date.now()}`;
+    textMsgId = id;
     const ts = Math.floor(Date.now() / 1000);
     const msg: ChatMessage = {
       id,
@@ -629,29 +801,28 @@ async function sendMessage(): Promise<void> {
     } else {
       await invoke<string>("send_chat_message", { text: fullText });
     }
+    // Success — clear any pending error state on the optimistic echo.
+    if (text) {
+      store.updateMessage(textMsgId, { synced: true, error: undefined });
+    }
+    // Also walk the just-sent image echoes and mark them as synced.
+    for (const imgId of sentImageIds) {
+      store.updateMessage(imgId, { synced: true, error: undefined });
+    }
   } catch (e) {
     const errMsg = typeof e === "string" ? e : "发送失败";
-    store.appendMessage({
-      id: `err-${Date.now()}`,
-      channel,
-      agent_hash: targetId,
-      role: "assistant",
-      content: `⚠ ${errMsg}`,
-      message_type: "text",
-      created_at: Math.floor(Date.now() / 1000),
-    });
-    const list2 = $<HTMLDivElement>("messages");
-    if (list2) {
-      renderMessageEl(list2, {
-        id: `err-${Date.now()}`,
-        channel,
-        agent_hash: targetId,
-        role: "assistant",
-        content: `⚠ ${errMsg}`,
-        message_type: "text",
-        created_at: Math.floor(Date.now() / 1000),
-      });
+    // Phase 2 / 2.3 A: mark the original optimistic message as failed
+    // rather than appending a separate error bubble. The retry button is
+    // rendered off this state in renderMessageEl.
+    if (text) {
+      store.updateMessage(textMsgId, { synced: false, error: errMsg });
     }
+    for (const imgId of sentImageIds) {
+      store.updateMessage(imgId, { synced: false, error: errMsg });
+    }
+    // Re-render the message list so the failure state (retry button)
+    // reflects the patch made above.
+    renderMessages(store.messages);
   } finally {
     btn.disabled = false;
     input.focus();
@@ -660,25 +831,46 @@ async function sendMessage(): Promise<void> {
 
 // ---- Tab switching ----------------------------------------------
 
-function switchTab(tabId: "chat" | "moments" | "profile" | "settings" | "fehub"): void {
+function switchTab(tabId: "chat" | "moments" | "settings" | "fehub"): void {
   store.setTab(tabId);
   document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.tab === tabId);
   });
+  // Show/hide settings embedded panel (Phase 5 / 1.2 B — settings lives in
+  // an iframe inside chat/index.html, NOT a separate WebviewWindow).
+  const settingsTab = $<HTMLDivElement>("settingsTab");
+  if (settingsTab) {
+    settingsTab.style.display = tabId === "settings" ? "flex" : "none";
+  }
+  // Sidebar — hide completely in settings/moments/fehub modes
+  const chatList = $<HTMLElement>("chat-list-panel");
+  if (chatList) {
+    chatList.style.display = tabId === "chat" ? "" : "none";
+  }
   if (tabId === "settings") {
-    void invoke("open_settings_window").catch((e) => console.error("open_settings:", e));
+    // Settings is embedded as an iframe in chat/index.html (Phase 5 / 1.2 B).
+    // The settingsTab div display is already toggled above; here we just
+    // ensure chat panels are hidden so the iframe fills the workspace.
+    const noChat = $<HTMLDivElement>("no-chat-state");
+    const activeChat = $<HTMLDivElement>("active-chat");
+    if (noChat) noChat.style.display = "none";
+    if (activeChat) activeChat.style.display = "none";
   } else if (tabId === "moments") {
-    // Plaza: show "coming soon" placeholder in main area, keep contacts list visible
-    hideFehubTab();
-    showPlaceholder("🌐", "广场", "功能开发中，敬请期待…");
+    // Plaza: render the moments feed (Phase 5 / 1.1 B — no longer a placeholder).
+    // Defensive typeof checks mirror chat.js — these functions live in
+    // separate lazy-loaded bundles that may not be loaded yet.
+    if (typeof hideFehubTab === "function") hideFehubTab();
+    if (typeof hidePlaceholder === "function") hidePlaceholder();
+    if (typeof showMomentsFeed === "function") showMomentsFeed();
   } else if (tabId === "fehub") {
-    // FE Hub: show "coming soon" placeholder in main area, keep contacts list visible
-    hideMomentsFeed();
-    showPlaceholder("🔧", "FE 中心", "功能开发中，敬请期待…");
+    // FeHub: render the FeHub panel (Phase 5 / 1.1 B — no longer a placeholder).
+    if (typeof hideMomentsFeed === "function") hideMomentsFeed();
+    if (typeof hidePlaceholder === "function") hidePlaceholder();
+    if (typeof showFehubTab === "function") showFehubTab();
   } else if (tabId === "chat") {
-    hideMomentsFeed();
-    hideFehubTab();
-    hidePlaceholder();
+    if (typeof hideMomentsFeed === "function") hideMomentsFeed();
+    if (typeof hideFehubTab === "function") hideFehubTab();
+    if (typeof hidePlaceholder === "function") hidePlaceholder();
     if (store.activeAgentHash || store.activeGroupId) {
       showActiveChat();
     } else {
@@ -738,26 +930,6 @@ function hideActiveChat(): void {
   activeChat.style.display = "none";
 }
 
-  // Update header
-  if (store.activeGroupId) {
-    const group = store.getGroupById(store.activeGroupId);
-    const nameEl = $<HTMLDivElement>("chat-name");
-    const avatarEl = $<HTMLDivElement>("chat-avatar");
-    const statusEl = $<HTMLDivElement>("chat-status");
-    if (nameEl) nameEl.textContent = group?.name ?? "群聊";
-    if (avatarEl) avatarEl.textContent = "👥";
-    if (statusEl) statusEl.textContent = `成员：${group?.memberCount ?? 0}`;
-  } else {
-    const agent = store.agents.find((a) => a.hash === store.activeAgentHash);
-    const nameEl = $<HTMLDivElement>("chat-name");
-    const avatarEl = $<HTMLDivElement>("chat-avatar");
-    const statusEl = $<HTMLDivElement>("chat-status");
-    if (nameEl) nameEl.textContent = agent?.name ?? "Agent";
-    if (avatarEl) avatarEl.textContent = (agent?.name ?? "A").charAt(0).toUpperCase();
-    if (statusEl) statusEl.textContent = "在线";
-  }
-}
-
 // ---- Init -------------------------------------------------------
 
 async function initChat(): Promise<void> {
@@ -772,7 +944,7 @@ async function initChat(): Promise<void> {
   try {
     const hasLegacy = await invoke<boolean>("check_legacy_chat_history");
     if (hasLegacy) {
-      const count = await invoke<u64>("import_chat_history");
+      const count = await invoke<number>("import_chat_history");
       console.log(`Imported ${count} legacy messages`);
     }
   } catch (e) {
@@ -858,9 +1030,60 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// Whitelist of image MIME types that are safe to render as <img src>.
+// SVG is excluded: even inside an <img> tag it can carry script-like
+// features, and the same string may end up reused in a context that
+// executes it (e.g. new window, fullscreen <object>).
+const SAFE_IMAGE_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+]);
+
+/**
+ * Inspect an image payload and return a src string that is safe to put
+ * into `<img src=...>`, or `null` if the payload is not acceptable.
+ *
+ * Accepts:
+ *   - data URLs whose MIME is in SAFE_IMAGE_MIMES
+ *   - http(s) URLs (caller trusts the source)
+ *
+ * Rejects:
+ *   - data URLs of any other type (notably image/svg+xml)
+ *   - other schemes (javascript:, blob:, file:, ...)
+ */
+function pickSafeImageSrc(content: string): string | null {
+  const trimmed = content.trim();
+  if (trimmed.startsWith("data:")) {
+    const match = /^data:([^;,]+)(?:;base64)?,/i.exec(trimmed);
+    if (!match) return null;
+    const mime = match[1].toLowerCase();
+    if (!SAFE_IMAGE_MIMES.has(mime)) return null;
+    return trimmed;
+  }
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return null;
+}
+
 // ---- Event subscriptions ----------------------------------------
 
 async function subscribeEvents(): Promise<void> {
+  // theme-changed — emitted by the embedded settings iframe (Phase 5 / 7.1 A).
+  // Without this listener the parent chat window stays on the old theme
+  // until the user reloads the page.
+  try {
+    await listen<{ theme: string }>("theme-changed", (e) => {
+      const theme = e.payload?.theme;
+      if (!theme) return;
+      document.documentElement.setAttribute("data-theme", theme);
+      document.body.setAttribute("data-theme", theme);
+    });
+  } catch (e) {
+    console.error("listen theme-changed:", e);
+  }
+
   // ws-status from the status pump in lib.rs
   try {
     await listen<{ status: string }>("ws-status", (e) => {
@@ -1317,7 +1540,7 @@ function wire(): void {
 
   // Tab bar
   document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
-    const tab = btn.dataset.tab as "chat" | "profile" | "settings" | "moments" | "fehub";
+    const tab = btn.dataset.tab as "chat" | "settings" | "moments" | "fehub";
     if (tab) {
       btn.addEventListener("click", () => switchTab(tab));
     }

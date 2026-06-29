@@ -455,14 +455,21 @@ async function loadApps(agentHash: string): Promise<void> {
 
     listEl.innerHTML = apps
       .map(
-        (app) => `
-      <div class="sp-app-card" data-app-id="${app.app_id}" data-name="${app.name}" data-url="${app.icon_url ?? ""}">
-        <div class="sp-app-icon">${(app.icon_url ?? "").startsWith("http") ? `<img src="${app.icon_url}" alt="" width="24" height="24" />` : "📦"}</div>
+        (app) => {
+          const iconUrl = app.icon_url ?? "";
+          const showImg = iconUrl.startsWith("http://") || iconUrl.startsWith("https://");
+          const iconHtml = showImg
+            ? `<img src="${escapeHtml(iconUrl)}" alt="" width="24" height="24" />`
+            : "📦";
+          return `
+      <div class="sp-app-card" data-app-id="${escapeHtml(app.app_id)}" data-name="${escapeHtml(app.name)}" data-url="${escapeHtml(iconUrl)}">
+        <div class="sp-app-icon">${iconHtml}</div>
         <div class="sp-app-info">
-          <div class="sp-app-name">${app.name}</div>
-          <div class="sp-app-desc">${app.description}</div>
+          <div class="sp-app-name">${escapeHtml(app.name)}</div>
+          <div class="sp-app-desc">${escapeHtml(app.description)}</div>
         </div>
-      </div>`,
+      </div>`;
+        },
       )
       .join("");
 
@@ -601,4 +608,17 @@ export async function openSidePanel(agentHash: string): Promise<void> {
 
 export function closeSidePanelIfOpen(): void {
   if (isPanelOpen) closeSidePanel();
+}
+
+// ---- HTML escaping ------------------------------------------------
+// Escapes characters that could break out of an HTML attribute or
+// element context. Used whenever server-controlled values (e.g. agent
+// app names, urls) are interpolated into innerHTML.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }

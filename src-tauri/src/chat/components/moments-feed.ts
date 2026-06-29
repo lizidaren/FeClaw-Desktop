@@ -88,15 +88,32 @@ function renderAttachmentChip(
   } else if (att.type === "image") {
     const chip = document.createElement("span");
     chip.className = "moment-attachment-chip";
+    // Only pass through to window.open if the src uses a safe scheme.
+    // Rejects javascript:, data:image/svg+xml, and anything else that
+    // could be interpreted as a navigable URL with side effects.
     let src = "";
-    if (att.source === "data" && att.data) src = att.data;
-    else if (att.source === "url" && att.url) src = att.url;
+    if (att.source === "data" && att.data && isSafeAttachmentSrc(att.data)) {
+      src = att.data;
+    } else if (att.source === "url" && att.url && isSafeAttachmentSrc(att.url)) {
+      src = att.url;
+    }
     chip.innerHTML = `<span class="mac-icon">🖼️</span><span class="mac-name">${escapeHtml(att.name ?? "图片")}</span>`;
     chip.addEventListener("click", () => {
       if (src) window.open(src, "_blank");
     });
     container.appendChild(chip);
   }
+}
+
+// ---- Safe attachment URL check -----------------------------------
+
+// Only allow schemes that are safe to pass to window.open / <img src>.
+// Excludes javascript:, data:image/svg+xml, file:, blob: with mismatched
+// types, etc. https/http/data:image(png|jpeg|gif|webp) only.
+const SAFE_URL_PREFIX_RE = /^(https:\/\/|http:\/\/|data:image\/(png|jpe?g|gif|webp);base64,)/i;
+
+function isSafeAttachmentSrc(url: string): boolean {
+  return SAFE_URL_PREFIX_RE.test(url.trim());
 }
 
 // ---- HTML escape --------------------------------------------------

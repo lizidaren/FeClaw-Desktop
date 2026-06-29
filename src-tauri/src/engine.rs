@@ -210,7 +210,7 @@ impl EngineManager {
     /// connection lifecycle (connect → run → wait 5 s → repeat). The
     /// task reads `cloud_url`/`cloud_token` from `shared_config` so the
     /// Settings UI can update them live; the cancel token is shared with
-    /// the control pump so `SetMode`/`Reconnect` can force a re-handshake.
+    /// the control pump so `Reconnect` can force a re-handshake.
     ///
     /// If the connection fails with a 4xxx close code (4001 invalid
     /// token, 4002 forbidden) the cached JWT is cleared and the user is
@@ -273,7 +273,7 @@ impl EngineManager {
         status_tx: mpsc::Sender<ConnectionStatus>,
     ) {
         loop {
-            // 1. Honour a pending reconnect request (SetMode, Reconnect, …)
+            // 1. Honour a pending reconnect request (Reconnect, …)
             //    by clearing the flag and re-reading the config from disk.
             if cancel_token.load(Ordering::SeqCst) {
                 cancel_token.store(false, Ordering::SeqCst);
@@ -352,10 +352,14 @@ impl EngineManager {
             //          didn't supply, e.g. after a server-side session
             //          invalidation)
             //
-            // In every case the JWT is no longer usable, so we clear it
-            // and notify the UI. 4003 is added on top of the original
-            // 4001/4002 pair so a missing-or-stale cookie also lands in
-            // the same "please re-authenticate" path.
+            // Refresh-on-401 strategy (Phase 4 / Path A):
+            //   1. Try `refresh_cloud_token` first — it exchanges a fresh
+            //      Platform JWT for a fresh FeClaw JWT without bothering
+            //      the user.
+            //   2. Only fall back to clearing + manual re-login if the
+            //      refresh itself failed (e.g. Platform JWT also expired,
+            //      or Platform refused). This keeps the user logged in
+            //      through normal token-rotation cycles.
             if matches!(close_code, Some(4001) | Some(4002) | Some(4003)) {
                 let reason = match close_code {
                     Some(4001) => "token invalid or expired",
@@ -364,13 +368,27 @@ impl EngineManager {
                     _ => "unknown auth failure",
                 };
                 tracing::warn!(
-                    "cloud auth failure (close code {:?}, reason={reason}); clearing token",
+                    "cloud auth failure (close code {:?}, reason={reason}); attempting refresh",
                     close_code
                 );
-                Self::clear_token(&shared_config).await;
-                Self::request_cloud_login(&ui_tx);
-                Self::emit_auth_failure(&ui_tx, reason);
-                tokio::time::sleep(CLOUD_LOGIN_BACKOFF).await;
+                if let Err(refresh_err) =
+                    crate::settings::refresh_cloud_token().await
+                {
+                    tracing::warn!(
+                        "refresh_cloud_token failed: {refresh_err}; falling back to re-login"
+                    );
+                    Self::clear_token(&shared_config).await;
+                    Self::request_cloud_login(&ui_tx);
+                    Self::emit_auth_failure(&ui_tx, reason);
+                    tokio::time::sleep(CLOUD_LOGIN_BACKOFF).await;
+                } else {
+                    tracing::info!(
+                        "cloud token refresh succeeded; reconnecting with new FeClaw JWT"
+                    );
+                    // Brief pause so the new token is fully visible to any
+                    // racing config reader before we dial again.
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
                 continue;
             }
 

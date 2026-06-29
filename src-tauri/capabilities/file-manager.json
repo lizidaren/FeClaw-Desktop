@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "file-manager",
+  "description": "Capabilities for the VFS file-manager window (one window per agent, label `filemanager-XXXX`). Read + write VFS paths, mkdir, move, set permission, notify events. Destructive ops (file_delete / vfs_rm) live in dangerous.json.",
+  "windows": ["filemanager-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "list_vfs_dir",
+    "get_vfs_preview_url",
+    "get_vfs_upload_url",
+    "vfs_mkdir",
+    "vfs_mv",
+    "vfs_set_permission",
+    "vfs_notify_event",
+    "download_vfs_file",
+    "file_read",
+    "file_write",
+    "open_local_file",
+    "cleanup_preview_temp"
+  ]
+}

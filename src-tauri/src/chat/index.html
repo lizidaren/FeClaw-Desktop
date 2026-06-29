@@ -23,10 +23,6 @@
         <span class="tab-icon" aria-hidden="true">🏗️</span>
         <span class="tab-label">FeHub</span>
       </button>
-      <button class="tab-btn" data-tab="profile" title="我的">
-        <span class="tab-icon" aria-hidden="true">🙋</span>
-        <span class="tab-label">我的</span>
-      </button>
       <button class="tab-btn" data-tab="settings" title="设置">
         <span class="tab-icon" aria-hidden="true">⚙</span>
         <span class="tab-label">设置</span>
@@ -231,6 +227,13 @@
       </div>
     </div>
   </div>
+
+  <!-- Phase 2 / 2.2 B: vendored markdown + sanitisation + syntax highlight.
+       Order matters: marked → DOMPurify → highlight.js. chat.js then reads
+       them off `window`. -->
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script src="vendor/highlight.min.js"></script>
 
   <script type="module" src="chat.js"></script>
 </body>

@@ -43,6 +43,22 @@ pub fn take_pending_right_click() -> Result<Option<PendingFile>> {
     if !path.exists() {
         return Ok(None);
     }
+
+    // Cap the file size before reading to avoid OOM if a buggy installer
+    // or compromised process writes a multi-GB file here. The real payload
+    // is well under 1 KiB.
+    const MAX_PENDING_BYTES: u64 = 8 * 1024;
+    let meta = std::fs::metadata(&path)?;
+    if meta.len() > MAX_PENDING_BYTES {
+        let _ = std::fs::remove_file(&path);
+        return Err(anyhow!(
+            "pending-right-click.json is too large ({} bytes > {} limit); \
+             file removed for safety",
+            meta.len(),
+            MAX_PENDING_BYTES
+        ));
+    }
+
     let json = std::fs::read_to_string(&path)?;
     std::fs::remove_file(&path).ok(); // cleanup regardless
     let pending: PendingFile = serde_json::from_str(&json)?;
@@ -55,6 +71,58 @@ pub fn get_executable_path() -> Result<String, String> {
     std::env::current_exe()
         .map_err(|e| format!("failed to get exe path: {e}"))
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Escape a path so it's safe to embed inside a Windows `cmd.exe`
+/// command string that is itself wrapped in double quotes.
+///
+/// Rules (see https://learn.microsoft.com/en-us/cpp/cpp/main-function-command-line-args ):
+///   - Inside a `"..."` quoted argument, a literal `"` must be written as `\"`.
+///   - A run of backslashes immediately followed by `"` must double the
+///     backslashes (so the parser doesn't treat them as escapes for the quote).
+///
+/// This matters because the path is later written to the Windows registry
+/// under `HKCU\Software\Classes\*\shell\FeClawReference\command` and invoked
+/// by the shell as a substitution for `%1`. If `exe_path` contains a quote
+/// or a backslash-quote pattern, a naive `format!("\"{exe_path}\" ...")`
+/// would let `%1` arguments be smuggled in or out of the quoted region.
+#[cfg(windows)]
+fn quote_cmd_arg(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    let mut backslashes: usize = 0;
+    for ch in s.chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+                out.push('\\');
+            }
+            '"' => {
+                // Escape the preceding backslashes, then escape the quote.
+                for _ in 0..backslashes {
+                    out.push('\\');
+                }
+                out.push('\\');
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                backslashes = 0;
+                out.push(ch);
+            }
+        }
+    }
+    out
+}
+
+/// Build the registry command string for a given mode, with the exe path
+/// properly escaped for cmd.exe argument parsing.
+#[cfg(windows)]
+fn build_command_string(exe_path: &str, mode: &str) -> String {
+    format!(
+        "\"{}\" --right-click {} \"%1\"",
+        quote_cmd_arg(exe_path),
+        mode
+    )
 }
 
 /// Register the right-click shell context menu entries.
@@ -81,7 +149,7 @@ pub fn register_right_click(exe_path: String) -> Result<(), String> {
         let (ref_cmd, _) = ref_key
             .create_subkey("command")
             .map_err(|e| format!("create FeClawReference\\command: {e}"))?;
-        let ref_cmd_str = format!("\"{exe_path}\" --right-click reference \"%1\"");
+        let ref_cmd_str = build_command_string(&exe_path, "reference");
         ref_cmd
             .set_value("", &ref_cmd_str)
             .map_err(|e| format!("set FeClawReference\\command: {e}"))?;
@@ -97,7 +165,7 @@ pub fn register_right_click(exe_path: String) -> Result<(), String> {
         let (send_cmd, _) = send_key
             .create_subkey("command")
             .map_err(|e| format!("create FeClawSend\\command: {e}"))?;
-        let send_cmd_str = format!("\"{exe_path}\" --right-click send \"%1\"");
+        let send_cmd_str = build_command_string(&exe_path, "send");
         send_cmd
             .set_value("", &send_cmd_str)
             .map_err(|e| format!("set FeClawSend\\command: {e}"))?;
@@ -161,4 +229,34 @@ pub fn handle_right_click_invocation(mode: &str, path: &str) -> Result<()> {
     save_pending(mode, &path_str)?;
     tracing::info!("pending right-click stored: mode={mode}, path={path_str}");
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quote_cmd_arg_plain_path() {
+        // No special characters — output should just be the input.
+        assert_eq!(quote_cmd_arg(r"C:\Program Files\App\app.exe"), r"C:\Program Files\App\app.exe");
+    }
+
+    #[test]
+    fn quote_cmd_arg_escapes_quote() {
+        // A literal " inside the path must become \"
+        assert_eq!(quote_cmd_arg(r#"C:\foo"bar.exe"#), r#"C:\foo\"bar.exe"#);
+    }
+
+    #[test]
+    fn quote_cmd_arg_doubles_backslash_before_quote() {
+        // A run of backslashes followed by " must double them, so the
+        // parser doesn't eat them as escapes for the quote.
+        assert_eq!(quote_cmd_arg(r#"C:\foo\"bar.exe"#), r#"C:\foo\\\"bar.exe"#);
+    }
+
+    #[test]
+    fn build_command_string_wraps_in_quotes() {
+        let s = build_command_string(r"C:\App\app.exe", "send");
+        assert_eq!(s, r#""C:\App\app.exe" --right-click send "%1""#);
+    }
 }
