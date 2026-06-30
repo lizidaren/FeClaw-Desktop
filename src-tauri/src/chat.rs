@@ -210,15 +210,18 @@ pub async fn send_group_message(
     );
     let ts = crate::ws_types::current_timestamp();
 
-    let envelope = serde_json::json!({
-        "type": "send_group_message",
-        "id": id,
-        "group_id": group_id,
-        "content": trimmed,
-        "mentions": mentions,
-        "attachments": attachments,
-        "timestamp": ts,
-    });
+    // Use the typed `WsSendGroupMessage` envelope rather than a hand-rolled
+    // `serde_json::json!({...})` macro so that field renames / additions
+    // are caught by the compiler instead of silently desync'd on the wire.
+    let envelope = crate::ws_types::WsSendGroupMessage {
+        id: id.clone(),
+        timestamp: ts,
+        msg_type: "send_group_message".to_string(),
+        group_id,
+        content: trimmed.to_string(),
+        mentions,
+        attachments,
+    };
     let json = serde_json::to_string(&envelope)
         .map_err(|e| format!("序列化群消息失败：{e}"))?;
 

@@ -42,6 +42,10 @@ export type ChatMessage = {
   is_deleted?: boolean;
   timestamp?: string;
   agent?: string;
+  /** Mentioned agent hashes captured at send time. Persisted on the
+   *  message so retries can re-submit the same mention list even after
+   *  `pendingMentions` has been cleared. */
+  mentions?: string[];
   attachments?: Attachment[];
 };
 

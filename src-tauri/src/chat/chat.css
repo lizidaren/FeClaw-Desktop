@@ -3290,3 +3290,53 @@ html, body {
 .hljs-meta { color: var(--text-muted); }
 .hljs-deletion { color: #f87171; }
 .hljs-addition { color: #34d399; }
+
+/* ---- Toast notifications (2.4 fix) ---------------------------- */
+.feclaw-toast-container {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 2000;
+  max-width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.feclaw-toast {
+  pointer-events: auto;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #fff;
+  background: #334155;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  word-break: break-word;
+  user-select: none;
+}
+.feclaw-toast-show {
+  opacity: 1;
+  transform: translateY(0);
+}
+.feclaw-toast-leave {
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.feclaw-toast-info {
+  background: #334155;
+  border-left: 3px solid #38bdf8;
+}
+.feclaw-toast-success {
+  background: #14532d;
+  border-left: 3px solid #34d399;
+}
+.feclaw-toast-error {
+  background: #7f1d1d;
+  border-left: 3px solid #f87171;
+}

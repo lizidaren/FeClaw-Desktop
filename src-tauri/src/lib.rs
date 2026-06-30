@@ -182,6 +182,7 @@ pub fn run() {
                 chat::send_consent_response,
                 chat::list_agents,
                 db::get_chat_history_by_agent,
+                db::get_chat_history_by_group,
                 db::insert_chat_message,
                 db::delete_chat_message,
                 create::create_agent,

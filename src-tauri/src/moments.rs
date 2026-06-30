@@ -7,19 +7,20 @@ use crate::auth::load_local_token;
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
 
-/// Build the HTTP client with JWT bearer auth.
-fn build_client() -> Result<reqwest::Client, String> {
-    Ok(crate::http_client::http_client().clone())
-}
-
 fn engine_url() -> String {
     let config = Config::load();
     config.engine_url()
 }
 
-fn authed() -> Result<reqwest::Client, String> {
-    let _token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
-    Ok(crate::http_client::http_client().clone())
+/// Load the shared HTTP client and the local JWT token together.
+///
+/// Returns a `(client, token)` pair that every command must use together;
+/// each outbound request below attaches `Authorization: Bearer …` via the
+/// token. (Renamed from `authed()` which previously returned a client
+/// but discarded the token, leading to unauthenticated requests.)
+fn load_client_with_token() -> Result<(reqwest::Client, String), String> {
+    let token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
+    Ok((crate::http_client::http_client().clone(), token))
 }
 
 // ---- Data types -----------------------------------------------------
@@ -58,15 +59,14 @@ struct PostMomentRequest {
 /// Fetch moments, optionally filtered by group_id.
 #[tauri::command]
 pub async fn get_moments(group_id: Option<String>) -> Result<Vec<MomentInfo>, String> {
-    let client = authed()?;
-    let token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
+    let (client, token) = load_client_with_token()?;
     let mut url = format!("{}/api/user/moments", engine_url());
     if let Some(ref gid) = group_id {
         url.push_str(&format!("?group_id={}", gid));
     }
     let resp = client
         .get(&url)
-        .header("Authorization", format!("Bearer {}", token))
+        .bearer_auth(&token)
         .send()
         .await
         .map_err(|e| format!("get_moments request: {e}"))?;
@@ -83,8 +83,7 @@ pub async fn get_moments(group_id: Option<String>) -> Result<Vec<MomentInfo>, St
 /// Post a new moment to a group.
 #[tauri::command]
 pub async fn post_moment(group_id: String, title: String, content: String) -> Result<(), String> {
-    let client = authed()?;
-    let token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
+    let (client, token) = load_client_with_token()?;
     let url = format!("{}/api/user/moments", engine_url());
     let body = PostMomentRequest {
         group_id,
@@ -93,7 +92,7 @@ pub async fn post_moment(group_id: String, title: String, content: String) -> Re
     };
     let resp = client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", token))
+        .bearer_auth(&token)
         .json(&body)
         .send()
         .await
@@ -107,12 +106,11 @@ pub async fn post_moment(group_id: String, title: String, content: String) -> Re
 /// Delete a moment.
 #[tauri::command]
 pub async fn delete_moment(group_id: String, moment_id: String) -> Result<(), String> {
-    let client = authed()?;
-    let token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
+    let (client, token) = load_client_with_token()?;
     let url = format!("{}/api/groups/{}/moments/{}", engine_url(), group_id, moment_id);
     let resp = client
         .delete(&url)
-        .header("Authorization", format!("Bearer {}", token))
+        .bearer_auth(&token)
         .send()
         .await
         .map_err(|e| format!("delete_moment request: {e}"))?;

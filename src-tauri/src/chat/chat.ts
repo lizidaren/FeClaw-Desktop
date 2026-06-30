@@ -467,7 +467,22 @@ async function retryMessage(msgId: string): Promise<void> {
 
   try {
     if (isGroup) {
-      const mentionHashes = getActiveMentions();
+      // 2.1 fix: prefer the mentions captured at original-send time
+      // (stored on the message); only fall back to re-parsing the text
+      // (and to getActiveMentions, which is empty after the first send)
+      // if nothing is stored. This way retries correctly re-notify any
+      // Agent that was @-mentioned even though `pendingMentions` has
+      // long since been cleared.
+      let mentionHashes: string[] = [];
+      if (target.mentions && target.mentions.length > 0) {
+        mentionHashes = target.mentions;
+      } else {
+        mentionHashes = parseMentionsFromText(target.content);
+        if (mentionHashes.length > 0) {
+          // Stash them so subsequent retries can skip the parse work.
+          store.updateMessage(msgId, { mentions: mentionHashes });
+        }
+      }
       await invoke<string>("send_group_message", {
         group_id: targetId,
         content: target.content,
@@ -483,6 +498,43 @@ async function retryMessage(msgId: string): Promise<void> {
     store.updateMessage(msgId, { error: errMsg, synced: false });
   }
   renderMessages(store.messages);
+}
+
+/**
+ * Scan a message's text for `@<name>` tokens and resolve them to the
+ * corresponding agent hash via the currently-active group's mention
+ * candidates. Unknown tokens are silently dropped so a stale mention
+ * doesn't break the send.
+ */
+function parseMentionsFromText(text: string): string[] {
+  if (!text) return [];
+  const candidates = (
+    window as unknown as {
+      __FECLAW_MENTION_CANDIDATES__?: Array<{ agent_hash: string; agent_name: string }>;
+    }
+  ).__FECLAW_MENTION_CANDIDATES__ ?? [];
+  if (candidates.length === 0) return [];
+
+  // Build a case-insensitive lookup keyed by candidate name.
+  const byName = new Map<string, string>();
+  for (const c of candidates) {
+    if (c.agent_name) byName.set(c.agent_name.toLowerCase(), c.agent_hash);
+  }
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const re = /@([\p{L}\p{N}_\- ]{1,40})/gu;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const rawName = m[1].trim();
+    if (!rawName) continue;
+    const hash = byName.get(rawName.toLowerCase());
+    if (hash && !seen.has(hash)) {
+      seen.add(hash);
+      out.push(hash);
+    }
+  }
+  return out;
 }
 
 // ---- Attachment rendering ---------------------------------------------------
@@ -749,6 +801,10 @@ async function loadChatHistory(agentHash: string): Promise<void> {
     console.error("load_chat_history failed:", e);
     store.setMessages([]);
     renderMessages([]);
+    showToast(
+      `加载历史消息失败：${typeof e === "string" ? e : "网络错误"}`,
+      "error",
+    );
   }
 }
 
@@ -896,6 +952,27 @@ async function refreshMentionCandidatesForGroup(groupId: string): Promise<void> 
 }
 
 async function loadGroupMessages(groupId: string): Promise<void> {
+  // 3.4 fix: hydrate from local SQLite first so the user sees
+  // something immediately even if the WS / REST pull is slow or
+  // fails (e.g. transient 401, offline mode). The Engine fetch below
+  // remains the source of truth and overwrites the cache on success.
+  try {
+    const cached = await invoke<ChatMessage[]>("get_chat_history_by_group", {
+      groupId,
+    });
+    if (Array.isArray(cached) && cached.length > 0) {
+      // Re-stamp channel so renderMessageEl treats it as a group chat.
+      const cachedAsGroup: ChatMessage[] = cached.map((m) => ({
+        ...m,
+        channel: `group:${groupId}`,
+      }));
+      store.setMessages(cachedAsGroup);
+      renderMessages(cachedAsGroup);
+    }
+  } catch (e) {
+    console.error("get_chat_history_by_group failed:", e);
+  }
+
   try {
     const msgs = await invoke<GroupMessage[]>("get_group_messages", {
       groupId,
@@ -917,10 +994,33 @@ async function loadGroupMessages(groupId: string): Promise<void> {
     }));
     store.setMessages(chatMsgs);
     renderMessages(chatMsgs);
+
+    // Mirror into local SQLite so the next cold-start has a fallback.
+    // Fire-and-forget; the in-memory render is already authoritative.
+    for (const m of chatMsgs) {
+      try {
+        await invoke("insert_chat_message", {
+          id: m.id,
+          channel: m.channel,
+          agentHash: m.agent_hash ?? null,
+          role: m.role,
+          content: m.content,
+          messageType: m.message_type ?? "text",
+          createdAt: m.created_at * 1000,
+        });
+      } catch (e) {
+        console.error("insert_chat_message (group) failed:", e);
+      }
+    }
   } catch (e) {
     console.error("load_group_messages failed:", e);
-    store.setMessages([]);
-    renderMessages([]);
+    // 2.4 fix: surface the failure to the user via toast instead of
+    // silently leaving the (possibly cached) message list empty.
+    showToast(
+      `加载群消息失败：${typeof e === "string" ? e : "网络错误"}`,
+      "error",
+    );
+    // Don't blank out the cached messages above — they remain visible.
   }
 }
 
@@ -1052,6 +1152,11 @@ async function sendMessage(): Promise<void> {
         mentions: mentionHashes.length > 0 ? mentionHashes : null,
         attachments: null,
       });
+      // Persist the captured mentions on the message itself so a later
+      // retry can re-submit them even after pendingMentions is cleared.
+      if (text && mentionHashes.length > 0) {
+        store.updateMessage(textMsgId, { mentions: mentionHashes });
+      }
     } else {
       await invoke<string>("send_chat_message", { text: fullText });
     }
@@ -1231,6 +1336,10 @@ async function initChat(): Promise<void> {
     }
   } catch (e) {
     console.error("list_agents failed:", e);
+    showToast(
+      `加载 Agent 列表失败：${typeof e === "string" ? e : "网络错误"}`,
+      "error",
+    );
   }
 
   // Load groups
@@ -1250,6 +1359,10 @@ async function initChat(): Promise<void> {
     renderChatList(store.chatItems);
   } catch (e) {
     console.error("list_groups failed:", e);
+    showToast(
+      `加载群列表失败：${typeof e === "string" ? e : "网络错误"}`,
+      "error",
+    );
   }
 }
 
@@ -1287,7 +1400,8 @@ function escapeHtml(s: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // Whitelist of image MIME types that are safe to render as <img src>.
@@ -1325,6 +1439,73 @@ function pickSafeImageSrc(content: string): string | null {
   }
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return null;
+}
+
+// ---- Toast notifications ----------------------------------------
+//
+// 2.4 fix: surfaces user-visible errors that previously only logged
+// to the browser console. Designed to be cheap (no React/Tauri deps)
+// and safe (text only, no innerHTML, so XSS-safe even if a remote
+// error string contains HTML).
+
+type ToastKind = "info" | "error" | "success";
+let toastContainer: HTMLDivElement | null = null;
+
+function ensureToastContainer(): HTMLDivElement {
+  if (toastContainer && document.body.contains(toastContainer)) {
+    return toastContainer;
+  }
+  const el = document.createElement("div");
+  el.id = "feclaw-toast-container";
+  el.className = "feclaw-toast-container";
+  el.setAttribute("aria-live", "polite");
+  el.setAttribute("aria-atomic", "false");
+  document.body.appendChild(el);
+  toastContainer = el;
+  return el;
+}
+
+/**
+ * Show a transient toast at the bottom-right of the WebView.
+ *
+ * @param message  Text to display. Will be inserted as `textContent`
+ *                 (never `innerHTML`), so HTML in the message is shown
+ *                 literally rather than parsed.
+ * @param kind     Visual variant. `error` is red, `success` green,
+ *                 `info` neutral.
+ * @param durationMs  Auto-dismiss timeout. Default 4 s; pass 0 to make
+ *                 the toast stick until the user clicks it.
+ */
+export function showToast(
+  message: string,
+  kind: ToastKind = "info",
+  durationMs: number = 4000,
+): void {
+  if (!message) return;
+  const container = ensureToastContainer();
+  const toast = document.createElement("div");
+  toast.className = `feclaw-toast feclaw-toast-${kind}`;
+  toast.setAttribute("role", kind === "error" ? "alert" : "status");
+  toast.textContent = message;
+  // Allow the user to dismiss by clicking.
+  toast.addEventListener("click", () => dismissToast(toast));
+  container.appendChild(toast);
+  // Trigger the slide-in animation on the next frame so the
+  // transition actually fires (adding a class to a freshly-created
+  // element skips the animation otherwise).
+  requestAnimationFrame(() => toast.classList.add("feclaw-toast-show"));
+  if (durationMs > 0) {
+    window.setTimeout(() => dismissToast(toast), durationMs);
+  }
+}
+
+function dismissToast(toast: HTMLElement): void {
+  if (!toast.parentNode) return;
+  toast.classList.remove("feclaw-toast-show");
+  toast.classList.add("feclaw-toast-leave");
+  window.setTimeout(() => {
+    if (toast.parentNode) toast.parentNode.removeChild(toast);
+  }, 220);
 }
 
 // ---- Event subscriptions ----------------------------------------

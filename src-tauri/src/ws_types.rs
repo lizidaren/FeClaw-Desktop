@@ -355,6 +355,12 @@ pub enum ConsentDecision {
 /// Outbound: send a message to a group via WebSocket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsSendGroupMessage {
+    /// Client-generated message id. Mirrors the `id` field used by the
+    /// 1-1 `chat_message` envelope so the engine can correlate acks.
+    pub id: String,
+    /// Wall-clock timestamp (seconds since epoch). Symmetric with the
+    /// inbound `created_at` field for round-trip clarity.
+    pub timestamp: String,
     #[serde(rename = "type")]
     pub msg_type: String,
     #[serde(rename = "group_id")]
@@ -369,6 +375,8 @@ pub struct WsSendGroupMessage {
 impl Default for WsSendGroupMessage {
     fn default() -> Self {
         Self {
+            id: String::new(),
+            timestamp: String::new(),
             msg_type: "send_group_message".to_string(),
             group_id: String::new(),
             content: String::new(),

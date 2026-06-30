@@ -128,8 +128,12 @@ impl WsClient {
     /// Public helper: establish a (possibly TLS) WebSocket connection and
     /// return the live stream. The JWT is sent via the standard
     /// `Authorization: Bearer …` header during the upgrade so the server
-    /// can authenticate the handshake (matches `desktop_ws.py` on the
-    /// FeClaw side, which reads JWT from headers / cookies / first frame).
+    /// can authenticate the handshake without the token leaking into
+    /// server access logs, reverse-proxy logs, or `Referer` headers (as
+    /// would happen if it were appended as a `?token=…` query param).
+    ///
+    /// Matches `desktop_ws.py` on the FeClaw side, which reads JWT from
+    /// `Authorization` headers / cookies / first frame.
     ///
     /// The scheme is auto-detected: `ws://` → plain TCP, `wss://` → rustls
     /// with WebPKI roots (the `rustls-tls-webpki-roots` feature on
@@ -140,20 +144,26 @@ impl WsClient {
     pub async fn connect_tls(url: &str, token: &str) -> Result<WsStream> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-        // Append the JWT as a query parameter — the server reads
-        // `?token=xxx` on the WS upgrade endpoint.
-        let url_with_token = if token.is_empty() {
-            url.to_string()
-        } else {
-            let sep = if url.contains('?') { "&" } else { "?" };
-            format!("{url}{sep}token={token}")
-        };
+        // Build the upgrade request against the original URL — the JWT is
+        // attached as an `Authorization` header below, NOT as a query
+        // parameter, so it never lands in URLs that get logged.
+        let mut req = url
+            .into_client_request()
+            .map_err(|e| anyhow!("build ws request: {e}"))?;
+
+        if !token.is_empty() {
+            let header_value = format!("Bearer {}", token);
+            let parsed = header_value
+                .parse()
+                .map_err(|e| anyhow!("invalid authorization header: {e}"))?;
+            req.headers_mut().insert("Authorization", parsed);
+        }
 
         // Extract host:port for TCP connection (strip scheme + path).
-        let host_port = url_with_token
+        let host_port = url
             .strip_prefix("wss://")
-            .or_else(|| url_with_token.strip_prefix("ws://"))
-            .unwrap_or(&url_with_token)
+            .or_else(|| url.strip_prefix("ws://"))
+            .unwrap_or(url)
             .split('/')
             .next()
             .unwrap_or("")
@@ -161,11 +171,6 @@ impl WsClient {
             .next()
             .unwrap_or("")
             .to_string();
-
-        // Build the upgrade request with the token-bearing URL.
-        let req = url_with_token
-            .into_client_request()
-            .map_err(|e| anyhow!("build ws request: {e}"))?;
 
         // Establish the TCP connection first so the stream type is concrete
         // when handed to `client_async_tls` (passing `None` triggers a type

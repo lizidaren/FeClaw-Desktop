@@ -7,19 +7,22 @@
 use crate::auth::load_local_token;
 use serde::{Deserialize, Serialize};
 
-/// Build the HTTP client with JWT bearer auth.
-fn build_client() -> Result<reqwest::Client, String> {
-    let _token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
-    Ok(crate::http_client::http_client().clone())
+/// Load the shared HTTP client and the local JWT token together.
+///
+/// The name reflects what this function actually does — it returns a
+/// `(client, token)` pair that callers must use together. The earlier
+/// `authed()` helper only checked that the token file existed and then
+/// silently discarded the token, causing every Group REST call to be sent
+/// without an `Authorization` header. Each `#[tauri::command]` below now
+/// uses `.bearer_auth(&token)` on its outbound request.
+fn load_client_with_token() -> Result<(reqwest::Client, String), String> {
+    let token = load_local_token().ok_or_else(|| "no token in credentials file".to_string())?;
+    Ok((crate::http_client::http_client().clone(), token))
 }
 
 fn engine_url() -> String {
     let config = crate::config::Config::load();
     config.engine_url()
-}
-
-fn authed() -> Result<reqwest::Client, String> {
-    build_client()
 }
 
 // ---- Data types -----------------------------------------------------
@@ -79,10 +82,11 @@ pub struct GroupMessageInfo {
 
 #[tauri::command]
 pub async fn list_groups() -> Result<Vec<GroupInfo>, String> {
-    let client = authed()?;
+    let (client, token) = load_client_with_token()?;
     let url = format!("{}/api/groups", engine_url());
     let resp = client
         .get(&url)
+        .bearer_auth(&token)
         .send()
         .await
         .map_err(|e| format!("list_groups request: {e}"))?;
@@ -98,10 +102,11 @@ pub async fn list_groups() -> Result<Vec<GroupInfo>, String> {
 
 #[tauri::command]
 pub async fn get_group_detail(group_id: String) -> Result<GroupInfo, String> {
-    let client = authed()?;
+    let (client, token) = load_client_with_token()?;
     let url = format!("{}/api/groups/{}", engine_url(), group_id);
     let resp = client
         .get(&url)
+        .bearer_auth(&token)
         .send()
         .await
         .map_err(|e| format!("get_group_detail request: {e}"))?;
@@ -117,13 +122,14 @@ pub async fn get_group_detail(group_id: String) -> Result<GroupInfo, String> {
 
 #[tauri::command]
 pub async fn get_group_messages(group_id: String, before: Option<u64>) -> Result<Vec<GroupMessageInfo>, String> {
-    let client = authed()?;
+    let (client, token) = load_client_with_token()?;
     let mut url = format!("{}/api/groups/{}/messages?limit=50", engine_url(), group_id);
     if let Some(b) = before {
         url.push_str(&format!("&before={}", b));
     }
     let resp = client
         .get(&url)
+        .bearer_auth(&token)
         .send()
         .await
         .map_err(|e| format!("get_group_messages request: {e}"))?;
@@ -139,7 +145,7 @@ pub async fn get_group_messages(group_id: String, before: Option<u64>) -> Result
 
 #[tauri::command]
 pub async fn create_group(name: String, member_hashes: Vec<String>) -> Result<GroupInfo, String> {
-    let client = authed()?;
+    let (client, token) = load_client_with_token()?;
     let url = format!("{}/api/groups", engine_url());
     let body = serde_json::json!({
         "name": name,
@@ -147,6 +153,7 @@ pub async fn create_group(name: String, member_hashes: Vec<String>) -> Result<Gr
     });
     let resp = client
         .post(&url)
+        .bearer_auth(&token)
         .json(&body)
         .send()
         .await
@@ -163,11 +170,12 @@ pub async fn create_group(name: String, member_hashes: Vec<String>) -> Result<Gr
 
 #[tauri::command]
 pub async fn add_group_member(group_id: String, agent_hash: String) -> Result<(), String> {
-    let client = authed()?;
+    let (client, token) = load_client_with_token()?;
     let url = format!("{}/api/groups/{}/members", engine_url(), group_id);
     let body = serde_json::json!({ "agent_hash": agent_hash });
     let resp = client
         .post(&url)
+        .bearer_auth(&token)
         .json(&body)
         .send()
         .await
@@ -180,7 +188,7 @@ pub async fn add_group_member(group_id: String, agent_hash: String) -> Result<()
 
 #[tauri::command]
 pub async fn remove_group_member(group_id: String, agent_hash: String) -> Result<(), String> {
-    let client = authed()?;
+    let (client, token) = load_client_with_token()?;
     let url = format!(
         "{}/api/groups/{}/members/{}",
         engine_url(),
@@ -189,6 +197,7 @@ pub async fn remove_group_member(group_id: String, agent_hash: String) -> Result
     );
     let resp = client
         .delete(&url)
+        .bearer_auth(&token)
         .send()
         .await
         .map_err(|e| format!("remove_group_member request: {e}"))?;
@@ -200,10 +209,11 @@ pub async fn remove_group_member(group_id: String, agent_hash: String) -> Result
 
 #[tauri::command]
 pub async fn delete_group(group_id: String) -> Result<(), String> {
-    let client = authed()?;
+    let (client, token) = load_client_with_token()?;
     let url = format!("{}/api/groups/{}", engine_url(), group_id);
     let resp = client
         .delete(&url)
+        .bearer_auth(&token)
         .send()
         .await
         .map_err(|e| format!("delete_group request: {e}"))?;
@@ -219,10 +229,11 @@ pub async fn delete_group(group_id: String) -> Result<(), String> {
 /// substituted with the hash so the UI always has something to render.
 #[tauri::command]
 pub async fn list_group_members(group_id: String) -> Result<Vec<GroupMemberDisplay>, String> {
-    let client = authed()?;
+    let (client, token) = load_client_with_token()?;
     let url = format!("{}/api/groups/{}/members", engine_url(), group_id);
     let resp = client
         .get(&url)
+        .bearer_auth(&token)
         .send()
         .await
         .map_err(|e| format!("list_group_members request: {e}"))?;

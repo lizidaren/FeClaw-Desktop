@@ -15,10 +15,10 @@ var __export = (target, all) => {
 };
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-// src-tauri/src/chat/store.ts
+// src/chat/store.ts
 var Store, store;
 var init_store = __esm({
-  "src-tauri/src/chat/store.ts"() {
+  "src/chat/store.ts"() {
     Store = class {
       constructor() {
         // Current tab
@@ -197,7 +197,7 @@ var init_store = __esm({
   }
 });
 
-// src-tauri/src/chat/components/create-dialog.ts
+// src/chat/components/create-dialog.ts
 var create_dialog_exports = {};
 __export(create_dialog_exports, {
   openCreateDialog: () => openCreateDialog
@@ -430,7 +430,7 @@ function openCreateDialog(prefill = "classic") {
 }
 var invoke, DIALOG_ID, OVERLAY_ID;
 var init_create_dialog = __esm({
-  "src-tauri/src/chat/components/create-dialog.ts"() {
+  "src/chat/components/create-dialog.ts"() {
     init_store();
     invoke = (cmd, args) => getTauri().invoke(cmd, args);
     DIALOG_ID = "create-dialog";
@@ -438,7 +438,7 @@ var init_create_dialog = __esm({
   }
 });
 
-// src-tauri/src/chat/components/side-panel.ts
+// src/chat/components/side-panel.ts
 function getTauri2() {
   const g = window.__TAURI__;
   if (!g?.core) throw new Error("Tauri global not available");
@@ -835,7 +835,7 @@ function escapeHtml2(s) {
 }
 var invoke2, PERMISSION_OPTIONS, PERMISSION_LABEL, OVERLAY_ID2, PANEL_ID, PERM_OVERLAY_ID, PERM_MODAL_ID, currentAgentHash, isPanelOpen, isPermModalOpen, pendingPermissionMode;
 var init_side_panel = __esm({
-  "src-tauri/src/chat/components/side-panel.ts"() {
+  "src/chat/components/side-panel.ts"() {
     init_store();
     invoke2 = (cmd, args) => getTauri2().invoke(cmd, args);
     PERMISSION_OPTIONS = [
@@ -859,7 +859,7 @@ var init_side_panel = __esm({
   }
 });
 
-// src-tauri/src/chat/components/markdown.ts
+// src/chat/components/markdown.ts
 function requireMarked() {
   const m = window.marked;
   if (!m) {
@@ -947,13 +947,13 @@ function isSafeImageUrl(src) {
 }
 var configured, SAFE_DATA_IMAGE_PREFIX_RE;
 var init_markdown = __esm({
-  "src-tauri/src/chat/components/markdown.ts"() {
+  "src/chat/components/markdown.ts"() {
     configured = false;
     SAFE_DATA_IMAGE_PREFIX_RE = /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=]+$/;
   }
 });
 
-// src-tauri/src/chat/components/qr-upload.ts
+// src/chat/components/qr-upload.ts
 var qr_upload_exports = {};
 __export(qr_upload_exports, {
   openQrUploadDialog: () => openQrUploadDialog
@@ -1128,7 +1128,7 @@ function injectToastStyles() {
 }
 var invoke3, listen, dialogOpen, currentSessionId, unlistenUploadComplete;
 var init_qr_upload = __esm({
-  "src-tauri/src/chat/components/qr-upload.ts"() {
+  "src/chat/components/qr-upload.ts"() {
     invoke3 = (cmd, args) => getTauri3().invoke(cmd, args);
     listen = (event, handler) => getTauri3().listen(event, handler);
     dialogOpen = false;
@@ -1137,7 +1137,7 @@ var init_qr_upload = __esm({
   }
 });
 
-// src-tauri/src/chat/components/input-box.ts
+// src/chat/components/input-box.ts
 var input_box_exports = {};
 __export(input_box_exports, {
   addCard: () => addCard,
@@ -2129,7 +2129,7 @@ function buildFileCardsContainer() {
   composer.insertBefore(container, textarea);
 }
 function escapeHtml3(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function getActiveMentionInput() {
   return document.querySelector("#input");
@@ -2421,7 +2421,7 @@ function clearActiveMentions() {
 }
 var invoke4, fileCards, imageCards, menuVisible, editorVisible, editingTemplate, pendingMentions, mentionPickerVisible, mentionPickerEl, mentionPickerCandidates, mentionPickerIndex, mentionPickerQuery, mentionPickerInput;
 var init_input_box = __esm({
-  "src-tauri/src/chat/components/input-box.ts"() {
+  "src/chat/components/input-box.ts"() {
     invoke4 = (cmd, args) => getTauri4().invoke(cmd, args);
     fileCards = [];
     imageCards = [];
@@ -2438,7 +2438,7 @@ var init_input_box = __esm({
   }
 });
 
-// src-tauri/src/chat/components/send-dialog.ts
+// src/chat/components/send-dialog.ts
 function getTauri5() {
   const g = window.__TAURI__;
   if (!g?.core) throw new Error("Tauri global not available");
@@ -2685,7 +2685,7 @@ function formatBytes2(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
 function escapeHtml4(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function getFileNameFromPath(path) {
   const parts = path.replace(/\\/g, "/").split("/");
@@ -2940,7 +2940,7 @@ function closeDialog() {
 }
 var invoke5, dialogVisible, currentPending, currentFileSize;
 var init_send_dialog = __esm({
-  "src-tauri/src/chat/components/send-dialog.ts"() {
+  "src/chat/components/send-dialog.ts"() {
     init_store();
     init_input_box();
     invoke5 = (cmd, args) => getTauri5().invoke(cmd, args);
@@ -2950,7 +2950,7 @@ var init_send_dialog = __esm({
   }
 });
 
-// src-tauri/src/chat/components/moments-feed.ts
+// src/chat/components/moments-feed.ts
 function getTauri6() {
   const g = window.__TAURI__;
   if (!g?.core) throw new Error("Tauri global not available");
@@ -3012,7 +3012,7 @@ function isSafeAttachmentSrc(url) {
   return SAFE_URL_PREFIX_RE.test(url.trim());
 }
 function escapeHtml5(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function buildMomentCard(moment) {
   const card = document.createElement("div");
@@ -3169,7 +3169,7 @@ function wireMomentsFeed() {
 }
 var invoke6, KIND_ICONS, SAFE_URL_PREFIX_RE, toastTimeout;
 var init_moments_feed = __esm({
-  "src-tauri/src/chat/components/moments-feed.ts"() {
+  "src/chat/components/moments-feed.ts"() {
     init_store();
     invoke6 = (cmd, args) => getTauri6().invoke(cmd, args);
     KIND_ICONS = {
@@ -3192,7 +3192,7 @@ var init_moments_feed = __esm({
   }
 });
 
-// src-tauri/src/chat/components/search-overlay.ts
+// src/chat/components/search-overlay.ts
 function getTauri7() {
   const g = window.__TAURI__;
   if (!g?.core) throw new Error("Tauri global not available");
@@ -3340,7 +3340,7 @@ function updateTabCounts(bySource) {
   });
 }
 function escapeHtml6(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function navigateToResult(item) {
   if (item.source === "chat" || item.source === "vfs" || item.source === "moments") {
@@ -3456,7 +3456,7 @@ async function setupSearchOverlay() {
 }
 var invoke7, listen2, isOpen, currentQuery, activeSource, debounceTimer;
 var init_search_overlay = __esm({
-  "src-tauri/src/chat/components/search-overlay.ts"() {
+  "src/chat/components/search-overlay.ts"() {
     invoke7 = (cmd, args) => getTauri7().invoke(cmd, args);
     listen2 = (event, handler) => getTauri7().listen(event, handler);
     isOpen = false;
@@ -3466,7 +3466,7 @@ var init_search_overlay = __esm({
   }
 });
 
-// src-tauri/src/chat/components/fehub-tab.ts
+// src/chat/components/fehub-tab.ts
 function getTauri8() {
   const g = window.__TAURI__;
   if (!g?.core) throw new Error("Tauri global not available");
@@ -3686,18 +3686,21 @@ async function refreshFehubTab() {
   }
 }
 function escapeHtml7(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 var invoke8;
 var init_fehub_tab = __esm({
-  "src-tauri/src/chat/components/fehub-tab.ts"() {
+  "src/chat/components/fehub-tab.ts"() {
     init_store();
     invoke8 = (cmd, args) => getTauri8().invoke(cmd, args);
   }
 });
 
-// src-tauri/src/chat/chat.ts
+// src/chat/chat.ts
 var chat_exports = {};
+__export(chat_exports, {
+  showToast: () => showToast2
+});
 function getTauri9() {
   const g = window.__TAURI__;
   if (!g?.core) throw new Error("Tauri global not available");
@@ -4010,7 +4013,15 @@ async function retryMessage(msgId) {
   renderMessages(store.messages);
   try {
     if (isGroup) {
-      const mentionHashes = getActiveMentions();
+      let mentionHashes = [];
+      if (target.mentions && target.mentions.length > 0) {
+        mentionHashes = target.mentions;
+      } else {
+        mentionHashes = parseMentionsFromText(target.content);
+        if (mentionHashes.length > 0) {
+          store.updateMessage(msgId, { mentions: mentionHashes });
+        }
+      }
       await invoke9("send_group_message", {
         group_id: targetId,
         content: target.content,
@@ -4026,6 +4037,29 @@ async function retryMessage(msgId) {
     store.updateMessage(msgId, { error: errMsg, synced: false });
   }
   renderMessages(store.messages);
+}
+function parseMentionsFromText(text) {
+  if (!text) return [];
+  const candidates = window.__FECLAW_MENTION_CANDIDATES__ ?? [];
+  if (candidates.length === 0) return [];
+  const byName = /* @__PURE__ */ new Map();
+  for (const c of candidates) {
+    if (c.agent_name) byName.set(c.agent_name.toLowerCase(), c.agent_hash);
+  }
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const re = /@([\p{L}\p{N}_\- ]{1,40})/gu;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const rawName = m[1].trim();
+    if (!rawName) continue;
+    const hash = byName.get(rawName.toLowerCase());
+    if (hash && !seen.has(hash)) {
+      seen.add(hash);
+      out.push(hash);
+    }
+  }
+  return out;
 }
 async function renderAttachment(container, att, agentHash) {
   if (att.type === "image") {
@@ -4250,6 +4284,10 @@ async function loadChatHistory(agentHash) {
     console.error("load_chat_history failed:", e);
     store.setMessages([]);
     renderMessages([]);
+    showToast2(
+      `\u52A0\u8F7D\u5386\u53F2\u6D88\u606F\u5931\u8D25\uFF1A${typeof e === "string" ? e : "\u7F51\u7EDC\u9519\u8BEF"}`,
+      "error"
+    );
   }
 }
 async function selectGroup(groupId) {
@@ -4352,6 +4390,21 @@ async function refreshMentionCandidatesForGroup(groupId) {
 }
 async function loadGroupMessages(groupId) {
   try {
+    const cached = await invoke9("get_chat_history_by_group", {
+      groupId
+    });
+    if (Array.isArray(cached) && cached.length > 0) {
+      const cachedAsGroup = cached.map((m) => ({
+        ...m,
+        channel: `group:${groupId}`
+      }));
+      store.setMessages(cachedAsGroup);
+      renderMessages(cachedAsGroup);
+    }
+  } catch (e) {
+    console.error("get_chat_history_by_group failed:", e);
+  }
+  try {
     const msgs = await invoke9("get_group_messages", {
       groupId
     });
@@ -4371,10 +4424,27 @@ async function loadGroupMessages(groupId) {
     }));
     store.setMessages(chatMsgs);
     renderMessages(chatMsgs);
+    for (const m of chatMsgs) {
+      try {
+        await invoke9("insert_chat_message", {
+          id: m.id,
+          channel: m.channel,
+          agentHash: m.agent_hash ?? null,
+          role: m.role,
+          content: m.content,
+          messageType: m.message_type ?? "text",
+          createdAt: m.created_at * 1e3
+        });
+      } catch (e) {
+        console.error("insert_chat_message (group) failed:", e);
+      }
+    }
   } catch (e) {
     console.error("load_group_messages failed:", e);
-    store.setMessages([]);
-    renderMessages([]);
+    showToast2(
+      `\u52A0\u8F7D\u7FA4\u6D88\u606F\u5931\u8D25\uFF1A${typeof e === "string" ? e : "\u7F51\u7EDC\u9519\u8BEF"}`,
+      "error"
+    );
   }
 }
 async function sendMessage() {
@@ -4485,6 +4555,9 @@ async function sendMessage() {
         mentions: mentionHashes.length > 0 ? mentionHashes : null,
         attachments: null
       });
+      if (text && mentionHashes.length > 0) {
+        store.updateMessage(textMsgId, { mentions: mentionHashes });
+      }
     } else {
       await invoke9("send_chat_message", { text: fullText });
     }
@@ -4602,6 +4675,10 @@ async function initChat() {
     }
   } catch (e) {
     console.error("list_agents failed:", e);
+    showToast2(
+      `\u52A0\u8F7D Agent \u5217\u8868\u5931\u8D25\uFF1A${typeof e === "string" ? e : "\u7F51\u7EDC\u9519\u8BEF"}`,
+      "error"
+    );
   }
   try {
     const groups = await invoke9("list_groups");
@@ -4618,6 +4695,10 @@ async function initChat() {
     renderChatList(store.chatItems);
   } catch (e) {
     console.error("list_groups failed:", e);
+    showToast2(
+      `\u52A0\u8F7D\u7FA4\u5217\u8868\u5931\u8D25\uFF1A${typeof e === "string" ? e : "\u7F51\u7EDC\u9519\u8BEF"}`,
+      "error"
+    );
   }
 }
 function autoResize() {
@@ -4642,7 +4723,7 @@ function formatTime2(ts) {
   return `${hh}:${mm}`;
 }
 function escapeHtml8(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function pickSafeImageSrc(content) {
   const trimmed = content.trim();
@@ -4655,6 +4736,41 @@ function pickSafeImageSrc(content) {
   }
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return null;
+}
+function ensureToastContainer() {
+  if (toastContainer && document.body.contains(toastContainer)) {
+    return toastContainer;
+  }
+  const el = document.createElement("div");
+  el.id = "feclaw-toast-container";
+  el.className = "feclaw-toast-container";
+  el.setAttribute("aria-live", "polite");
+  el.setAttribute("aria-atomic", "false");
+  document.body.appendChild(el);
+  toastContainer = el;
+  return el;
+}
+function showToast2(message, kind = "info", durationMs = 4e3) {
+  if (!message) return;
+  const container = ensureToastContainer();
+  const toast = document.createElement("div");
+  toast.className = `feclaw-toast feclaw-toast-${kind}`;
+  toast.setAttribute("role", kind === "error" ? "alert" : "status");
+  toast.textContent = message;
+  toast.addEventListener("click", () => dismissToast(toast));
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("feclaw-toast-show"));
+  if (durationMs > 0) {
+    window.setTimeout(() => dismissToast(toast), durationMs);
+  }
+}
+function dismissToast(toast) {
+  if (!toast.parentNode) return;
+  toast.classList.remove("feclaw-toast-show");
+  toast.classList.add("feclaw-toast-leave");
+  window.setTimeout(() => {
+    if (toast.parentNode) toast.parentNode.removeChild(toast);
+  }, 220);
 }
 async function subscribeEvents() {
   try {
@@ -5085,9 +5201,9 @@ function wire() {
   }
   wireMomentsFeed();
 }
-var invoke9, listen3, groupPollTimer, GROUP_POLL_INTERVAL_MS, SAFE_IMAGE_MIMES, PLUS_DROPDOWN_ID, PLUS_DROPDOWN_MARGIN, PLUS_DROPDOWN_GAP, activePlusDropdown, activePlusTrigger;
+var invoke9, listen3, groupPollTimer, GROUP_POLL_INTERVAL_MS, SAFE_IMAGE_MIMES, toastContainer, PLUS_DROPDOWN_ID, PLUS_DROPDOWN_MARGIN, PLUS_DROPDOWN_GAP, activePlusDropdown, activePlusTrigger;
 var init_chat = __esm({
-  "src-tauri/src/chat/chat.ts"() {
+  "src/chat/chat.ts"() {
     init_store();
     init_create_dialog();
     init_side_panel();
@@ -5108,6 +5224,7 @@ var init_chat = __esm({
       "image/gif",
       "image/webp"
     ]);
+    toastContainer = null;
     PLUS_DROPDOWN_ID = "plus-dropdown";
     PLUS_DROPDOWN_MARGIN = 8;
     PLUS_DROPDOWN_GAP = 6;
@@ -5122,3 +5239,6 @@ var init_chat = __esm({
   }
 });
 init_chat();
+export {
+  showToast2 as showToast
+};

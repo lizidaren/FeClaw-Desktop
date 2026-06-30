@@ -285,6 +285,48 @@ pub fn get_chat_history_by_agent(agent_hash: String) -> Result<Vec<DbChatMessage
     }).map_err(|e| format!("读取消息失败：{e}"))
 }
 
+/// Get locally-cached group chat history for a specific group.
+///
+/// 3.4 fix: previously group messages were *only* fetched from the
+/// Engine on each `selectGroup()`, leaving the desktop blind during
+/// WS disconnects or slow networks. Now every group message that the
+/// frontend loads via `get_group_messages` is mirrored into the
+/// `chat_messages` table under `channel = 'group:<id>'`, and this
+/// command returns the cached slice so cold-start and offline paths
+/// have a fallback.
+#[tauri::command]
+pub fn get_chat_history_by_group(group_id: String) -> Result<Vec<DbChatMessage>, String> {
+    let channel = format!("group:{}", group_id);
+    with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, channel, agent_hash, role, content, message_type,
+                    created_at, synced, is_deleted
+               FROM chat_messages
+              WHERE channel = ?1 AND is_deleted = 0
+              ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![channel], |row| {
+            Ok(DbChatMessage {
+                id: row.get(0)?,
+                channel: row.get(1)?,
+                agent_hash: row.get(2)?,
+                role: row.get(3)?,
+                content: row.get(4)?,
+                message_type: row.get(5)?,
+                created_at: row.get(6)?,
+                synced: row.get::<_, i32>(7)? != 0,
+                is_deleted: row.get::<_, i32>(8)? != 0,
+            })
+        })?;
+        let mut messages = Vec::new();
+        for row in rows {
+            let msg = row?;
+            messages.push(msg);
+        }
+        Ok(messages)
+    }).map_err(|e| format!("读取群消息失败：{e}"))
+}
+
 /// Insert a new chat message into SQLite.
 #[tauri::command]
 pub fn insert_chat_message(
