@@ -138,7 +138,7 @@ function ensureDialog(): HTMLElement {
   return dialog;
 }
 
-function showDialog(): void {
+function showDialog(prefillType: "classic" | "im" | "group" = "classic"): void {
   const dialog = ensureDialog();
   const overlay = document.getElementById(OVERLAY_ID);
   if (overlay) overlay.style.display = "flex";
@@ -151,13 +151,18 @@ function showDialog(): void {
   }
   const errorEl = document.getElementById("cd-error");
   if (errorEl) errorEl.style.display = "none";
-  // Default to classic
-  const classicRadio = document.querySelector<HTMLInputElement>('input[name="agent-type"][value="classic"]');
-  if (classicRadio) classicRadio.checked = true;
-  // Reset name placeholder and group members visibility
-  if (nameInput) nameInput.placeholder = "给 AI 助理起个名字";
+  // Apply pre-selected radio (avoids the setTimeout race condition
+  // callers used to rely on).
+  const radio = document.querySelector<HTMLInputElement>(
+    `input[name="agent-type"][value="${prefillType}"]`
+  );
+  if (radio) radio.checked = true;
+  // Reset name placeholder and group members visibility based on selection
   const groupMembers = document.getElementById("cd-group-members");
-  if (groupMembers) groupMembers.style.display = "none";
+  if (nameInput) {
+    nameInput.placeholder = prefillType === "group" ? "给群聊起个名字" : "给 AI 助理起个名字";
+  }
+  if (groupMembers) groupMembers.style.display = prefillType === "group" ? "block" : "none";
   // Populate agent checkboxes for group mode
   populateAgentCheckboxes();
   // Wire radio change to show/hide group members
@@ -295,6 +300,11 @@ async function selectChat(agentHash: string): Promise<void> {
 
 // ---- Public API (called from chat.ts wire) ----
 
-export function openCreateDialog(): void {
-  showDialog();
+/**
+ * Open the create-agent dialog. Pass `prefill` to bias the radio
+ * button toward a specific type (e.g. `"group"` when the user clicked
+ * "发起群聊" in the plus dropdown). Default is `"classic"`.
+ */
+export function openCreateDialog(prefill: "classic" | "im" | "group" = "classic"): void {
+  showDialog(prefill);
 }

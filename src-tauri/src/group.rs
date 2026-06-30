@@ -44,6 +44,20 @@ pub struct GroupMemberInfo {
     pub is_silent: bool,
 }
 
+/// Frontend-friendly member projection used by `list_group_members`.
+/// Includes `agent_name` so the @-mention picker can render a label
+/// without an extra round-trip to fetch the agent's metadata. Fields
+/// are all optional to tolerate older engine responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMemberDisplay {
+    #[serde(rename = "agent_hash")]
+    pub agent_hash: String,
+    #[serde(default, rename = "agent_name")]
+    pub agent_name: String,
+    #[serde(default, rename = "role")]
+    pub role: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMessageInfo {
     pub id: String,
@@ -197,6 +211,70 @@ pub async fn delete_group(group_id: String) -> Result<(), String> {
         return Err(format!("delete_group failed: {}", resp.status()));
     }
     Ok(())
+}
+
+/// List members of a group. Returns the rich projection used by the
+/// frontend's @-mention picker (agent_hash + agent_name). Older engines
+/// may return members with only `agent_hash`; missing names are
+/// substituted with the hash so the UI always has something to render.
+#[tauri::command]
+pub async fn list_group_members(group_id: String) -> Result<Vec<GroupMemberDisplay>, String> {
+    let client = authed()?;
+    let url = format!("{}/api/groups/{}/members", engine_url(), group_id);
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("list_group_members request: {e}"))?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        // Engine doesn't expose the endpoint — let the frontend fall
+        // back to its cached GroupInfo.members list.
+        return Ok(Vec::new());
+    }
+    if !resp.status().is_success() {
+        return Err(format!("list_group_members failed: {}", resp.status()));
+    }
+    // Accept both the rich shape and the legacy GroupMemberInfo
+    // shape — we coerce to the display form here.
+    let raw: Vec<serde_json::Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse list_group_members response: {e}"))?;
+    let members = raw
+        .into_iter()
+        .map(|v| {
+            let hash = v
+                .get("agent_hash")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = v
+                .get("agent_name")
+                .and_then(|x| x.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    // Fallback: derive a readable name from the hash.
+                    let h = &hash;
+                    if h.len() >= 4 {
+                        format!("Agent {}", &h[..4])
+                    } else {
+                        format!("Agent {}", h)
+                    }
+                });
+            let role = v
+                .get("role")
+                .and_then(|x| x.as_str())
+                .unwrap_or("member")
+                .to_string();
+            GroupMemberDisplay {
+                agent_hash: hash,
+                agent_name: name,
+                role,
+            }
+        })
+        .filter(|m| !m.agent_hash.is_empty())
+        .collect();
+    Ok(members)
 }
 
 // ---------------------------------------------------------------------------

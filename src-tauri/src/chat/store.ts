@@ -78,6 +78,15 @@ export type GroupInfo = {
   // client-only fields
   unreadCount: number;
   lastMessage?: string;
+  // Cached group members (for @-mention picker). Populated when
+  // the group is opened or when list_group_members returns.
+  members?: GroupMember[];
+};
+
+export type GroupMember = {
+  agent_hash: string;
+  agent_name: string;
+  role?: string;
 };
 
 export type GroupMessage = {
@@ -263,6 +272,13 @@ class Store {
     }));
     // Merge with agent chat items, keeping all
     this.chatItems = [...this.chatItems, ...groupItems];
+    this.notify();
+  }
+
+  setGroupMembers(groupId: string, members: GroupMember[]): void {
+    const idx = this.groups.findIndex((g) => g.id === groupId);
+    if (idx < 0) return;
+    this.groups[idx] = { ...this.groups[idx], members };
     this.notify();
   }
 

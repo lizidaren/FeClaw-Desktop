@@ -15,7 +15,7 @@ import { store, type AgentInfo, type ChatMessage, type ChatItem, type Attachment
 import { openCreateDialog } from "./components/create-dialog";
 import { openSidePanel } from "./components/side-panel";
 import { renderMarkdown, decorateMarkdownRoot } from "./components/markdown";
-import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImageCards, clearImageCards } from "./components/input-box";
+import { setupInputBox, setupTemplateBar, getFileCards, clearFileCards, getImageCards, clearImageCards, setMentionCandidates, getActiveMentions, clearActiveMentions } from "./components/input-box";
 import { openSendDialog, type PendingFile } from "./components/send-dialog";
 import { showMomentsFeed, hideMomentsFeed, addMomentCard, wireMomentsFeed, refreshMoments } from "./components/moments-feed";
 import { setupSearchOverlay } from "./components/search-overlay";
@@ -192,6 +192,17 @@ function formatDayLabel(ts: number): string {
 }
 
 function renderMessageEl(parent: HTMLElement, msg: ChatMessage): void {
+  // Step 6: in a group chat (channel starts with `group:`) we render
+  // the bubble inside an avatar + name + bubble row, like WeChat's
+  // group view. In a 1-1 chat we keep the legacy full-width bubble
+  // (the avatar is already in the chat header).
+  const isGroup = typeof msg.channel === "string" && msg.channel.startsWith("group:");
+
+  if (isGroup) {
+    renderGroupMessageEl(parent, msg);
+    return;
+  }
+
   const wrap = document.createElement("div");
   wrap.className = `bubble ${msg.role === "user" ? "user" : "assistant"}`;
   wrap.dataset.id = msg.id;
@@ -292,6 +303,148 @@ function renderMessageEl(parent: HTMLElement, msg: ChatMessage): void {
 }
 
 /**
+ * Step 6: render a single chat bubble inside a group chat using the
+ * WeChat-style row layout: avatar (36px circle, first character of the
+ * sender's name) on the LEFT for non-user bubbles and on the RIGHT for
+ * user bubbles, the sender's name as a 12px grey label above the
+ * bubble, and the bubble itself sitting directly below.
+ *
+ * Each distinct sender gets a different avatar background colour by
+ * hashing the sender_hash into one of N palette slots.
+ */
+function renderGroupMessageEl(parent: HTMLElement, msg: ChatMessage): void {
+  const isUser = msg.role === "user";
+  const senderName = (msg.agent && msg.agent.trim()) || msg.agent_hash || "?";
+  const seed = (msg.agent_hash ?? senderName) as string;
+
+  const row = document.createElement("div");
+  row.className = `bubble-row ${isUser ? "user" : "assistant"}${isUser ? "" : " group-agent-" + agentColorIndex(seed)}`;
+  row.dataset.id = msg.id;
+
+  const avatar = document.createElement("div");
+  avatar.className = "bubble-avatar";
+  avatar.textContent = senderName.charAt(0).toUpperCase();
+  avatar.style.background = pickAvatarColor(seed);
+  avatar.title = senderName;
+
+  const content = document.createElement("div");
+  content.className = "bubble-content";
+
+  const name = document.createElement("div");
+  name.className = "bubble-sender-name";
+  name.textContent = senderName;
+
+  const wrap = document.createElement("div");
+  wrap.className = `bubble ${isUser ? "user" : "assistant"}`;
+  wrap.dataset.id = msg.id;
+
+  // Mirror the body / attachment / meta / retry logic from renderMessageEl
+  // so the group's assistant messages still get markdown rendering and
+  // failed sends still show the retry affordance.
+  const safeImageSrc = pickSafeImageSrc(msg.content);
+  if ((msg.message_type === "image" || msg.content.startsWith("data:image/")) && safeImageSrc) {
+    const imgWrap = document.createElement("div");
+    imgWrap.className = "bubble-image";
+    const img = document.createElement("img");
+    img.src = safeImageSrc;
+    img.alt = "图片";
+    imgWrap.appendChild(img);
+    wrap.appendChild(imgWrap);
+  } else if (msg.message_type === "image") {
+    const body = document.createElement("div");
+    body.className = "bubble-body";
+    body.textContent = "[图片类型不支持预览]";
+    wrap.appendChild(body);
+  } else if (!isUser) {
+    const body = document.createElement("div");
+    body.className = "bubble-body bubble-markdown";
+    try {
+      body.innerHTML = renderMarkdown(msg.content);
+      decorateMarkdownRoot(body);
+    } catch (e) {
+      console.warn("markdown render failed, falling back to plain text:", e);
+      body.textContent = msg.content;
+    }
+    wrap.appendChild(body);
+  } else {
+    const body = document.createElement("div");
+    body.className = "bubble-body";
+    body.textContent = msg.content;
+    wrap.appendChild(body);
+  }
+
+  if (msg.attachments && msg.attachments.length > 0) {
+    const attContainer = document.createElement("div");
+    attContainer.className = "msg-attachments";
+    for (const att of msg.attachments) {
+      void renderAttachment(attContainer, att, msg.agent_hash);
+    }
+    const bodyEl = wrap.querySelector(".bubble-body");
+    if (bodyEl) {
+      wrap.insertBefore(attContainer, bodyEl.nextSibling);
+    } else {
+      wrap.appendChild(attContainer);
+    }
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "bubble-meta";
+  const ts = msg.timestamp || formatTime(msg.created_at);
+  meta.textContent = ts;
+  wrap.appendChild(meta);
+
+  if (msg.error) {
+    wrap.classList.add("bubble-failed");
+    const actions = document.createElement("div");
+    actions.className = "bubble-actions";
+
+    const errorLabel = document.createElement("span");
+    errorLabel.className = "bubble-error";
+    errorLabel.textContent = `发送失败：${msg.error}`;
+    actions.appendChild(errorLabel);
+
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.className = "bubble-retry";
+    retryBtn.textContent = "重试";
+    retryBtn.addEventListener("click", () => {
+      void retryMessage(msg.id);
+    });
+    actions.appendChild(retryBtn);
+
+    wrap.appendChild(actions);
+  }
+
+  content.appendChild(name);
+  content.appendChild(wrap);
+
+  if (isUser) {
+    // Order: [content, avatar] so flex/justify-content-end + reverse
+    // renders avatar on the right and bubble on the left of the avatar.
+    row.appendChild(content);
+    row.appendChild(avatar);
+  } else {
+    row.appendChild(avatar);
+    row.appendChild(content);
+  }
+
+  parent.appendChild(row);
+}
+
+function agentColorIndex(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return h % 4;
+}
+
+function pickAvatarColor(seed: string): string {
+  const palette = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#a855f7", "#ec4899", "#14b8a6"];
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
+
+/**
  * Re-issue a previously failed send.
  *
  * Phase 2 / 2.1 B: no transient "sending" indicator — we just clear the
@@ -314,10 +467,11 @@ async function retryMessage(msgId: string): Promise<void> {
 
   try {
     if (isGroup) {
+      const mentionHashes = getActiveMentions();
       await invoke<string>("send_group_message", {
         group_id: targetId,
         content: target.content,
-        mentions: null,
+        mentions: mentionHashes.length > 0 ? mentionHashes : null,
         attachments: null,
       });
     } else {
@@ -535,20 +689,30 @@ async function selectChat(agentHash: string): Promise<void> {
     switchTab("chat");
   }
 
-  // Save current draft before switching
-  if (store.activeAgentHash) {
+  // Save current draft before switching (cover both group and agent).
+  try {
     const input = $<HTMLTextAreaElement>("input");
-    if (input && input.value.trim()) {
-      try {
+    const draftText = input?.value ?? "";
+    if (input && draftText.trim()) {
+      if (store.activeGroupId) {
+        await invoke("save_draft", {
+          channel: `group:${store.activeGroupId}`,
+          content: draftText,
+        });
+      } else if (store.activeAgentHash) {
         await invoke("save_draft", {
           channel: `im:${store.activeAgentHash}`,
-          content: input.value,
+          content: draftText,
         });
-      } catch (e) {
-        console.error("save_draft failed:", e);
       }
     }
+  } catch (e) {
+    console.error("save_draft failed:", e);
   }
+
+  // Leaving a group — kill the background poll and clear mention picker state.
+  stopGroupPolling();
+  setMentionCandidates([]);
 
   // Activate new chat
   store.setActiveChat(agentHash);
@@ -594,19 +758,27 @@ async function selectGroup(groupId: string): Promise<void> {
     switchTab("chat");
   }
 
-  // Save current draft before switching
-  if (store.activeAgentHash) {
+  // Step 8: Save current draft before switching (covers both
+  // activeAgentHash and activeGroupId so we don't drop text the user
+  // typed into another group).
+  try {
     const input = $<HTMLTextAreaElement>("input");
-    if (input && input.value.trim()) {
-      try {
+    const draftText = input?.value ?? "";
+    if (input && draftText.trim()) {
+      if (store.activeGroupId) {
+        await invoke("save_draft", {
+          channel: `group:${store.activeGroupId}`,
+          content: draftText,
+        });
+      } else if (store.activeAgentHash) {
         await invoke("save_draft", {
           channel: `im:${store.activeAgentHash}`,
-          content: input.value,
+          content: draftText,
         });
-      } catch (e) {
-        console.error("save_draft failed:", e);
       }
     }
+  } catch (e) {
+    console.error("save_draft failed:", e);
   }
 
   // If coming from moments tab, switch to chat tab first
@@ -640,6 +812,87 @@ async function selectGroup(groupId: string): Promise<void> {
   // Load group messages
   await loadGroupMessages(groupId);
   showActiveChat();
+
+  // Step 2: refresh mention picker candidates from the engine, falling
+  // back to whatever was already cached on the GroupInfo. The runtime
+  // hook lives here so the picker reflects the exact member list of the
+  // active group.
+  await refreshMentionCandidatesForGroup(groupId);
+
+  // Step 4: poll for fresh messages every 30s while this group is active.
+  // Cleared by leaving the group via selectGroup()/selectChat().
+  startGroupPolling(groupId);
+}
+
+/**
+ * Step 4: background poll. While a group is open we re-fetch
+ * `get_group_messages` every 30s so messages that arrived while
+ * the WebSocket was disconnected still surface without forcing the user
+ * to switch groups.
+ */
+let groupPollTimer: number | null = null;
+const GROUP_POLL_INTERVAL_MS = 30000;
+
+function startGroupPolling(groupId: string): void {
+  stopGroupPolling();
+  // Only schedule if we're actually viewing the group. The handler is
+  // also a no-op if the active group has moved on by the time it fires.
+  groupPollTimer = window.setInterval(() => {
+    if (store.activeGroupId !== groupId) {
+      stopGroupPolling();
+      return;
+    }
+    void loadGroupMessages(groupId);
+  }, GROUP_POLL_INTERVAL_MS);
+}
+
+function stopGroupPolling(): void {
+  if (groupPollTimer !== null) {
+    window.clearInterval(groupPollTimer);
+    groupPollTimer = null;
+  }
+}
+
+/**
+ * Pull the member list for a group and push it into the @-mention
+ * picker. Falls back to the cached `groups[i].members` if the engine
+ * doesn't expose `list_group_members` yet, and to the global agent list
+ * when even that is missing.
+ */
+async function refreshMentionCandidatesForGroup(groupId: string): Promise<void> {
+  const cached = store.getGroupById(groupId)?.members;
+  if (cached && cached.length > 0) {
+    setMentionCandidates(
+      cached.map((m) => ({
+        agent_hash: m.agent_hash,
+        agent_name: m.agent_name,
+      }))
+    );
+  }
+  // Try the engine endpoint; tolerate absence gracefully.
+  try {
+    const members = await invoke<Array<{ agent_hash: string; agent_name: string; role?: string }>>(
+      "list_group_members",
+      { groupId }
+    );
+    if (Array.isArray(members) && members.length > 0) {
+      store.setGroupMembers(groupId, members);
+      setMentionCandidates(
+        members.map((m) => ({
+          agent_hash: m.agent_hash,
+          agent_name: m.agent_name,
+        }))
+      );
+    }
+  } catch (e) {
+    // Endpoint missing on this engine version — fall back to the agent list
+    // so the picker is still usable in 1:1-style test setups.
+    if (!cached || cached.length === 0) {
+      const fallback = store.agents.map((a) => ({ agent_hash: a.hash, agent_name: a.name }));
+      setMentionCandidates(fallback);
+    }
+    void e; // suppress unused
+  }
 }
 
 async function loadGroupMessages(groupId: string): Promise<void> {
@@ -792,10 +1045,11 @@ async function sendMessage(): Promise<void> {
   // Send via WS
   try {
     if (isGroup) {
+      const mentionHashes = getActiveMentions();
       await invoke<string>("send_group_message", {
         group_id: targetId,
         content: fullText,
-        mentions: null,
+        mentions: mentionHashes.length > 0 ? mentionHashes : null,
         attachments: null,
       });
     } else {
@@ -809,6 +1063,7 @@ async function sendMessage(): Promise<void> {
     for (const imgId of sentImageIds) {
       store.updateMessage(imgId, { synced: true, error: undefined });
     }
+    clearActiveMentions();
   } catch (e) {
     const errMsg = typeof e === "string" ? e : "发送失败";
     // Phase 2 / 2.3 A: mark the original optimistic message as failed
@@ -832,6 +1087,11 @@ async function sendMessage(): Promise<void> {
 // ---- Tab switching ----------------------------------------------
 
 function switchTab(tabId: "chat" | "moments" | "settings" | "fehub"): void {
+  // Step 4: leaving the chat tab pauses the group-message poll — it
+  // resumes the next time selectGroup() is called.
+  if (tabId !== "chat") {
+    stopGroupPolling();
+  }
   store.setTab(tabId);
   document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.tab === tabId);
@@ -1200,8 +1460,19 @@ async function subscribeEvents(): Promise<void> {
     await listen<{ group_id: string; message: GroupMessage }>("group-message", (e) => {
       const { group_id, message } = e.payload;
       if (!group_id || !message) return;
-      // Only show if this group is active
-      if (store.activeGroupId !== group_id) return;
+      // Step 3: handle both `created_at` (canonical) and `timestamp` (legacy
+      // payload field). When neither is present, fall back to now so the
+      // message doesn't get sorted to the top of the list.
+      const rawTs = (message as unknown as { created_at?: number; timestamp?: number });
+      const tsCandidate =
+        typeof rawTs.created_at === "number"
+          ? rawTs.created_at
+          : typeof rawTs.timestamp === "number"
+          ? rawTs.timestamp
+          : undefined;
+      const createdAt = typeof tsCandidate === "number" && tsCandidate > 0
+        ? tsCandidate
+        : Math.floor(Date.now() / 1000);
       const chatMsg: ChatMessage = {
         id: message.id,
         channel: `group:${group_id}`,
@@ -1209,17 +1480,46 @@ async function subscribeEvents(): Promise<void> {
         role: message.sender_type === "user" ? "user" : "assistant",
         content: message.content,
         message_type: message.message_type,
-        created_at: message.created_at,
+        created_at: createdAt,
         synced: true,
         is_deleted: false,
-        timestamp: formatTime(message.created_at),
+        timestamp: formatTime(createdAt),
         agent: message.sender_name,
         attachments: message.attachments as Attachment[],
       };
-      store.appendMessage(chatMsg);
-      const list = $<HTMLDivElement>("messages");
-      if (list) renderMessageEl(list, chatMsg);
-      scrollToBottom();
+      // Step 9: always cache into store.groupMessages, even when the
+      // group isn't currently focused. Flipping back later will show the
+      // pre-buffered history without an extra GET round trip.
+      store.appendGroupMessage(group_id, {
+        id: message.id,
+        group_id: group_id,
+        sender_type: message.sender_type === "user" ? "user" : "agent",
+        sender_hash: message.sender_hash,
+        sender_name: message.sender_name,
+        content: message.content,
+        message_type: message.message_type,
+        created_at: createdAt,
+        timestamp: formatTime(createdAt),
+        attachments: message.attachments as Attachment[],
+      });
+      // Only paint if this group is the active chat. When it isn't, the
+      // bumb-group unread state still gets the cached entry above.
+      if (store.activeGroupId === group_id) {
+        store.appendMessage(chatMsg);
+        const list = $<HTMLDivElement>("messages");
+        if (list) renderMessageEl(list, chatMsg);
+        scrollToBottom();
+      } else {
+        // Bump the unread badge so the user knows new messages arrived.
+        const grp = store.getGroupById(group_id);
+        if (grp) {
+          // mutate in-place; setGroups triggers notify but that'd rebuild
+          // chatItems. Lightly mutate + repaint the chat list.
+          grp.unreadCount = (grp.unreadCount ?? 0) + 1;
+          grp.lastMessage = message.content;
+          renderChatList(store.chatItems);
+        }
+      }
     });
   } catch (e) {
     console.error("listen group-message:", e);
@@ -1422,10 +1722,13 @@ function showPlusDropdown(trigger: HTMLElement): void {
       ev.stopPropagation();
       const action = item.dataset.action;
       hidePlusDropdown();
-      // Both options open the create dialog. The dialog already
-      // supports radio-button type selection (classic / im / group).
-      if (action === "agent" || action === "group") {
-        openCreateDialog();
+      // Both options open the create dialog. Pass the requested type
+      // through so the dialog opens on the correct radio button — the
+      // dialog handles defaults via the `prefill` arg, no setTimeout.
+      if (action === "agent") {
+        openCreateDialog("classic");
+      } else if (action === "group") {
+        openCreateDialog("group");
       }
     });
   });

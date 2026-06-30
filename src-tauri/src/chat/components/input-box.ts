@@ -616,7 +616,7 @@ function openCloudBrowser(): void {
 
 // ---- Card management ----
 
-function addCard(file: PickedFile): void {
+export function addCard(file: PickedFile): void {
   fileCards.push(file);
   renderCards();
 }
@@ -1029,6 +1029,7 @@ export function setupInputBox(): void {
   buildFileCardsContainer();
   buildImageCardsContainer();
   buildComposerToolbar();
+  setupMentionPicker();
 
   // Wire paste handler on the textarea
   const composer = document.querySelector<HTMLElement>(".composer");
@@ -1128,16 +1129,10 @@ function buildComposerToolbar(): void {
 
   document.getElementById("attach-group")?.addEventListener("click", () => {
     closeMenu();
-    // Open create dialog with group mode
+    // Open create dialog with group mode pre-selected (replaces the
+    // earlier setTimeout-then-setChecked race condition).
     import("../components/create-dialog").then(({ openCreateDialog }) => {
-      openCreateDialog();
-      // After dialog opens, select the group radio button
-      setTimeout(() => {
-        const groupRadio = document.querySelector<HTMLInputElement>('input[name="agent-type"][value="group"]');
-        if (groupRadio) groupRadio.checked = true;
-        // Trigger change event to show group members
-        groupRadio?.dispatchEvent(new Event("change", { bubbles: true }));
-      }, 50);
+      openCreateDialog("group");
     });
   });
 
@@ -1181,4 +1176,379 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+// ---- @-mention picker (group chat only) --------------------------------
+
+type MentionCandidate = {
+  agent_hash: string;
+  agent_name: string;
+};
+
+type ActiveMention = {
+  name: string;
+  hash: string;
+};
+
+// Pending mentions collected in the current composer session. Cleared
+// after each send and exposed to chat.ts via getActiveMentions().
+const pendingMentions: ActiveMention[] = [];
+let mentionPickerVisible = false;
+let mentionPickerEl: HTMLDivElement | null = null;
+let mentionPickerCandidates: MentionCandidate[] = [];
+let mentionPickerIndex = 0;
+let mentionPickerQuery = "";
+let mentionPickerInput: HTMLTextAreaElement | null = null;
+
+function getActiveMentionInput(): HTMLTextAreaElement | null {
+  return document.querySelector<HTMLTextAreaElement>("#input");
+}
+
+function injectMentionStyles(): void {
+  if (document.getElementById("mention-picker-styles")) return;
+  const style = document.createElement("style");
+  style.id = "mention-picker-styles";
+  style.textContent = `
+.mention-picker {
+  position: absolute;
+  z-index: 1100;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+  padding: 4px;
+  display: none;
+}
+.mention-picker.visible { display: block; }
+.mention-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text);
+  transition: background 0.1s;
+}
+.mention-picker-item:hover,
+.mention-picker-item.active {
+  background: var(--bg-hover);
+}
+.mention-picker-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: white;
+  background: #6366f1;
+  flex-shrink: 0;
+}
+.mention-picker-name {
+  font-weight: 500;
+}
+.mention-picker-hash {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+.mention-picker-empty {
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+`;
+  document.head.appendChild(style);
+}
+
+function ensureMentionPicker(): HTMLDivElement {
+  if (mentionPickerEl) return mentionPickerEl;
+  const el = document.createElement("div");
+  el.id = "mention-picker";
+  el.className = "mention-picker";
+  el.setAttribute("role", "listbox");
+  document.body.appendChild(el);
+  mentionPickerEl = el;
+  return el;
+}
+
+function positionMentionPicker(): void {
+  if (!mentionPickerEl || !mentionPickerInput) return;
+  const rect = mentionPickerInput.getBoundingClientRect();
+  mentionPickerEl.style.left = `${rect.left + 14}px`;
+  mentionPickerEl.style.top = `${rect.top - 4}px`;
+  mentionPickerEl.style.transform = "translateY(-100%)";
+}
+
+function renderMentionPicker(filtered: MentionCandidate[]): void {
+  if (!mentionPickerEl) return;
+  if (filtered.length === 0) {
+    mentionPickerEl.innerHTML = `<div class="mention-picker-empty">没有匹配的成员</div>`;
+    return;
+  }
+  mentionPickerEl.innerHTML = filtered
+    .map((c, i) => {
+      const color = pickAvatarColor(c.agent_hash);
+      const letter = (c.agent_name || c.agent_hash || "?").charAt(0).toUpperCase();
+      return `<div class="mention-picker-item${i === mentionPickerIndex ? " active" : ""}"
+        data-hash="${escapeHtml(c.agent_hash)}"
+        data-name="${escapeHtml(c.agent_name)}"
+        role="option"
+        aria-selected="${i === mentionPickerIndex}">
+        <span class="mention-picker-avatar" style="background:${color};">${escapeHtml(letter)}</span>
+        <span class="mention-picker-name">${escapeHtml(c.agent_name)}</span>
+        <span class="mention-picker-hash">${escapeHtml(c.agent_hash.slice(0, 6))}</span>
+      </div>`;
+    })
+    .join("");
+  // Wire item clicks
+  mentionPickerEl.querySelectorAll<HTMLElement>(".mention-picker-item").forEach((el) => {
+    el.addEventListener("mousedown", (ev) => {
+      ev.preventDefault(); // don't steal focus from textarea
+      const hash = el.dataset.hash ?? "";
+      const name = el.dataset.name ?? "";
+      if (hash && name) commitMention(name, hash);
+    });
+    el.addEventListener("mouseenter", () => {
+      const items = mentionPickerEl?.querySelectorAll<HTMLElement>(".mention-picker-item") ?? [];
+      items.forEach((it, idx) => {
+        if (it === el) {
+          mentionPickerIndex = idx;
+          it.classList.add("active");
+          it.setAttribute("aria-selected", "true");
+        } else {
+          it.classList.remove("active");
+          it.setAttribute("aria-selected", "false");
+        }
+      });
+    });
+  });
+}
+
+function pickAvatarColor(seed: string): string {
+  const palette = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#a855f7", "#ec4899", "#14b8a6"];
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
+
+function showMentionPicker(query: string): void {
+  injectMentionStyles();
+  const el = ensureMentionPicker();
+  mentionPickerInput = getActiveMentionInput();
+  if (!mentionPickerInput) return;
+  mentionPickerQuery = query;
+  mentionPickerIndex = 0;
+  const lc = query.toLowerCase();
+  // Match anywhere in name (not just prefix) for friendlier search.
+  mentionPickerCandidates = mentionCandidatesForActiveGroup().filter(
+    (c) => !lc || c.agent_name.toLowerCase().includes(lc)
+  );
+  renderMentionPicker(mentionPickerCandidates);
+  el.classList.add("visible");
+  mentionPickerVisible = true;
+  positionMentionPicker();
+}
+
+function hideMentionPicker(): void {
+  if (!mentionPickerEl) return;
+  mentionPickerEl.classList.remove("visible");
+  mentionPickerVisible = false;
+}
+
+/**
+ * Find the @-trigger token immediately before the caret. Returns the
+ * query text (the substring after `@` up to caret). Returns null if no
+ * @ is currently being typed.
+ *
+ * Examples ("|" = caret):
+ *   "hi @al|"   → "al"
+ *   "@|"        → ""
+ *   "no @"      → null  (followed by space)
+ *   "no@|"      → ""    (no preceding space — still triggers)
+ */
+function currentMentionQuery(): { query: string; start: number } | null {
+  const input = mentionPickerInput ?? getActiveMentionInput();
+  if (!input) return null;
+  const value = input.value;
+  const caret = input.selectionStart ?? 0;
+  // Walk back from caret, collecting characters that are NOT whitespace
+  // and not punctuation that would end an @ token.
+  let i = caret;
+  while (i > 0) {
+    const ch = value.charAt(i - 1);
+    if (ch === "@") {
+      // Make sure @ isn't immediately followed by content already
+      const after = value.substring(caret, value.length);
+      if (after && !/^\s/.test(after)) {
+        // We're in the middle of typing past the @ trigger; consider hidden
+      }
+      return { query: value.substring(i, caret), start: i - 1 };
+    }
+    if (/\s/.test(ch)) {
+      return null;
+    }
+    i--;
+  }
+  return null;
+}
+
+function commitMention(name: string, hash: string): void {
+  const input = getActiveMentionInput();
+  if (!input) return;
+  const caret = input.selectionStart ?? input.value.length;
+  // Replace from the @ position to the caret with "@name ".
+  const before = input.value.substring(0, caret);
+  const afterQuery = currentMentionQuery();
+  const insertStart = afterQuery ? afterQuery.start : caret;
+  const after = input.value.substring(caret);
+  const inserted = `@${name} `;
+  input.value = before.substring(0, insertStart) + inserted + after;
+  const newCaret = insertStart + inserted.length;
+  input.selectionStart = input.selectionEnd = newCaret;
+  input.focus();
+  // Record mention so sendMessage() can include the hash.
+  if (!pendingMentions.some((m) => m.hash === hash && m.name === name)) {
+    pendingMentions.push({ name, hash });
+  }
+  hideMentionPicker();
+  // Trigger autoResize in case the owner wired it.
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function mentionCandidatesForActiveGroup(): MentionCandidate[] {
+  // Lazy import to avoid a circular dep at module load.
+  // The store is the canonical source of truth once list_group_members
+  // has populated members. Until then we fall back to all known agents.
+  // Importing synchronously from ESM at this point would pull more into
+  // the bundle, so we rely on globals: the host (chat.ts) wires
+  // setMentionCandidates() to push candidates as they change.
+  const g = window as unknown as {
+    __FECLAW_MENTION_CANDIDATES__?: MentionCandidate[];
+  };
+  if (g.__FECLAW_MENTION_CANDIDATES__ && g.__FECLAW_MENTION_CANDIDATES__.length > 0) {
+    return g.__FECLAW_MENTION_CANDIDATES__;
+  }
+  return [];
+}
+
+/**
+ * Wire the @-mention picker onto the composer textarea.
+ * Only meaningful when the active chat is a group; if no candidates
+ * are registered (e.g. 1-1 agent chat), the picker silently shows
+ * an empty state and auto-closes.
+ */
+export function setupMentionPicker(): void {
+  injectMentionStyles();
+  const input = getActiveMentionInput();
+  if (!input) return;
+
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (mentionPickerVisible) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (mentionPickerCandidates.length === 0) return;
+        mentionPickerIndex = (mentionPickerIndex + 1) % mentionPickerCandidates.length;
+        renderMentionPicker(mentionPickerCandidates);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (mentionPickerCandidates.length === 0) return;
+        mentionPickerIndex = (mentionPickerIndex - 1 + mentionPickerCandidates.length) % mentionPickerCandidates.length;
+        renderMentionPicker(mentionPickerCandidates);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        if (mentionPickerCandidates.length > 0) {
+          e.preventDefault();
+          const chosen = mentionPickerCandidates[mentionPickerIndex];
+          if (chosen) commitMention(chosen.agent_name, chosen.agent_hash);
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        hideMentionPicker();
+        return;
+      }
+    }
+
+    // Detect `@` typed at end of token
+    if (e.key === "@") {
+      // Defer until after the @ is in the DOM value.
+      setTimeout(() => {
+        if (!mentionPickerVisible) {
+          showMentionPicker("");
+        }
+      }, 0);
+    }
+  });
+
+  input.addEventListener("input", () => {
+    if (!mentionPickerVisible) return;
+    const m = currentMentionQuery();
+    if (m === null) {
+      hideMentionPicker();
+      return;
+    }
+    if (m.query !== mentionPickerQuery) {
+      showMentionPicker(m.query);
+    }
+  });
+
+  // Hide on blur / outside clicks
+  input.addEventListener("blur", () => {
+    setTimeout(() => hideMentionPicker(), 150);
+  });
+  document.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (mentionPickerEl && !mentionPickerEl.contains(t) && t !== input) {
+      hideMentionPicker();
+    }
+  });
+}
+
+// Host-supplied candidate list. chat.ts calls this whenever the active
+// group changes (or whenever list_group_members returns fresh data).
+export function setMentionCandidates(candidates: MentionCandidate[]): void {
+  (window as unknown as { __FECLAW_MENTION_CANDIDATES__?: MentionCandidate[] }).__FECLAW_MENTION_CANDIDATES__ = candidates;
+  if (mentionPickerVisible) {
+    // Refresh the visible picker against the new set
+    showMentionPicker(mentionPickerQuery);
+  }
+}
+
+// Exposed for chat.ts::sendMessage(). Returns the agent_hash list of
+// agents that have been @-mentioned in the current composer.
+export function getActiveMentions(): string[] {
+  if (pendingMentions.length === 0) return [];
+  const input = getActiveMentionInput();
+  const text = (input?.value ?? "").trim();
+  if (!text) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of pendingMentions) {
+    if (seen.has(m.hash)) continue;
+    // Include only if `@name` still appears in the composer (avoids
+    // stale mentions from a previous turn).
+    if (text.includes(`@${m.name}`)) {
+      out.push(m.hash);
+      seen.add(m.hash);
+    }
+  }
+  return out;
+}
+
+export function clearActiveMentions(): void {
+  pendingMentions.length = 0;
 }

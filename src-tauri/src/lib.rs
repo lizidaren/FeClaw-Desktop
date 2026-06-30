@@ -243,6 +243,7 @@ pub fn run() {
                 group::list_groups,
                 group::get_group_detail,
                 group::get_group_messages,
+                group::list_group_members,
                 group::create_group,
                 group::add_group_member,
                 group::remove_group_member,

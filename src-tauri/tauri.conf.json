@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.lizidaren.feclaw-desktop",
   "build": {
+    "beforeBuildCommand": "npx esbuild src/chat/chat.ts --bundle --outfile=src/chat/chat.js --format=esm --target=es2020 --loader:.ts=ts",
     "frontendDist": "src"
   },
   "app": {
@@ -20,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; connect-src 'self' https: wss:;"
     }
   },
   "bundle": {

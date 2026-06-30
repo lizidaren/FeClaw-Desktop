@@ -41,7 +41,11 @@ pub struct GroupMessagePayload {
     pub round: Option<u32>,
     #[serde(rename = "is_tail")]
     pub is_tail: Option<bool>,
-    pub timestamp: Option<u64>,
+    /// Wall-clock timestamp in seconds. The frontend historically read
+    /// `timestamp` here; `created_at` is the canonical name going
+    /// forward and is kept as an `alias` so old engines still work.
+    #[serde(default, alias = "timestamp", rename = "created_at")]
+    pub created_at: Option<u64>,
 }
 
 /// Inbound group event (member joined/left/renamed).

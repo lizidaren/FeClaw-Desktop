@@ -14,6 +14,7 @@
 //!   POST /api/user/agents/{hash}/vfs/events           → notify events
 
 use crate::config::Config;
+use crate::consent::{Operation, OperationOutcome};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -279,8 +280,33 @@ pub async fn vfs_mkdir(agent_hash: String, path: String) -> Result<(), String> {
 }
 
 /// Delete a file or directory. Calls `POST /api/user/agents/{hash}/vfs/rm`.
+///
+/// Phase 3 / D7 — `vfs_rm` is listed in `dangerous.json` so it MUST request
+/// L3 consent before executing. Without this gate, a malicious chat payload
+/// could silently delete user files the moment the user clicked a UI affordance.
 #[tauri::command]
-pub async fn vfs_rm(agent_hash: String, path: String) -> Result<(), String> {
+pub async fn vfs_rm(
+    agent_hash: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // L3 = delete (warning-level dialog). Same pattern as `file_delete` in file_ops.rs.
+    let outcome = {
+        let mut guard = state.consent.lock().await;
+        guard.request_operation(Operation::L3, &path).await
+    };
+    match outcome {
+        OperationOutcome::Allow => {}
+        OperationOutcome::Denied => {
+            return Err(format!("user denied vfs_rm of {path}"));
+        }
+        OperationOutcome::Timeout => {
+            return Err(format!(
+                "consent dialog timed out (5 min) for vfs_rm of {path}"
+            ));
+        }
+    }
+
     let (base_url, token) = engine_base_and_token()?;
     let client = http_client()?;
 
